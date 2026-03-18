@@ -1,0 +1,48 @@
+# MemMe
+
+> The first embeddable AI memory engine for mobile and edge devices. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first.
+
+## Core Concepts
+
+- **Single-file DuckDB storage**: One `.duckdb` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
+- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction and smart operations.
+- **Session/Episode architecture**: Raw events are ingested into Sessions, compacted into Episodes (with LLM purification), then distilled into atomic memory traces.
+- **4-channel RRF retrieval**: Vector similarity + BM25 full-text search + Entity spreading activation + Temporal search, fused via weighted Reciprocal Rank Fusion.
+- **FSRS forgetting curve**: Ebbinghaus-inspired memory decay with stability reinforcement on access. Memories that are never recalled gradually lose relevance.
+
+## Workspace Crates (9)
+
+- `memme-core` — Core memory engine: CRUD, search, graph, dedup, Session/Episode, analytics
+- `memme-embeddings` — Embedding trait + ONNX/OpenAI/Ollama backends
+- `memme-llm` — LLM trait + Ollama/OpenAI/Anthropic/Gemini backends for fact extraction
+- `memme-python` — Python bindings via PyO3 + maturin
+- `memme-ffi` — Swift/Kotlin/C bindings via UniFFI
+- `memme-node` — Node.js bindings via NAPI-RS
+- `memme-wasm` — WASM bindings via wasm-bindgen
+- `memme-server` — REST API server (axum)
+- `memme-mcp` — MCP stdio server for Claude Desktop / Cursor
+
+## Key API Methods
+
+- `add(content, AddOptions)` — Add a memory with automatic dedup
+- `search(query, SearchOptions)` — Multi-channel retrieval (vector + FTS + entity + temporal) with RRF fusion
+- `get_trace(id)` — Get a single memory by ID
+- `update_trace(id, content, UpdateOptions)` — Update memory content (re-embeds)
+- `delete_trace(id)` — Delete a memory
+- `list_traces(ListOptions)` — List memories with filters
+- `append_events(session_id, messages, user_id, metadata)` — Primary ingestion: send events to a Session
+- `compact(session_id)` — Process unprocessed events: purify, summarize, create Episode
+- `meditate(MeditateOptions)` — Extract semantic memories from Episodes, build graph, update identity
+- `get_session_context(session_id, options)` — Retrieve session context within a token budget
+- `add_smart(text, user_id, ...)` — LLM-driven fact extraction and memory management
+- `consolidate(user_id, ...)` — Apply decay, prune expired/low-retention memories
+
+## Multi-Platform Bindings
+
+Python (PyO3) / Node.js (NAPI-RS) / Swift & Kotlin (UniFFI) / WASM (wasm-bindgen)
+
+## Links
+
+- GitHub: https://github.com/vibeinging/MemMe
+- Crates.io: https://crates.io/crates/memme-core
+- License: Apache-2.0

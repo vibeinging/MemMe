@@ -1,0 +1,25 @@
+[package]
+name = "memme-ffi"
+version.workspace = true
+description = "UniFFI bindings (Swift/C) for the MemMe AI memory engine"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+name = "memme_ffi"
+
+[dependencies]
+uniffi = { version = "0.29", features = ["cli"] }
+thiserror.workspace = true
+memme-core = { workspace = true, default-features = false, features = ["bundled"] }
+memme-llm = { workspace = true }
+memme-embeddings = { workspace = true, default-features = false }
+serde_json = { workspace = true }
+
+[build-dependencies]
+uniffi = { version = "0.29", features = ["build"] }

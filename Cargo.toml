@@ -1,0 +1,71 @@
+[workspace]
+members = [
+    "crates/memme-core",
+    "crates/memme-embeddings",
+    "crates/memme-llm",
+    "crates/memme-ffi",
+    "crates/memme-python",
+    "crates/memme-wasm",
+    "crates/memme-node",
+    "crates/memme-server",
+    "crates/memme-mcp",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/vibeinging/MemMe"
+description = "Edge-first AI memory engine powered by MemMe-DB"
+keywords = ["memory", "ai", "edge", "duckdb", "embedding"]
+categories = ["database", "science::machine-learning"]
+rust-version = "1.77"
+
+[workspace.dependencies]
+# DuckDB — default uses bundled (compiles DuckDB from source, without MemMe-DB).
+# To use precompiled DuckDB+MemMe-DB, build with:
+#   ./scripts/build_memme_db.sh
+#   export DUCKDB_LIB_DIR=<path>/build/release/src
+#   export DUCKDB_INCLUDE_DIR=<path>/src/include
+#   cargo build -p memme-core --no-default-features --features memme-db
+#
+# Version note: the duckdb-rs crate version must be ABI-compatible with the
+# MemMe-DB fork (currently based on DuckDB v1.4.x). If the crate resolves
+# to a newer DuckDB, you may need to pin it or update the fork.
+duckdb = { version = "1.4" }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# Logging
+tracing = "0.1"
+
+# Internal crates
+memme-core = { path = "crates/memme-core", default-features = false }
+memme-embeddings = { path = "crates/memme-embeddings", default-features = false }
+memme-llm = { path = "crates/memme-llm", default-features = false }
+
+# Release profile: balanced optimization
+[profile.release]
+lto = "thin"
+strip = true
+
+# Mobile-specific profile: aggressive size optimization
+[profile.release-mobile]
+inherits = "release"
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true

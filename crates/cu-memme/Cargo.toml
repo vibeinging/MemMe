@@ -1,0 +1,21 @@
+[package]
+name = "cu-memme"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Copper-rs memory task powered by MemMe — give your robot long-term memory"
+publish = false
+keywords = ["memory", "ai", "robotics", "copper", "duckdb"]
+categories = ["science::robotics", "science::machine-learning"]
+rust-version = "1.77"
+repository = "https://github.com/vibeinging/MemMe"
+
+[dependencies]
+memme-core = { path = "../memme-core", default-features = false, features = ["bundled"] }
+memme-embeddings = { path = "../memme-embeddings", default-features = false, features = ["onnx"] }
+memme-llm = { path = "../memme-llm", default-features = false }
+cu29 = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt"] }

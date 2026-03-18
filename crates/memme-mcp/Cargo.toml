@@ -1,0 +1,25 @@
+[package]
+name = "memme-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP (Model Context Protocol) server for MemMe memory engine"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "memme-mcp"
+path = "src/main.rs"
+
+[dependencies]
+memme-core = { workspace = true, features = ["bundled", "webhooks"] }
+memme-embeddings = { workspace = true, features = ["openai"] }
+memme-llm = { workspace = true, features = ["openai"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

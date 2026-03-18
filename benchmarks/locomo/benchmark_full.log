@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/Four/PersonalProjects/MemMe/benchmarks/locomo/run_benchmark_v2.py", line 27, in <module>
+    import requests
+  File "/Users/Four/Library/Python/3.9/lib/python/site-packages/requests/__init__.py", line 43, in <module>
+    import urllib3
+  File "/Users/Four/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py", line 38, in <module>
+    raise ImportError(
+ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with LibreSSL 2.8.3. See: https://github.com/urllib3/urllib3/issues/2168

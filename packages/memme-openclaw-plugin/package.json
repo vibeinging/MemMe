@@ -1,0 +1,29 @@
+{
+  "name": "memme-openclaw-plugin",
+  "version": "0.1.0",
+  "description": "MemMe memory plugin for OpenClaw — structured Session/Episode memory with identity and meditation",
+  "main": "index.ts",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "memory",
+    "memme",
+    "ai-memory"
+  ],
+  "dependencies": {
+    "memme": "file:../../crates/memme-node"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^3.2.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": ""
+}

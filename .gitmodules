@@ -1,0 +1,6 @@
+[submodule "db_engine/duckdb"]
+	path = db_engine/duckdb
+	url = git@github.com:VexDB-Beijing/VexDB-Lite.git
+[submodule "db_engine/duckpgq"]
+	path = db_engine/duckpgq
+	url = https://github.com/cwida/duckpgq-extension.git

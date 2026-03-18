@@ -1,0 +1,67 @@
+# MemMe + dora-rs Example Dataflow
+#
+# A simple robot dialogue pipeline with long-term memory:
+#   Whisper (STT) → MemMe (memory) → LLM → TTS
+#
+# Run: dora start dataflow.yml
+#
+# Prerequisites:
+#   cargo build -p memme-dora --release
+#   export OPENAI_API_KEY=sk-xxx
+
+nodes:
+  # ---- Perception ----
+
+  - id: microphone
+    custom:
+      source: dora-hub/dora-microphone
+      outputs:
+        - audio
+
+  - id: whisper
+    custom:
+      source: dora-hub/dora-whisper
+      inputs:
+        audio: microphone/audio
+      outputs:
+        - text
+
+  # ---- Memory ----
+
+  - id: memme
+    custom:
+      build: cargo build -p memme-dora --release
+      source: ../../target/release/memme-dora
+      inputs:
+        store: whisper/text           # auto-store user speech
+        search: llm/memory_query      # LLM requests relevant memories
+      outputs:
+        - stored
+        - results
+        - error
+      env:
+        MEMME_DB_PATH: ./robot_memory.duckdb
+        MEMME_COLLECTION: dialogue
+        OPENAI_API_KEY: env:OPENAI_API_KEY
+
+  # ---- Reasoning ----
+
+  - id: llm
+    custom:
+      source: dora-hub/dora-qwen
+      inputs:
+        context: memme/results       # relevant memories as context
+        user_input: whisper/text
+      outputs:
+        - response
+        - memory_query
+
+  # ---- Action ----
+
+  - id: tts
+    custom:
+      source: dora-hub/dora-kokoro-tts
+      inputs:
+        text: llm/response
+      outputs:
+        - audio_out

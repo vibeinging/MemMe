@@ -1,0 +1,43 @@
+{
+  "total_questions": 32,
+  "protocol": "engine_mode",
+  "overall": {
+    "f1_mean": 38.939651618223046,
+    "bleu1_mean": 39.61228730759981,
+    "judge_mean": 84.375
+  },
+  "by_category": {
+    "single-hop": {
+      "count": 32,
+      "f1_mean": 38.939651618223046,
+      "bleu1_mean": 39.61228730759981,
+      "judge_mean": 84.375
+    }
+  },
+  "baselines": {
+    "mem0": {
+      "single-hop": 67.13,
+      "multi-hop": 51.15,
+      "temporal": 55.51,
+      "open-domain": 72.93
+    },
+    "zep": {
+      "single-hop": 61.7,
+      "multi-hop": 41.35,
+      "temporal": 49.31,
+      "open-domain": 76.6
+    },
+    "mem0g": {
+      "single-hop": 65.71,
+      "multi-hop": 47.19,
+      "temporal": 58.13,
+      "open-domain": 75.71
+    }
+  },
+  "v2_scores": {
+    "single-hop": 15.62,
+    "multi-hop": 70.27,
+    "temporal": 15.38,
+    "open-domain": 50.0
+  }
+}

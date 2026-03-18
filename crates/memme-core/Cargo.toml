@@ -1,0 +1,67 @@
+[package]
+name = "memme-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core memory engine for MemMe — edge-first AI memory with DuckDB storage"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["bundled"]
+# Default: compile DuckDB from source (no MemMe-DB extension)
+bundled = ["duckdb/bundled"]
+# Use precompiled DuckDB with MemMe-DB vector extension.
+# Requires DUCKDB_LIB_DIR and DUCKDB_INCLUDE_DIR env vars.
+# See scripts/build_memme_db.sh for building the library.
+memme-db = []
+# Webhook delivery (requires HTTP runtime). Off for mobile FFI.
+webhooks = ["reqwest", "tokio"]
+# ONNX cross-encoder reranker using fastembed for local offline reranking.
+onnx-rerank = ["fastembed"]
+# API-based reranker (Jina/Cohere compatible). Lightweight HTTP client only.
+api-rerank = ["reqwest"]
+
+[dependencies]
+duckdb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+memme-embeddings = { workspace = true, default-features = false }
+memme-llm = { workspace = true }
+fastembed = { version = "4", optional = true }
+tokio = { workspace = true, optional = true }
+reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+chrono = { version = "0.4", features = ["serde"] }
+aho-corasick = "1"
+
+[dev-dependencies]
+memme-embeddings = { workspace = true, features = ["openai"] }
+memme-llm = { workspace = true, features = ["openai"] }
+tokio = { workspace = true }
+
+[[test]]
+name = "llm_integration"
+
+[[test]]
+name = "real_llm"
+
+[[example]]
+name = "basic"
+
+[[example]]
+name = "smart"
+
+[[example]]
+name = "graph"
+
+[[example]]
+name = "search"
+
+[[example]]
+name = "session"

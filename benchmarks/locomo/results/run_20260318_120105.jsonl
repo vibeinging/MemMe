@@ -1,0 +1,1 @@
+{"sample_id": "conv-26", "question": "What did Caroline research?", "reference": "Adoption agencies", "prediction": "Caroline researched adoption agencies.", "category": 1, "category_name": "single-hop", "f1": 0.6666666666666666, "bleu1": 0.5, "judge_scores": [1.0], "judge_mean": 1.0}
