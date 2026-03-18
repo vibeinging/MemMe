@@ -1,0 +1,74 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Run basic checks before publishing to prevent broken releases.
+  check:
+    name: Pre-publish checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: check-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy -p memme-core -p memme-embeddings -p memme-llm -- -D warnings
+
+      - name: Tests
+        run: cargo test -p memme-core -p memme-embeddings -p memme-llm
+
+  publish:
+    name: Publish crates
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: publish-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Publish memme-embeddings
+        run: cargo publish -p memme-embeddings --token ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish memme-llm
+        run: cargo publish -p memme-llm --token ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish memme-core
+        run: cargo publish -p memme-core --token ${{ secrets.CRATES_IO_TOKEN }}

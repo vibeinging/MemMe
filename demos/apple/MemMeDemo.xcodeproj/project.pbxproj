@@ -1,0 +1,307 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA000001001 /* MemMeDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000001001; };
+		AA000002001 /* ChatInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000002001; };
+		AA000005001 /* MemmeAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005001; };
+		AA000007001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000007001; };
+		AA000009001 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000009001; };
+		AA00000A001 /* memme_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000A001; };
+		AA00000C001 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000C002; };
+		AA00000D001 /* GraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000004001; };
+		AA00000E001 /* MemoryListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000006001; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		BB000001001 /* MemMeDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemMeDemoApp.swift; sourceTree = "<group>"; };
+		BB000002001 /* ChatInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInputView.swift; sourceTree = "<group>"; };
+		BB000004001 /* GraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphView.swift; sourceTree = "<group>"; };
+		BB000005001 /* MemmeAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemmeAPI.swift; sourceTree = "<group>"; };
+		BB000006001 /* MemoryListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryListView.swift; sourceTree = "<group>"; };
+		BB000007001 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		BB000009001 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
+		BB00000A001 /* memme_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = memme_ffi.swift; sourceTree = "<group>"; };
+		BB00000C001 /* memme_ffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = memme_ffiFFI.h; sourceTree = "<group>"; };
+		BB00000D001 /* memme_ffiFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = memme_ffiFFI.modulemap; sourceTree = "<group>"; };
+		BB00000C002 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		EE000001001 /* MemMeDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MemMeDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DD000002001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CC000001001 = {
+			isa = PBXGroup;
+			children = (
+				CC000002001 /* MemMeDemo */,
+				CC000003001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CC000002001 /* MemMeDemo */ = {
+			isa = PBXGroup;
+			children = (
+				BB000001001 /* MemMeDemoApp.swift */,
+				CC000004001 /* Shared */,
+				CC000005001 /* FFI */,
+			);
+			path = MemMeDemo;
+			sourceTree = "<group>";
+		};
+		CC000003001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EE000001001 /* MemMeDemo.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		CC000004001 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				BB000002001 /* ChatInputView.swift */,
+				BB000004001 /* GraphView.swift */,
+				BB000005001 /* MemmeAPI.swift */,
+				BB000006001 /* MemoryListView.swift */,
+				BB000007001 /* Models.swift */,
+				BB00000C002 /* SearchView.swift */,
+				BB000009001 /* StatsView.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		CC000005001 /* FFI */ = {
+			isa = PBXGroup;
+			children = (
+				BB00000A001 /* memme_ffi.swift */,
+				BB00000C001 /* memme_ffiFFI.h */,
+				BB00000D001 /* memme_ffiFFI.modulemap */,
+			);
+			path = FFI;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EE000002001 /* MemMeDemo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF000006001 /* Build configuration list for PBXNativeTarget "MemMeDemo" */;
+			buildPhases = (
+				DD000001001 /* Sources */,
+				DD000002001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MemMeDemo;
+			productName = MemMeDemo;
+			productReference = EE000001001 /* MemMeDemo.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0867D690FE84155DC02AAC07 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = FF000005001 /* Build configuration list for PBXProject "MemMeDemo" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CC000001001;
+			productRefGroup = CC000003001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EE000002001 /* MemMeDemo */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DD000001001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001001 /* MemMeDemoApp.swift in Sources */,
+				AA000002001 /* ChatInputView.swift in Sources */,
+				AA000005001 /* MemmeAPI.swift in Sources */,
+				AA000007001 /* Models.swift in Sources */,
+				AA000009001 /* StatsView.swift in Sources */,
+				AA00000A001 /* memme_ffi.swift in Sources */,
+				AA00000C001 /* SearchView.swift in Sources */,
+				AA00000D001 /* GraphView.swift in Sources */,
+				AA00000E001 /* MemoryListView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		FF000001001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		FF000002001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		FF000003001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MemMe;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MemMe needs local network access to connect to the server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.memme.demo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/MemMeDemo/FFI";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/release";
+				OTHER_LDFLAGS = "-lmemme_ffi -lc++ -framework Security -framework SystemConfiguration";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/MemMeDemo/FFI";
+				SWIFT_OBJC_BRIDGING_HEADER = "MemMeDemo/FFI/MemMeDemo-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FF000004001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MemMe;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MemMe needs local network access to connect to the server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.memme.demo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/MemMeDemo/FFI";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/release";
+				OTHER_LDFLAGS = "-lmemme_ffi -lc++ -framework Security -framework SystemConfiguration";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/MemMeDemo/FFI";
+				SWIFT_OBJC_BRIDGING_HEADER = "MemMeDemo/FFI/MemMeDemo-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		FF000005001 /* Build configuration list for PBXProject "MemMeDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF000001001 /* Debug */,
+				FF000002001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FF000006001 /* Build configuration list for PBXNativeTarget "MemMeDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF000003001 /* Debug */,
+				FF000004001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 0867D690FE84155DC02AAC07 /* Project object */;
+}

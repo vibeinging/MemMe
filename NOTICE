@@ -1,0 +1,13 @@
+MemMe - Edge-first AI Memory Engine
+Copyright 2026 MemMe Contributors
+
+This product includes software developed at
+https://github.com/vibeinging/MemMe
+
+Licensed under the Apache License, Version 2.0.
+
+---
+Third-party notices:
+
+Memory extraction prompt design adapted from mem0 (Apache 2.0 License)
+https://github.com/mem0ai/mem0

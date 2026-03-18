@@ -1,0 +1,71 @@
+{
+  "id": "memme-memory",
+  "name": "MemMe Memory",
+  "version": "0.1.0",
+  "description": "Structured AI memory with Session/Episode architecture, identity traits, and meditation",
+  "kind": "memory",
+  "author": "MemMe",
+  "homepage": "https://github.com/anthropics/memme",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "db_path": {
+        "type": "string",
+        "default": "~/.openclaw/memme.duckdb",
+        "description": "Path to DuckDB database file"
+      },
+      "embedding_provider": {
+        "type": "string",
+        "enum": ["openai"],
+        "default": "openai"
+      },
+      "embedding_api_key": {
+        "type": "string",
+        "default": "${OPENAI_API_KEY}"
+      },
+      "embedding_base_url": {
+        "type": "string",
+        "description": "Custom embedding API base URL (OpenAI-compatible)"
+      },
+      "embedding_model": {
+        "type": "string",
+        "default": "text-embedding-3-small"
+      },
+      "embedding_dims": {
+        "type": "number",
+        "default": 1536
+      },
+      "llm_api_key": {
+        "type": "string",
+        "default": "${OPENAI_API_KEY}"
+      },
+      "llm_model": {
+        "type": "string",
+        "default": "gpt-4o-mini"
+      },
+      "llm_base_url": {
+        "type": "string",
+        "default": "https://api.openai.com"
+      },
+      "auto_compact_threshold": {
+        "type": "number",
+        "default": 20,
+        "description": "Number of unprocessed events before auto-compact"
+      },
+      "recall_limit": {
+        "type": "number",
+        "default": 10
+      },
+      "recall_episode_limit": {
+        "type": "number",
+        "default": 5
+      },
+      "include_identity": {
+        "type": "boolean",
+        "default": true,
+        "description": "Include identity traits in recall context"
+      }
+    },
+    "required": ["embedding_api_key", "llm_api_key"]
+  }
+}
