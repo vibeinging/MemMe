@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemMe Playground</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0c0a09;
+  --surface: #151210;
+  --surface2: #1e1a17;
+  --surface3: #272220;
+  --border: #2e2824;
+  --border-light: #3d3530;
+  --text: #ede8e3;
+  --text2: #9c918a;
+  --text3: #6b6058;
+  --accent: #d4a574;
+  --accent2: #e8c4a0;
+  --accent-dim: rgba(212,165,116,0.12);
+  --green: #7ecfa0;
+  --green-dim: rgba(126,207,160,0.12);
+  --red: #e88a8a;
+  --red-dim: rgba(232,138,138,0.1);
+  --blue: #7ea8cf;
+  --blue-dim: rgba(126,168,207,0.12);
+  --serif: 'Instrument Serif', Georgia, serif;
+  --sans: 'Outfit', -apple-system, sans-serif;
+  --mono: 'IBM Plex Mono', 'SF Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+}
+
+::selection { background: var(--accent); color: var(--bg); }
+
+/* Layout */
+.app {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  border-right: 1px solid var(--border);
+  padding: 24px 20px;
+  overflow-y: auto;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
+
+.logo {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.logo h1 {
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 400;
+  font-style: italic;
+}
+
+.logo h1 em { font-style: normal; color: var(--accent); }
+.logo .version { font-family: var(--mono); font-size: 10px; color: var(--text3); margin-left: 6px; }
+
+.tagline {
+  font-size: 12px;
+  color: var(--text3);
+  font-weight: 300;
+  margin-bottom: 28px;
+}
+
+.section-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text3);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.config-section { margin-bottom: 24px; }
+
+.field { margin-bottom: 10px; }
+
+.field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text2);
+  margin-bottom: 4px;
+}
+
+.field select, .field input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--mono);
+  font-weight: 300;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.field select:focus, .field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.field input::placeholder { color: var(--text3); }
+.field input[type="password"] { letter-spacing: 0.15em; }
+.field .hint { font-size: 10px; font-family: var(--mono); color: var(--text3); margin-top: 3px; }
+
+.connect-btn {
+  width: 100%;
+  padding: 10px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--sans);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.connect-btn:hover { background: var(--accent2); }
+.connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.connect-btn.loading {
+  position: relative; color: transparent; pointer-events: none;
+}
+.connect-btn.loading::after {
+  content: ''; position: absolute; width: 14px; height: 14px;
+  top: 50%; left: 50%; margin: -7px 0 0 -7px;
+  border: 2px solid rgba(0,0,0,0.2); border-top-color: var(--bg);
+  border-radius: 50%; animation: spin 0.5s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.status-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text3);
+  margin-right: 6px;
+  transition: all 0.3s;
+}
+
+.status-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(126,207,160,0.5);
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text3);
+  line-height: 1.6;
+}
+
+.sidebar-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.clear-btn {
+  background: none; border: none; color: var(--text3);
+  font-size: 10px; font-family: var(--mono); cursor: pointer;
+  text-decoration: underline; padding: 0;
+}
+.clear-btn:hover { color: var(--red); }
+
+/* Main */
+.main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Timeline */
+.timeline {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timeline::-webkit-scrollbar { width: 6px; }
+.timeline::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+/* Memory items */
+.mem-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  animation: itemIn 0.3s ease backwards;
+  transition: background 0.15s;
+}
+
+.mem-item:hover { background: var(--surface); }
+
+.mem-item .indicator {
+  width: 3px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--border-light);
+  transition: background 0.2s;
+}
+
+.mem-item:hover .indicator { background: var(--accent); }
+
+.mem-item .body { flex: 1; min-width: 0; }
+
+.mem-item .text {
+  font-size: 14px;
+  font-weight: 300;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.mem-item .meta {
+  margin-top: 6px;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text3);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.mem-item .meta .score { color: var(--green); font-weight: 400; }
+
+@keyframes itemIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.mem-item:nth-child(1) { animation-delay: 0ms; }
+.mem-item:nth-child(2) { animation-delay: 30ms; }
+.mem-item:nth-child(3) { animation-delay: 60ms; }
+.mem-item:nth-child(4) { animation-delay: 90ms; }
+.mem-item:nth-child(5) { animation-delay: 120ms; }
+.mem-item:nth-child(6) { animation-delay: 150ms; }
+.mem-item:nth-child(7) { animation-delay: 180ms; }
+.mem-item:nth-child(8) { animation-delay: 210ms; }
+
+/* Search result with highlight */
+.mem-item.search-result .indicator { background: var(--blue); }
+
+/* Chat bubbles */
+.chat-bubble {
+  max-width: 75%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  animation: itemIn 0.25s ease;
+  margin: 2px 0;
+}
+
+.user-bubble {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--bg);
+  border-bottom-right-radius: 4px;
+}
+
+.ai-bubble {
+  align-self: flex-start;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble-text {
+  font-size: 14px;
+  font-weight: 300;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.user-bubble .bubble-text { font-weight: 400; }
+
+.bubble-meta {
+  margin-top: 6px;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text3);
+}
+
+/* Section divider in timeline */
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text3);
+}
+
+.section-divider::before, .section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Welcome state */
+.welcome {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+}
+
+.welcome-inner {
+  max-width: 420px;
+}
+
+.welcome h2 {
+  font-family: var(--serif);
+  font-size: 32px;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.welcome p {
+  font-size: 14px;
+  font-weight: 300;
+  color: var(--text2);
+  line-height: 1.7;
+  margin-bottom: 8px;
+}
+
+.welcome .steps {
+  text-align: left;
+  margin: 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.welcome .step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.welcome .step .num {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid rgba(212,165,116,0.2);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.welcome .step .desc {
+  font-size: 13px;
+  font-weight: 300;
+  color: var(--text2);
+  line-height: 1.5;
+}
+
+.welcome .step .desc strong { color: var(--text); font-weight: 500; }
+
+/* Input area at bottom */
+.input-area {
+  border-top: 1px solid var(--border);
+  padding: 16px 32px;
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+}
+
+.mode-tab {
+  padding: 6px 14px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text3);
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.03em;
+}
+
+.mode-tab:first-child { border-radius: 6px 0 0 6px; }
+.mode-tab:last-child { border-radius: 0 6px 6px 0; }
+.mode-tab + .mode-tab { border-left: none; }
+
+.mode-tab.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: rgba(212,165,116,0.3);
+}
+
+.mode-tab.active + .mode-tab { border-left-color: rgba(212,165,116,0.3); }
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.input-row textarea {
+  flex: 1;
+  padding: 11px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--sans);
+  font-weight: 300;
+  resize: none;
+  outline: none;
+  min-height: 44px;
+  max-height: 120px;
+  transition: border-color 0.2s;
+}
+
+.input-row textarea:focus { border-color: var(--accent); }
+.input-row textarea::placeholder { color: var(--text3); }
+
+.input-row .send-btn {
+  padding: 11px 20px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: var(--sans);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.input-row .send-btn:hover { background: var(--accent2); }
+.input-row .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Load sample button */
+.load-sample-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 24px;
+  background: var(--surface);
+  border: 1px dashed var(--border-light);
+  border-radius: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.25s;
+  text-align: left;
+}
+
+.load-sample-btn:hover {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-dim);
+}
+
+.load-sample-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.load-sample-icon {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 300;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.load-sample-btn:hover .load-sample-icon {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.load-sample-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.load-sample-text strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.load-sample-text small {
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 300;
+  color: var(--text3);
+}
+
+.sample-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text3);
+  cursor: pointer;
+  border-bottom: 1px dashed var(--border-light);
+  transition: color 0.15s;
+}
+.sample-link:hover { color: var(--accent); }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 11px 20px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 300;
+  color: var(--text);
+  transform: translateY(80px);
+  opacity: 0;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  z-index: 100;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.error { border-color: var(--red); color: var(--red); }
+
+/* Memory count badge */
+.mem-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  padding: 8px 16px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.05s !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .timeline { padding: 20px 16px; }
+  .input-area { padding: 12px 16px; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">
+      <h1>Mem<em>Me</em></h1>
+      <span class="version">v0.1</span>
+    </div>
+    <div class="tagline">Your memories, truly yours.</div>
+
+    <div class="config-section">
+      <div class="section-label">Embedding</div>
+      <div class="field">
+        <label>Provider</label>
+        <select id="embedder">
+          <option value="openai" selected>OpenAI</option>
+        </select>
+      </div>
+      <div id="embedFields">
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="embedApiKey" placeholder="sk-...">
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input type="text" id="embedBaseUrl" placeholder="https://api.openai.com/v1">
+          <div class="hint">Include /v1</div>
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="embedModel" placeholder="text-embedding-3-small">
+        </div>
+        <div class="field">
+          <label>Dimensions</label>
+          <input type="number" id="embedDims" placeholder="1536">
+        </div>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <div class="section-label">LLM (optional)</div>
+      <div class="field">
+        <label>Provider</label>
+        <select id="llmProvider">
+          <option value="">None</option>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </div>
+      <div id="llmFields" style="display:none">
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="llmApiKey" placeholder="sk-...">
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input type="text" id="llmBaseUrl" placeholder="https://api.openai.com">
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="llmModel" placeholder="gpt-4o-mini">
+        </div>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <button class="connect-btn" id="connectBtn" onclick="connect()">
+        <span class="status-dot" id="statusDot"></span>Connect
+      </button>
+    </div>
+
+    <div class="sidebar-footer">
+      <div style="margin-bottom:6px">
+        Config stored in browser localStorage.<br>
+        API keys never leave your device.
+      </div>
+      <button class="clear-btn" onclick="clearConfig()">Clear saved config</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- Welcome (shown before connect) -->
+    <div class="welcome" id="welcomeView">
+      <div class="welcome-inner">
+        <h2>Try MemMe</h2>
+        <p>An AI memory engine that remembers what matters to you.</p>
+        <div class="steps">
+          <div class="step">
+            <div class="num">1</div>
+            <div class="desc"><strong>Configure</strong> your embedding provider in the sidebar, then click Connect.</div>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <div class="desc"><strong>Tell</strong> it things: facts, preferences, plans, conversations. Or load sample data to explore.</div>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <div class="desc"><strong>Ask</strong> questions. MemMe finds the right memory by meaning, not keywords.</div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text3)">All data stays in a local .duckdb file on your machine.</p>
+      </div>
+    </div>
+
+    <!-- Main view (shown after connect) -->
+    <div id="mainView" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+      <div class="timeline" id="timeline">
+        <div class="mem-count" id="memCount"></div>
+      </div>
+
+      <div class="input-area">
+        <div class="mode-tabs">
+          <button class="mode-tab active" onclick="setMode('remember', this)">Remember</button>
+          <button class="mode-tab" onclick="setMode('recall', this)">Recall</button>
+          <button class="mode-tab" onclick="setMode('chat', this)">Chat</button>
+        </div>
+        <div class="input-row">
+          <textarea id="mainInput" placeholder="Tell me something to remember..." rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submit()}"
+            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="submit()">Remember</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let connected = false;
+let mode = 'remember'; // 'remember', 'recall', or 'chat'
+let chatHistory = []; // Chat conversation history for display
+
+// --- Config persistence ---
+
+const CONFIG_KEY = 'memme_playground_config';
+
+function saveConfig() {
+  const c = {
+    embedApiKey: $('embedApiKey').value,
+    embedBaseUrl: $('embedBaseUrl').value,
+    embedModel: $('embedModel').value,
+    embedDims: $('embedDims').value,
+    llmProvider: $('llmProvider').value,
+    llmApiKey: $('llmApiKey').value,
+    llmBaseUrl: $('llmBaseUrl').value,
+    llmModel: $('llmModel').value,
+  };
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(c));
+}
+
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(CONFIG_KEY);
+    if (!raw) return;
+    const c = JSON.parse(raw);
+    if (c.embedApiKey) $('embedApiKey').value = c.embedApiKey;
+    if (c.embedBaseUrl) $('embedBaseUrl').value = c.embedBaseUrl;
+    if (c.embedModel) $('embedModel').value = c.embedModel;
+    if (c.embedDims) $('embedDims').value = c.embedDims;
+    if (c.llmProvider) $('llmProvider').value = c.llmProvider;
+    if (c.llmApiKey) $('llmApiKey').value = c.llmApiKey;
+    if (c.llmBaseUrl) $('llmBaseUrl').value = c.llmBaseUrl;
+    if (c.llmModel) $('llmModel').value = c.llmModel;
+    $('llmFields').style.display = c.llmProvider ? 'block' : 'none';
+  } catch (e) {}
+}
+
+function clearConfig() {
+  localStorage.removeItem(CONFIG_KEY);
+  ['embedApiKey','embedBaseUrl','embedModel','embedDims','llmApiKey','llmBaseUrl','llmModel'].forEach(id => $(id).value = '');
+  $('llmProvider').value = '';
+  $('llmFields').style.display = 'none';
+  toast('Config cleared');
+}
+
+loadConfig();
+
+// --- UI ---
+
+$('llmProvider').addEventListener('change', e => {
+  $('llmFields').style.display = e.target.value ? 'block' : 'none';
+  if (e.target.value === 'ollama') {
+    $('llmBaseUrl').placeholder = 'http://localhost:11434';
+    $('llmApiKey').placeholder = '(not needed)';
+    $('llmModel').placeholder = 'llama3.2';
+  } else {
+    $('llmBaseUrl').placeholder = 'https://api.openai.com';
+    $('llmApiKey').placeholder = 'sk-...';
+    $('llmModel').placeholder = 'gpt-4o-mini';
+  }
+});
+
+function setMode(m, btn) {
+  mode = m;
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const input = $('mainInput');
+  const send = $('sendBtn');
+  if (m === 'remember') {
+    input.placeholder = 'Tell me something to remember...';
+    send.textContent = 'Remember';
+  } else if (m === 'recall') {
+    input.placeholder = 'What would you like to recall?';
+    send.textContent = 'Recall';
+  } else {
+    input.placeholder = 'Ask a question about your memories...';
+    send.textContent = 'Ask';
+  }
+  // Refresh the timeline view for the current mode
+  if (connected) {
+    if (m === 'chat') renderChat();
+    else refreshTimeline();
+  }
+  input.focus();
+}
+
+// --- API ---
+
+async function api(path, body = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    toast('Network error. Is the server running?', true);
+    throw e;
+  }
+  let data;
+  try { data = await res.json(); }
+  catch (e) { toast(`Server error (${res.status})`, true); throw e; }
+  if (data.error) { toast(data.error, true); throw new Error(data.error); }
+  return data;
+}
+
+// --- Connect ---
+
+async function connect() {
+  const btn = $('connectBtn');
+  if (btn.classList.contains('loading')) return;
+
+  if (!$('embedApiKey').value.trim()) return toast('Embedding API Key is required', true);
+
+  btn.classList.add('loading');
+  btn.disabled = true;
+
+  try {
+    const config = {
+      embedder: 'openai',
+      embed_api_key: $('embedApiKey').value.trim(),
+      embed_base_url: $('embedBaseUrl').value.trim(),
+      embed_model: $('embedModel').value.trim(),
+    };
+    if ($('embedDims').value) config.embed_dims = $('embedDims').value;
+
+    const llm = $('llmProvider').value;
+    if (llm) {
+      config.llm_provider = llm;
+      config.llm_api_key = $('llmApiKey').value;
+      config.llm_base_url = $('llmBaseUrl').value;
+      config.llm_model = $('llmModel').value;
+    }
+
+    await api('/api/config', config);
+    connected = true;
+    saveConfig();
+    $('statusDot').classList.add('on');
+    $('welcomeView').style.display = 'none';
+    $('mainView').style.display = 'flex';
+    toast('Connected');
+    await refreshTimeline();
+    $('mainInput').focus();
+  } catch (e) {
+  } finally {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }
+}
+
+// --- Submit ---
+
+async function submit() {
+  if (!connected) return toast('Connect first', true);
+  const input = $('mainInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const btn = $('sendBtn');
+  btn.disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  try {
+    if (mode === 'remember') {
+      await api('/api/add', { content: text });
+      toast('Remembered');
+      await refreshTimeline();
+    } else if (mode === 'recall') {
+      const data = await api('/api/search', { query: text, limit: 10 });
+      showRecallResults(text, data.results || []);
+    } else {
+      showChatQuestion(text);
+      const data = await api('/api/chat', { query: text });
+      showChatAnswer(text, data.answer || 'No answer.', data.memories_used || [], data.memories_count || 0);
+    }
+  } catch (e) {
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// --- Timeline ---
+
+async function refreshTimeline() {
+  if (!connected) return;
+  try {
+    const data = await api('/api/list', { limit: 100 });
+    const memories = data.memories || [];
+    renderTimeline(memories);
+  } catch (e) {}
+}
+
+function renderTimeline(memories) {
+  const tl = $('timeline');
+  if (!memories.length) {
+    tl.innerHTML = `
+      <div style="text-align:center;padding:60px 20px;color:var(--text3)">
+        <div style="font-family:var(--serif);font-size:48px;font-style:italic;opacity:0.3;margin-bottom:16px">m</div>
+        <p style="font-size:14px;font-weight:300;margin-bottom:24px;max-width:320px;margin-left:auto;margin-right:auto;line-height:1.7">
+          No memories yet. Type something below to remember, or load a sample profile to explore.
+        </p>
+        <button class="load-sample-btn" onclick="loadSamples(this)">
+          <span class="load-sample-icon">+</span>
+          <span class="load-sample-text">
+            <strong>Load sample: Alex's profile</strong>
+            <small>16 memories — work, family, preferences, plans</small>
+          </span>
+        </button>
+      </div>`;
+    return;
+  }
+  tl.innerHTML =
+    `<div class="mem-count">${memories.length} memories stored</div>` +
+    memories.map(m => memoryHTML(m)).join('');
+  tl.scrollTop = 0;
+}
+
+function showRecallResults(query, results) {
+  const tl = $('timeline');
+  let html = `<div class="section-divider">Recall: "${esc(query)}"</div>`;
+  if (!results.length) {
+    html += `<div style="text-align:center;padding:40px;color:var(--text3);font-size:14px;font-weight:300">No memories match that query.</div>`;
+  } else {
+    html += results.map(r => `
+      <div class="mem-item search-result">
+        <div class="indicator"></div>
+        <div class="body">
+          <div class="text">${esc(r.content || r.memory || '')}</div>
+          <div class="meta">
+            ${r.score != null ? `<span class="score">${Number(r.score).toFixed(4)}</span>` : ''}
+            <span>${formatTime(r.created_at || r.timestamp)}</span>
+          </div>
+        </div>
+      </div>`).join('');
+  }
+  html += `<div style="text-align:center;padding:12px"><span class="sample-link" onclick="refreshTimeline()">Back to all memories</span></div>`;
+  tl.innerHTML = html;
+  tl.scrollTop = 0;
+}
+
+function showChatQuestion(query) {
+  chatHistory.push({ role: 'user', content: query });
+  renderChat();
+  // Add pending indicator
+  const tl = $('timeline');
+  tl.innerHTML += `
+    <div class="chat-bubble ai-bubble" id="aiPending">
+      <div class="bubble-text" style="color:var(--text3)">Searching memories & thinking...</div>
+    </div>`;
+  tl.scrollTop = tl.scrollHeight;
+}
+
+function showChatAnswer(query, answer, memories, count) {
+  chatHistory.push({ role: 'assistant', content: answer, memories_count: count });
+  renderChat();
+}
+
+function renderChat() {
+  const tl = $('timeline');
+  if (!chatHistory.length) {
+    tl.innerHTML = `
+      <div style="text-align:center;padding:60px 20px;color:var(--text3)">
+        <div style="font-family:var(--serif);font-size:48px;font-style:italic;opacity:0.3;margin-bottom:12px">?</div>
+        <p style="font-size:14px;font-weight:300">Ask anything about your memories.</p>
+      </div>`;
+    return;
+  }
+  tl.innerHTML = chatHistory.map(m => {
+    if (m.role === 'user') {
+      return `<div class="chat-bubble user-bubble"><div class="bubble-text">${esc(m.content)}</div></div>`;
+    } else {
+      return `<div class="chat-bubble ai-bubble">
+        <div class="bubble-text">${esc(m.content)}</div>
+        ${m.memories_count > 0 ? `<div class="bubble-meta">${m.memories_count} memories referenced</div>` : ''}
+      </div>`;
+    }
+  }).join('');
+  tl.scrollTop = tl.scrollHeight;
+}
+
+function memoryHTML(m) {
+  return `
+    <div class="mem-item">
+      <div class="indicator"></div>
+      <div class="body">
+        <div class="text">${esc(m.content || m.memory || '')}</div>
+        <div class="meta">
+          <span>${formatTime(m.created_at || m.timestamp)}</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+// --- Sample data ---
+
+const SAMPLES = [
+  // People
+  "Alex is a software engineer based in Beijing, working on AI infrastructure.",
+  "Alex has been writing Rust for 3 years. Before that he used Go and Python.",
+  "Alex is allergic to peanuts and shellfish.",
+  "Alex's daughter Mia's birthday is March 15th. She's turning 7 and loves dinosaurs.",
+  // Work
+  "Alex's team uses DuckDB for analytics and Postgres for the main database.",
+  "The weekly team standup is every Monday at 10am Beijing time.",
+  "Project Phoenix deadline is April 30th. The team needs to finish the search pipeline.",
+  "Bob is the VP of Engineering. He prefers async communication over meetings.",
+  "Carol leads the ML team. She needs the embedding pipeline ready by next week.",
+  // Preferences
+  "Alex drinks oat milk lattes every morning. The cafe downstairs makes the best ones.",
+  "Alex prefers window seats on flights but aisle seats on trains.",
+  "Alex switched from VS Code to Cursor last month. Much better with AI autocomplete.",
+  "Alex's favorite book on system design is 'Designing Data-Intensive Applications'.",
+  // Plans
+  "Alex is planning a trip to Tokyo in October. He wants to visit Akihabara and try authentic ramen.",
+  "Alex needs to renew his passport before September. It expires in November.",
+  "Alex runs 5km every Tuesday and Thursday morning before work.",
+];
+
+async function loadSamples(btn) {
+  if (!connected) return toast('Connect first', true);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+  }
+
+  try {
+    // Split into batches of 10 (embedding API limit)
+    for (let i = 0; i < SAMPLES.length; i += 10) {
+      const batch = SAMPLES.slice(i, i + 10);
+      await api('/api/batch_add', { items: batch });
+    }
+    toast(`Loaded ${SAMPLES.length} memories`);
+  } catch (e) {}
+  await refreshTimeline();
+}
+
+// --- Helpers ---
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function formatTime(t) {
+  if (!t) return '';
+  try { return new Date(t).toLocaleString(); }
+  catch { return t; }
+}
+
+function toast(msg, isError = false) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => el.className = 'toast', 3000);
+}
+</script>
+
+</body>
+</html>

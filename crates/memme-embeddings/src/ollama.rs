@@ -94,6 +94,7 @@ impl OllamaEmbedder {
     }
 
     /// Internal async embed call using Ollama's /api/embed endpoint.
+    /// Retries up to 3 times with exponential backoff on transient errors.
     async fn embed_async(&self, input: Vec<String>) -> Result<Vec<Vec<f32>>, EmbedError> {
         let request = OllamaEmbedRequest {
             model: self.model.name().to_string(),
@@ -101,31 +102,57 @@ impl OllamaEmbedder {
         };
 
         let url = format!("{}/api/embed", self.host);
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| EmbedError::ApiError(format!("request to Ollama failed: {e}")))?;
+        let max_retries = 3u32;
+        let mut last_err = EmbedError::ApiError("no attempts made".into());
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "failed to read body".into());
-            return Err(EmbedError::ApiError(format!(
-                "Ollama API returned {status}: {body}"
-            )));
+        for attempt in 0..max_retries {
+            if attempt > 0 {
+                let wait = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
+                tracing::warn!(attempt, "Retrying Ollama embed request after: {last_err}");
+                tokio::time::sleep(wait).await;
+            }
+
+            let result = self.client.post(&url).json(&request).send().await;
+
+            match result {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let resp: OllamaEmbedResponse = response.json().await.map_err(|e| {
+                            EmbedError::ApiError(format!(
+                                "failed to parse Ollama response: {e}"
+                            ))
+                        })?;
+                        return Ok(resp.embeddings);
+                    }
+
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "failed to read body".into());
+
+                    if status.as_u16() == 429 || status.is_server_error() {
+                        last_err = EmbedError::ApiError(format!(
+                            "Ollama API returned {status}: {body}"
+                        ));
+                        continue;
+                    }
+
+                    // Non-retriable error — fail immediately
+                    return Err(EmbedError::ApiError(format!(
+                        "Ollama API returned {status}: {body}"
+                    )));
+                }
+                Err(e) => {
+                    // Network/timeout errors are retriable
+                    last_err =
+                        EmbedError::ApiError(format!("request to Ollama failed: {e}"));
+                    continue;
+                }
+            }
         }
 
-        let resp: OllamaEmbedResponse = response
-            .json()
-            .await
-            .map_err(|e| EmbedError::ApiError(format!("failed to parse Ollama response: {e}")))?;
-
-        Ok(resp.embeddings)
+        Err(last_err)
     }
 
     /// Run the async embed within the current tokio runtime.
