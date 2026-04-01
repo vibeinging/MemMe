@@ -4,7 +4,7 @@
 /// locates the precompiled DuckDB+MemMe-DB+FTS+JSON static library and
 /// configures the linker search paths.
 ///
-/// The merged `libduckdb_static.a` is produced by `./db_engine/build.sh release`.
+/// The merged `libduckdb_static.a` is produced by `./memme-db/build.sh release`.
 /// It contains DuckDB core + all extensions + the generated extension loader.
 ///
 /// Environment variables (set these BEFORE running cargo):
@@ -13,9 +13,9 @@
 ///   DUCKDB_STATIC=1     — tell libduckdb-sys to link statically
 ///
 /// Usage:
-///   ./db_engine/build.sh release
-///   DUCKDB_LIB_DIR=db_engine/build/release \
-///   DUCKDB_INCLUDE_DIR=db_engine/duckdb/src/include \
+///   ./memme-db/build.sh release
+///   DUCKDB_LIB_DIR=memme-db/build/release \
+///   DUCKDB_INCLUDE_DIR=memme-db/duckdb/src/include \
 ///   DUCKDB_STATIC=1 \
 ///   cargo build -p memme-core --no-default-features --features memme-db
 fn main() {
@@ -48,20 +48,20 @@ fn configure_memme_db() {
     let lib_dir = if let Ok(dir) = env::var("DUCKDB_LIB_DIR") {
         PathBuf::from(dir)
     } else {
-        let auto_dir = workspace_root.join("db_engine/build/release");
+        let auto_dir = workspace_root.join("memme-db/build/release");
         if auto_dir.join("libduckdb_static.a").exists() {
             let canonical = auto_dir.canonicalize().unwrap_or(auto_dir.clone());
             println!(
-                "cargo:warning=Auto-detected DuckDB at db_engine/. \
+                "cargo:warning=Auto-detected DuckDB at memme-db/. \
                  For reliable builds, set DUCKDB_LIB_DIR={}",
                 canonical.display()
             );
             canonical
         } else {
-            let include_dir = workspace_root.join("db_engine/duckdb/src/include");
+            let include_dir = workspace_root.join("memme-db/duckdb/src/include");
             panic!(
                 "\n\nmemme-db feature is enabled but DuckDB library not found.\n\n\
-                 Run: ./db_engine/build.sh release\n\
+                 Run: ./memme-db/build.sh release\n\
                  Then: export DUCKDB_LIB_DIR={}\n\
                  \x20     export DUCKDB_INCLUDE_DIR={}\n\
                  \x20     export DUCKDB_STATIC=1\n\n",

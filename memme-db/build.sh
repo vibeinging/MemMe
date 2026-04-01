@@ -5,10 +5,10 @@
 # DuckDB source is auto-downloaded on first run (pinned to v1.5.0).
 #
 # Usage:
-#   ./db_engine/build.sh [release|debug|clean]
+#   ./memme-db/build.sh [release|debug|clean]
 #
 # Output:
-#   db_engine/build/<mode>/libduckdb_static.a   (merged static library)
+#   memme-db/build/<mode>/libduckdb_static.a   (merged static library)
 
 set -e
 

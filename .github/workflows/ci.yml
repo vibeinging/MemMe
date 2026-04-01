@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        # db_engine/duckdb submodule not needed — bundled feature compiles DuckDB from source
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -46,7 +46,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-        # db_engine/duckdb submodule not needed — bundled feature compiles DuckDB from source
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        # db_engine/duckdb submodule not needed — bundled feature compiles DuckDB from source
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:

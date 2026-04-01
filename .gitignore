@@ -10,17 +10,17 @@ docs/plans/
 docs/articles/
 docs/design/
 
-# db_engine build artifacts (DuckDB source auto-downloaded at build time)
-db_engine/duckdb/
-db_engine/duckpgq/
-db_engine/build/
+# memme-db build artifacts (DuckDB source auto-downloaded at build time)
+memme-db/duckdb/
+memme-db/duckpgq/
+memme-db/build/
 
 # DuckDB
 *.duckdb
 *.duckdb.wal
 
 # Build
-/db_engine/build/
+/memme-db/build/
 dist/
 *.o
 *.a
