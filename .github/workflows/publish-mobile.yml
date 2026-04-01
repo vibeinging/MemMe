@@ -54,7 +54,7 @@ jobs:
             --out-dir bindings/swift
 
       - name: Upload static library
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: |
@@ -127,7 +127,7 @@ jobs:
           cp target/${{ matrix.target }}/release/libmemme_ffi.so dist/jniLibs/${{ matrix.abi }}/
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-${{ matrix.abi }}
           path: dist/jniLibs/

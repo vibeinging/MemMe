@@ -72,7 +72,7 @@ jobs:
           npx napi build --platform --release --target ${{ matrix.settings.target }} --manifest-path ../../Cargo.toml -p memme-node
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
           path: crates/memme-node/*.node
