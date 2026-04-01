@@ -1,5 +1,6 @@
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use memme_embeddings::Embedder;
 use tracing::{debug, info};
@@ -34,6 +35,14 @@ mod meditation_ops;
 
 use battery::DeferredOp;
 use helpers::{compute_retention, initial_stability_for_tier};
+
+/// Current time as milliseconds since UNIX epoch.
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 // Static assertion: MemoryStore must be Send + Sync for concurrent use.
 const _: () = {
@@ -87,6 +96,8 @@ pub struct MemoryStore {
     deferred_ops: Mutex<Vec<DeferredOp>>,
     /// Queue of deferred write operations from read paths (access tracking).
     deferred_writes: Mutex<Vec<DeferredWrite>>,
+    /// Timestamp (millis since UNIX epoch) of the last deferred write flush.
+    last_flush_millis: AtomicU64,
     /// Optional reranker for post-fusion re-scoring.
     reranker: Option<Arc<dyn crate::rerank::Reranker>>,
 }
@@ -126,12 +137,13 @@ impl MemoryStore {
             battery_charging: AtomicU32::new(0),
             deferred_ops: Mutex::new(Vec::new()),
             deferred_writes: Mutex::new(Vec::new()),
+            last_flush_millis: AtomicU64::new(now_millis()),
             reranker: None,
         })
     }
 
     /// Flush deferred write operations (access count bumps, stability reinforcement).
-    /// Called opportunistically during write operations.
+    /// Called opportunistically during write operations and by time-based auto-flush.
     pub fn flush_deferred_writes(&self) {
         let ops: Vec<DeferredWrite> = {
             let mut queue = recover_lock(&self.deferred_writes, "deferred_writes");
@@ -140,6 +152,8 @@ impl MemoryStore {
         if ops.is_empty() {
             return;
         }
+        self.last_flush_millis
+            .store(now_millis(), Ordering::Relaxed);
         for op in ops {
             match op {
                 DeferredWrite::IncrementAccess(id) => {
@@ -150,6 +164,16 @@ impl MemoryStore {
                 }
             }
         }
+    }
+
+    /// Check whether enough time has elapsed to warrant a deferred write flush.
+    fn should_time_flush(&self) -> bool {
+        let interval_secs = self.config.deferred_flush_interval_secs;
+        if interval_secs == 0 {
+            return false;
+        }
+        let last = self.last_flush_millis.load(Ordering::Relaxed);
+        now_millis().saturating_sub(last) >= interval_secs * 1000
     }
 
     /// Check whether an LLM provider is configured.
@@ -439,6 +463,10 @@ impl MemoryStore {
                 ));
             } else {
                 queue.push(DeferredWrite::IncrementAccess(id.to_string()));
+            }
+            drop(queue);
+            if self.should_time_flush() {
+                self.flush_deferred_writes();
             }
         }
         Ok(row.map(|r| {

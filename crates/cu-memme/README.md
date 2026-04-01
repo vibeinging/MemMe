@@ -40,7 +40,7 @@ A [Copper-rs](https://github.com/copper-project/copper-rs) task powered by [MemM
 ```rust
 enum MemMeRequest {
     Store { content: String, user_id: String, metadata: Option<String> },
-    Search { query: String, user_id: String, top_k: u32 },
+    Search { query: String, user_id: String, limit: u32 },
     IngestEvent { content: String, user_id: String, session_id: Option<String>, event_type: Option<String> },
     Compact { session_id: String },
     Noop,

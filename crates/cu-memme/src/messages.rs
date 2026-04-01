@@ -22,7 +22,7 @@ pub enum MemMeRequest {
     Search {
         query: String,
         user_id: String,
-        top_k: u32,
+        limit: u32,
     },
     IngestEvent {
         content: String,
