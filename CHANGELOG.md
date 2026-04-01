@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session/Episode types**: `Session`, `ListSessionsOptions`, stream types, and identity types
 - **Connection pool**: Read-write separation via `ConnectionPool`
 - **Config persistence**: Runtime configuration stored via `config_store`
+- **Interactive playground**: Local web demo (`demos/playground/`) with Remember/Recall/Chat modes, sample data loading, and localStorage config persistence
 - **Apple native demo**: macOS/iOS SwiftUI demo application
 - **CI/CD pipelines**: Cross-platform release workflows for PyPI, npm, crates.io, iOS, and Android
 - **Benchmark tooling**: LoCoMo benchmark with rerank/temporal parameters; batch processing and judge improvements (45.7% → 63.9%)
@@ -29,14 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Trait-HTTP separation**: Decoupled trait definitions from HTTP transport for reduced binary size
 - **Enhanced extraction prompt**: Improved LLM standard extraction with better time parsing
 - **Removed Memory Index**: Reverted unified memory index experiment to focus on Session/Episode architecture
+- **API naming**: Renamed `top_k` → `limit` across REST server, MCP server, cu-memme, and json_ops for consistency with core API
 
 ### Fixed
 
+- **Transaction safety**: `add_smart()` now wrapped in BEGIN/COMMIT/ROLLBACK to prevent partial writes on LLM/embedding failure
+- **Ollama embedding retry**: Added exponential backoff (3 retries) matching OpenAI provider behavior
+- **Deferred writes flush**: Added time-based flush (30s interval) alongside the 500-item cap to prevent stale writes in read-heavy workloads
 - **iOS compilation**: Method name alignment, `HybridSearch` adaptation, and `staticlib` target
 - **Cross-platform packaging**: Isolated ONNX dependencies and added missing build deps
 - **Rerank fallback**: Graceful degradation when reranker is unavailable
 - **Deadlock fix**: Resolved concurrency issue in core engine
-- **P0 production blockers**: Critical fixes for production readiness
 - **Security**: Removed hardcoded API keys; switched to environment variables
 
 ## [0.1.0] - 2026-03-18

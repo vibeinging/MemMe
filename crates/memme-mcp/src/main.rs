@@ -4,7 +4,7 @@
 //! with Claude Desktop, Cursor, Windsurf, and other MCP-compatible clients.
 //!
 //! Usage:
-//!   OPENAI_API_KEY=sk-xxx memme-mcp [--db-path memory.duckdb]
+//!   OPENAI_API_KEY=<your-api-key> memme-mcp [--db-path memory.duckdb]
 
 use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex};

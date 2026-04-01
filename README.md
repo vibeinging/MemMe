@@ -63,6 +63,19 @@ MemMe outperforms mem0 across **all four categories** on the [LoCoMo benchmark](
 | **Forgetting curve** | Built-in | No | No |
 | **Privacy scoping** | Per-memory privacy levels | No | SOC2/HIPAA (cloud) |
 
+## Try It — Interactive Playground
+
+No code needed. Just run:
+
+```bash
+pip install memme
+python demos/playground/server.py
+```
+
+A local web app opens in your browser. Add memories, search by meaning, chat with your memory store. All data stays in a local `.duckdb` file on your machine.
+
+See [demos/playground/README.md](demos/playground/README.md) for details.
+
 ## Quick Start
 
 ### Rust
