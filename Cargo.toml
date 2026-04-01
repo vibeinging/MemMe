@@ -19,7 +19,7 @@ license = "Apache-2.0"
 repository = "https://github.com/vibeinging/MemMe"
 description = "Edge-first AI memory engine powered by MemMe-DB"
 keywords = ["memory", "ai", "edge", "duckdb", "embedding"]
-categories = ["database", "science::machine-learning"]
+categories = ["database", "science"]
 rust-version = "1.77"
 
 [workspace.dependencies]
