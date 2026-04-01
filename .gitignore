@@ -2,6 +2,14 @@
 /target
 **/*.rs.bk
 
+# Internal docs (not for public)
+docs/papers/
+docs/research/
+docs/analysis/
+docs/plans/
+docs/articles/
+docs/design/
+
 # DuckDB
 *.duckdb
 *.duckdb.wal
