@@ -35,10 +35,10 @@ MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo)
 
 | Category | **MemMe** | mem0 | mem0-graph | Zep |
 |---|---|---|---|---|
-| Single-hop | **80.50** | 67.13 | 65.71 | 61.70 |
-| Multi-hop | **55.76** | 51.15 | 47.19 | 41.35 |
-| Temporal | **59.38** | 55.51 | 58.13 | 49.31 |
-| Open-domain | **74.55** | 72.93 | 75.71 | 76.60 |
+| Single-hop | **79.43** | 67.13 | 65.71 | 61.70 |
+| Multi-hop | **65.73** | 51.15 | 47.19 | 41.35 |
+| Temporal | **70.83** | 55.51 | 58.13 | 49.31 |
+| Open-domain | **82.28** | 72.93 | 75.71 | 76.60 |
 
 4-channel retrieval (vector + BM25 + entity spreading + temporal) with RRF fusion and cross-encoder reranking.
 

@@ -101,10 +101,10 @@ results = store.search("user preferences", user_id="alice")
 
 | Category | **MemMe** | mem0 | mem0-graph |
 |---|---|---|---|
-| **Single-hop** | **80.50** | 67.13 | 65.71 |
-| **Multi-hop** | **55.76** | 51.15 | 47.19 |
-| **Temporal** | **59.38** | 55.51 | 58.13 |
-| **Open-domain** | **74.55** | 72.93 | 75.71 |
+| **Single-hop** | **79.43** | 67.13 | 65.71 |
+| **Multi-hop** | **65.73** | 51.15 | 47.19 |
+| **Temporal** | **70.83** | 55.51 | 58.13 |
+| **Open-domain** | **82.28** | 72.93 | 75.71 |
 
 ## Links
 
