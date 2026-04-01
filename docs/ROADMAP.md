@@ -87,11 +87,10 @@ Organized by priority. Each milestone is designed to unblock the next wave of ad
 |------|----------|--------|-------------|
 | **Rustdoc on public APIs** | P0 | ✅ Done | `///` doc comments on all public types and methods in lib.rs |
 | **Error type docs** | P2 | ✅ Done | All MemoryError variants documented in error.rs |
-| **OpenAPI spec** | P0 | ❌ Open | Generate from axum routes → Swagger UI for REST API |
+| **OpenAPI spec** | P0 | ✅ Done | docs/openapi.yaml — OpenAPI 3.1 covering all 23 endpoints |
 | **Local Playground** | P1 | ✅ Done | `python demos/playground/server.py` — Remember/Recall/Chat modes |
 | **WASM Playground** | P2 | ❌ Open | Browser-only demo via DuckDB-WASM (future) |
 | **Quickstart guides** | P1 | ⚠️ Partial | README has code examples per language, but no dedicated one-page guides |
-| **Dockerfile** | P1 | ❌ Open | Multi-stage build for memme-server |
 
 ### M2: Data Import (Week 3-4)
 

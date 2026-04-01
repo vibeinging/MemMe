@@ -1,0 +1,804 @@
+openapi: 3.1.0
+info:
+  title: MemMe REST API
+  description: |
+    Self-hosted REST API for the MemMe AI memory engine.
+    All data is stored in a local DuckDB file. Your memories never leave your device.
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    url: https://github.com/vibeinging/MemMe
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional. Set via --api-key or MEMME_API_KEY env var.
+
+  schemas:
+    Memory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        user_id:
+          type: string
+        agent_id:
+          type: string
+          nullable: true
+        app_id:
+          type: string
+          nullable: true
+        run_id:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+        importance:
+          type: number
+          format: float
+        access_count:
+          type: integer
+        immutable:
+          type: boolean
+        categories:
+          type: array
+          items:
+            type: string
+          nullable: true
+        memory_type:
+          type: string
+          nullable: true
+        retention:
+          type: number
+          format: float
+        stability:
+          type: number
+          format: float
+        privacy:
+          type: string
+          enum: [local_only, syncable, encrypted_sync]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    MemoryResult:
+      allOf:
+        - $ref: '#/components/schemas/Memory'
+        - type: object
+          properties:
+            score:
+              type: number
+              format: float
+              nullable: true
+
+    SmartAddResult:
+      type: object
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+        graph:
+          $ref: '#/components/schemas/GraphResult'
+          nullable: true
+        episode_id:
+          type: string
+          nullable: true
+        session_id:
+          type: string
+          nullable: true
+
+    GraphResult:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              entity_type:
+                type: string
+        relations:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+              target:
+                type: string
+              relation_type:
+                type: string
+
+    UserStats:
+      type: object
+      properties:
+        user_id:
+          type: string
+        total_memories:
+          type: integer
+        total_entities:
+          type: integer
+        total_relationships:
+          type: integer
+        unique_agents:
+          type: integer
+        earliest_memory:
+          type: string
+          format: date-time
+          nullable: true
+        latest_memory:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApiOk:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+
+    ApiError:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      security: []
+      tags: [System]
+      responses:
+        '200':
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /v1/config:
+    get:
+      summary: Get current configuration
+      tags: [Config]
+      responses:
+        '200':
+          description: Current config
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          has_llm:
+                            type: boolean
+                          embedding_dims:
+                            type: integer
+
+  /v1/config/llm:
+    post:
+      summary: Configure LLM provider
+      tags: [Config]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              properties:
+                api_key:
+                  type: string
+                model:
+                  type: string
+                  default: gpt-4o-mini
+                base_url:
+                  type: string
+                  default: https://api.openai.com
+      responses:
+        '200':
+          description: LLM configured
+
+  /v1/memories:
+    post:
+      summary: Add a memory
+      tags: [Memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, user_id]
+              properties:
+                content:
+                  type: string
+                  description: The text to remember
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                app_id:
+                  type: string
+                run_id:
+                  type: string
+                metadata:
+                  type: object
+                importance:
+                  type: number
+                  format: float
+                  description: 0.0 to 1.0
+                immutable:
+                  type: boolean
+                  default: false
+                expiration_date:
+                  type: string
+                  format: date-time
+                categories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Memory created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Memory'
+    delete:
+      summary: Delete all memories for a user
+      tags: [Memories]
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: agent_id
+          in: query
+          schema:
+            type: string
+        - name: run_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Memories deleted
+
+  /v1/memories/{id}:
+    get:
+      summary: Get a memory by ID
+      tags: [Memories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Memory found
+        '404':
+          description: Memory not found
+    put:
+      summary: Update a memory
+      tags: [Memories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                metadata:
+                  type: object
+                timestamp:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Memory updated
+        '403':
+          description: Memory is immutable
+        '404':
+          description: Memory not found
+    delete:
+      summary: Delete a memory
+      tags: [Memories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Memory deleted
+        '403':
+          description: Memory is immutable
+        '404':
+          description: Memory not found
+
+  /v1/memories/{id}/history:
+    get:
+      summary: Get change history for a memory
+      tags: [Memories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: History records
+
+  /v1/memories/search:
+    post:
+      summary: Semantic search
+      description: Vector similarity search with optional keyword fusion (RRF).
+      tags: [Search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, user_id]
+              properties:
+                query:
+                  type: string
+                  description: Natural language query
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                app_id:
+                  type: string
+                run_id:
+                  type: string
+                limit:
+                  type: integer
+                  default: 10
+                threshold:
+                  type: number
+                  format: float
+                  description: Minimum similarity score (0.0 to 1.0)
+                keyword_search:
+                  type: boolean
+                  default: false
+                  description: Enable BM25 keyword search + RRF fusion
+                fields:
+                  type: array
+                  items:
+                    type: string
+                  description: Fields to return (default all)
+      responses:
+        '200':
+          description: Search results ranked by relevance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/MemoryResult'
+
+  /v1/memories/hybrid-search:
+    post:
+      summary: Hybrid search (vector + keyword)
+      description: Combines vector similarity and BM25 full-text search via Reciprocal Rank Fusion.
+      tags: [Search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, user_id]
+              properties:
+                query:
+                  type: string
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                app_id:
+                  type: string
+                run_id:
+                  type: string
+                limit:
+                  type: integer
+                  default: 10
+                vector_weight:
+                  type: number
+                  format: double
+                fts_weight:
+                  type: number
+                  format: double
+      responses:
+        '200':
+          description: Hybrid search results
+
+  /v1/memories/list:
+    post:
+      summary: List memories
+      tags: [Memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                app_id:
+                  type: string
+                run_id:
+                  type: string
+                limit:
+                  type: integer
+                  default: 50
+      responses:
+        '200':
+          description: List of memories
+
+  /v1/memories/export:
+    post:
+      summary: Export memories
+      tags: [Memories]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  description: Filter by user (optional, exports all if not set)
+      responses:
+        '200':
+          description: Full export including memories, entities, relationships
+
+  /v1/memories/import:
+    post:
+      summary: Import memories
+      tags: [Memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  content:
+                    type: string
+                  user_id:
+                    type: string
+                  metadata:
+                    type: object
+      responses:
+        '200':
+          description: Import result with count
+
+  /v1/memories/smart:
+    post:
+      summary: Smart add (LLM-powered)
+      description: Extract facts from text using LLM, deduplicate, and store as memories. Requires LLM configured.
+      tags: [Smart]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, user_id]
+              properties:
+                text:
+                  type: string
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                run_id:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: Extracted memories
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SmartAddResult'
+
+  /v1/memories/smart/messages:
+    post:
+      summary: Smart add from conversation
+      description: Append chat messages to a session, compact into episode, extract memories.
+      tags: [Smart]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages, user_id]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                      content:
+                        type: string
+                user_id:
+                  type: string
+                agent_id:
+                  type: string
+                run_id:
+                  type: string
+                  description: Used as session_id
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: Compacted episode with extracted memories
+
+  /v1/graph:
+    post:
+      summary: Extract knowledge graph
+      description: Use LLM to extract entities and relationships from text.
+      tags: [Graph]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, user_id]
+              properties:
+                text:
+                  type: string
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: Extracted entities and relationships
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/GraphResult'
+
+  /v1/graph/search:
+    post:
+      summary: Search knowledge graph
+      tags: [Graph]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, user_id]
+              properties:
+                query:
+                  type: string
+                user_id:
+                  type: string
+                depth:
+                  type: integer
+                  default: 2
+                  description: Graph traversal depth
+      responses:
+        '200':
+          description: Matching entities and relationships
+
+  /v1/recall:
+    post:
+      summary: Recall memories
+      description: Multi-layer unified retrieval with hybrid search.
+      tags: [Search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, user_id]
+              properties:
+                query:
+                  type: string
+                user_id:
+                  type: string
+                limit:
+                  type: integer
+                  default: 10
+      responses:
+        '200':
+          description: Recall results with recall_id
+
+  /v1/recall/{recall_id}/feedback:
+    post:
+      summary: Submit recall feedback (deprecated)
+      tags: [Search]
+      parameters:
+        - name: recall_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                feedback:
+                  type: string
+      responses:
+        '200':
+          description: Feedback accepted (no-op)
+
+  /v1/users/{user_id}/stats:
+    get:
+      summary: User analytics
+      tags: [Analytics]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User statistics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserStats'
+
+  /v1/users/{user_id}/frequency:
+    get:
+      summary: Memory creation frequency
+      tags: [Analytics]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: granularity
+          in: query
+          schema:
+            type: string
+            default: day
+            enum: [hour, day, week, month]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        '200':
+          description: Time-bucketed memory counts
+
+  /v1/users/{user_id}/top-entities:
+    get:
+      summary: Top entities by relationship count
+      tags: [Analytics]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Ranked entities
+
+tags:
+  - name: System
+    description: Health and status
+  - name: Config
+    description: Server and LLM configuration
+  - name: Memories
+    description: CRUD operations on memories
+  - name: Search
+    description: Semantic and hybrid search
+  - name: Smart
+    description: LLM-powered memory extraction
+  - name: Graph
+    description: Knowledge graph operations
+  - name: Analytics
+    description: User analytics and insights

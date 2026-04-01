@@ -67,48 +67,11 @@ impl super::MemoryStore {
         llm: Arc<dyn memme_llm::LlmProvider>,
         extract_agent_memory: bool,
     ) -> Result<SmartAddResult> {
-        // Begin transaction — all writes rollback on error.
-        let conn = self.storage.write_conn();
-        conn.execute_batch("BEGIN TRANSACTION")
-            .map_err(crate::error::MemoryError::DuckDb)?;
-        drop(conn);
-
-        let result = self.add_smart_inner(
-            text,
-            user_id,
-            agent_id,
-            run_id,
-            metadata,
-            llm,
-            extract_agent_memory,
-        );
-
-        let conn = self.storage.write_conn();
-        match &result {
-            Ok(_) => {
-                conn.execute_batch("COMMIT")
-                    .map_err(crate::error::MemoryError::DuckDb)?;
-            }
-            Err(_) => {
-                let _ = conn.execute_batch("ROLLBACK");
-            }
-        }
-
-        result
-    }
-
-    /// Inner implementation of add_smart, called within a transaction.
-    #[allow(clippy::too_many_arguments)]
-    fn add_smart_inner(
-        &self,
-        text: &str,
-        user_id: &str,
-        agent_id: Option<&str>,
-        run_id: Option<&str>,
-        metadata: Option<serde_json::Value>,
-        llm: Arc<dyn memme_llm::LlmProvider>,
-        extract_agent_memory: bool,
-    ) -> Result<SmartAddResult> {
+        // No explicit transaction wrapper — each sub-operation (add, update_trace,
+        // delete_trace, graph upsert) auto-commits independently. This is safe
+        // because add_smart is best-effort (individual op failures are logged and
+        // skipped), and it enables concurrent add_smart calls from multiple threads
+        // without "cannot start a transaction within a transaction" errors.
         // 1. Extract facts and manage memories (existing logic)
         let processor = crate::smart::SmartProcessor::with_extraction_depth(
             llm.clone(),
