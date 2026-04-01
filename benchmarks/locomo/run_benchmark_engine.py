@@ -17,6 +17,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -45,8 +46,9 @@ class BenchConfig:
     conversations: Optional[list] = None
     categories: Optional[list] = None
     judge_runs: int = 1
-    # Concurrency settings (for async answer+judge only)
-    max_llm_concurrent: int = 5
+    # Concurrency settings
+    max_llm_concurrent: int = 5   # async answer+judge
+    max_ingest_concurrent: int = 4  # threaded add_smart (LLM/embed IO parallel, DB serialized)
     # RRF weight tuning
     enable_forgetting_curve: bool = False  # disable for benchmark (all memories same age)
     rrf_vector_weight: float = 0.5
@@ -339,23 +341,37 @@ def ingest_conversation_engine(config: BenchConfig, conv: dict):
             text = date_prefix + "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in batch)
             all_batches.append(text)
 
+    # Build (text, uid) task list
+    ingest_tasks = [(text, uid) for text in all_batches for uid in [user_id_a, user_id_b]]
+    total_calls = len(ingest_tasks)
     done_count = 0
-    total_calls = len(all_batches) * 2  # × 2 users
-    for text in all_batches:
-        for uid in [user_id_a, user_id_b]:
-            for attempt in range(3):
-                try:
-                    store.add_smart(text, user_id=uid)
-                    done_count += 1
-                    if done_count % 20 == 0 or done_count == total_calls:
-                        print(f"      [{done_count}/{total_calls}] batches ingested", flush=True)
-                    break
-                except Exception as e:
-                    if attempt < 2:
-                        time.sleep(3 * (attempt + 1))
-                    else:
-                        done_count += 1
-                        print(f"      [WARN] add_smart failed for {uid}: {str(e)[:80]}", flush=True)
+    failed_count = 0
+
+    def _ingest_one(text_uid):
+        """Call add_smart with retry. LLM/embed IO runs in parallel across threads;
+        DB writes serialize on Rust Mutex (< 1ms each)."""
+        text, uid = text_uid
+        for attempt in range(3):
+            try:
+                store.add_smart(text, user_id=uid)
+                return (True, uid, None)
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(3 * (attempt + 1))
+                else:
+                    return (False, uid, str(e)[:80])
+
+    workers = getattr(config, 'max_ingest_concurrent', 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_ingest_one, task): task for task in ingest_tasks}
+        for future in as_completed(futures):
+            done_count += 1
+            ok, uid, err = future.result()
+            if not ok:
+                failed_count += 1
+                print(f"      [WARN] add_smart failed for {uid}: {err}", flush=True)
+            if done_count % 20 == 0 or done_count == total_calls:
+                print(f"      [{done_count}/{total_calls}] batches ingested", flush=True)
 
     # Build FTS index after all ingestion
     store.rebuild_fts_index()
@@ -475,7 +491,7 @@ async def run_benchmark(config: BenchConfig):
     print(f"Retrieval: vector + BM25 + entity spreading activation + RRF (engine)")
     print(f"RRF weights: vector={config.rrf_vector_weight} fts={config.rrf_fts_weight} entity={config.rrf_entity_weight} k={config.rrf_k}")
     print(f"Forgetting curve: {config.enable_forgetting_curve}")
-    print(f"Concurrency: LLM={config.max_llm_concurrent}")
+    print(f"Concurrency: Ingest={config.max_ingest_concurrent}, LLM={config.max_llm_concurrent}")
     print(f"Output: {results_file}")
     print()
 
@@ -669,6 +685,7 @@ def main():
     parser.add_argument("--data-path", default="locomo10.json")
     parser.add_argument("--output-dir", default="results_engine")
     parser.add_argument("--max-llm-concurrent", type=int, default=5)
+    parser.add_argument("--max-ingest-concurrent", type=int, default=4, help="Threads for concurrent add_smart ingestion")
     parser.add_argument("--results-only", type=str, default=None)
     parser.add_argument("--reuse-cache", action="store_true", help="Skip ingestion, reuse cached .duckdb files")
     parser.add_argument("--enable-forgetting-curve", action="store_true", default=False)
@@ -712,6 +729,7 @@ def main():
         data_path=args.data_path,
         output_dir=args.output_dir,
         max_llm_concurrent=args.max_llm_concurrent,
+        max_ingest_concurrent=args.max_ingest_concurrent,
         conversations=[int(x) for x in args.conversations.split(",")] if args.conversations else None,
         categories=[int(x) for x in args.categories.split(",")] if args.categories else None,
         enable_forgetting_curve=args.enable_forgetting_curve,
