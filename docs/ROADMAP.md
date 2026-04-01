@@ -76,8 +76,8 @@ Organized by priority. Each milestone is designed to unblock the next wave of ad
 | LLM/Embedding retry | P0 | ✅ Done | Exponential backoff (3 retries) on all providers (OpenAI + Ollama) |
 | RRF candidate limit | P1 | ✅ Done | Bounded by `rrf_candidate_multiplier` config |
 | LLM call timeout | P1 | ✅ Done | OpenAI 120s, Ollama 600s at HTTP client level |
-| Deferred writes flush | P1 | ⚠️ Partial | Queue cap at 500 items, missing periodic timer-based flush |
-| API naming consistency | P1 | ❌ Open | Server uses `top_k`, core uses `limit`; f32/f64 mismatch across bindings |
+| Deferred writes flush | P1 | ✅ Done | Queue cap 500 + time-based flush (30s interval) |
+| API naming consistency | P1 | ✅ Done | Unified `top_k` → `limit` across server/MCP/cu-memme/json_ops |
 
 ### M1: Developer Experience (Week 1-2 after launch)
 
@@ -88,7 +88,8 @@ Organized by priority. Each milestone is designed to unblock the next wave of ad
 | **Rustdoc on public APIs** | P0 | ✅ Done | `///` doc comments on all public types and methods in lib.rs |
 | **Error type docs** | P2 | ✅ Done | All MemoryError variants documented in error.rs |
 | **OpenAPI spec** | P0 | ❌ Open | Generate from axum routes → Swagger UI for REST API |
-| **WASM Playground** | P1 | ❌ Open | Browser-based demo, zero install, try MemMe in 10 seconds |
+| **Local Playground** | P1 | ✅ Done | `python demos/playground/server.py` — Remember/Recall/Chat modes |
+| **WASM Playground** | P2 | ❌ Open | Browser-only demo via DuckDB-WASM (future) |
 | **Quickstart guides** | P1 | ⚠️ Partial | README has code examples per language, but no dedicated one-page guides |
 | **Dockerfile** | P1 | ❌ Open | Multi-stage build for memme-server |
 
