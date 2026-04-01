@@ -87,10 +87,9 @@ MemMe 0.1.0 是一个功能完整的 AI 记忆引擎。以下是已经可用的�
 |------|--------|------|------|
 | **公开 API Rustdoc** | P0 | ✅ 完成 | lib.rs 所有公开类型和方法已有 `///` 文档注释 |
 | **错误类型文档** | P2 | ✅ 完成 | error.rs 所有 MemoryError 变体已有文档 |
-| **OpenAPI 规范** | P0 | ❌ 待做 | 从 axum 路由生成 → Swagger UI |
+| **OpenAPI 规范** | P0 | ✅ 完成 | docs/openapi.yaml — OpenAPI 3.1 覆盖全部 23 个端点 |
 | **WASM Playground** | P1 | ❌ 待做 | 浏览器体验版，零安装，10 秒试用 MemMe |
 | **快速上手指南** | P1 | ⚠️ 部分 | README 有各语言代码示例，缺独立的单页指南 |
-| **Dockerfile** | P1 | ❌ 待做 | memme-server 多阶段构建 |
 
 ### M2：数据导入（第 3-4 周）
 
