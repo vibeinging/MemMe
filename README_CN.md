@@ -1,77 +1,181 @@
 [English](README.md) | 中文
 
+<div align="center">
+
 # MemMe
 
-**首个面向移动端和边缘设备的可嵌入 AI 记忆引擎。**
+**Memories that are actually yours.**
 
-> [mem0](https://github.com/mem0ai/mem0) 的开源替代方案 — 离线优先、单文件部署、延迟低于 10ms。使用 Rust 构建，提供 Python、Node.js 和 Swift 绑定。
+一个可嵌入的 AI 记忆引擎。一个文件。你的设备。你说了算。
 
 [![CI](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-## MemMe 是什么？
+</div>
 
-MemMe 是一个 AI memory layer（AI 记忆层），为 AI agents、personal AI 助手和 conversational memory 系统提供 long-term memory（长期记忆）。基于 Rust 和 DuckDB 构建，将 vector database（向量数据库）、knowledge graph（知识图谱）和 full-text search（全文检索）整合在单个可嵌入文件中 —— 无需任何外部服务。
+---
 
-与云端方案不同，MemMe 专为 on-device AI 和 edge AI 场景设计，支持完整的 offline AI 能力。它在本地完成 embedding、RAG 风格的混合检索和记忆整合，非常适合移动应用、IoT 设备和隐私敏感的部署场景。
+你和 AI 助手聊了三个月。它知道你的工作、你的口味、你的思考方式。
 
-- **一体化存储** — 向量、知识图谱、全文索引和变更历史全部存储在单个文件中
-- **离线可用** — LLM 为可选项，通过 `LlmProvider` trait 可插拔（Ollama、OpenAI、Anthropic 或不使用）
-- **无 LLM 模式下延迟低于 10ms** — 纯向量去重路径，适用于延迟敏感场景
-- **多平台绑定** — Python（PyO3）、Node.js（NAPI-RS）、Swift（UniFFI）、WASM
+然后有一天，平台修改了隐私政策。或者你想换一个模型。或者服务停了。
 
-## 核心特性
+你的三个月记忆，蒸发了。
 
-- **单文件部署** -- 一个 `.duckdb` 文件包含一切：向量、图谱、FTS 索引、历史记录
-- **可插拔 LLM** -- 无 LLM 模式（向量去重 <10ms）或接入任意 LLM（事实提取 + 智能去重）
-- **知识图谱** -- 实体/关系提取，支持 DuckPGQ 图遍历
-- **混合搜索** -- 向量相似度 + BM25 全文检索，通过 Reciprocal Rank Fusion 融合
-- **遗忘曲线** -- 基于艾宾浩斯遗忘曲线的记忆衰减，访问时强化稳定性
-- **四级作用域** -- `user_id` / `agent_id` / `app_id` / `run_id` 隔离
-- **隐私控制** -- 每条记忆独立设置 `LocalOnly`、`Syncable`、`EncryptedSync` 隐私级别
-- **电量感知处理** -- 设备电量不足时推迟重量级操作
-- **不可变记忆 + TTL** -- 锁定记忆防止修改，或设置自动过期时间
-- **高级过滤器** -- Eq/Ne/Gt/Gte/Lt/Lte/In/Contains/IContains，支持 AND/OR 组合
-- **导出/导入** -- 完整 JSON 导出，包含记忆、实体和关系
-- **多语言** -- Rust 核心 + Python（PyO3）+ Node.js（NAPI-RS）+ Swift（UniFFI）+ WASM
+不是因为技术做不到。是因为**那些记忆从来就不属于你。**
 
-## 基准测试 — AI Memory 准确率（LoCoMo，1540 道题，gpt-4o-mini 评判）
+MemMe 想改变这件事。
+
+## 你的记忆，凭什么在别人的服务器上？
+
+你的日记、照片、通讯录，存在你自己的手机里。你可以备份、迁移、删除。
+
+但你和 AI 的全部对话记忆呢？存在 OpenAI 的服务器上。存在 Claude 的云端。你不知道谁能访问它们，不知道它们被用来训练了什么，不知道明天它们还在不在。
+
+AI 记忆比普通数据敏感得多。它不只是你说了什么，更是你**是什么样的人**——你的思维模式、决策习惯、情感状态、人际关系。这是最私密的个人画像。
+
+**这样的数据，应该放在你自己的设备上。**
+
+## MemMe：一个文件，装下全部记忆
+
+```
+memory.duckdb              ← 你的全部记忆，一个文件
+│
+├── memories               内容 + 向量 + 元数据
+├── entities / relationships   知识图谱（人、地、事 + 关系）
+├── sessions / events      原始对话流
+├── episodes               情景记忆（对话压缩后的故事）
+├── identity               身份特征（你是谁）
+├── procedures             程序性记忆（技能、习惯）
+├── meditations            冥想日志（记忆整合记录）
+├── history                变更审计（每次读写都有记录）
+└── memme_config           运行时配置
+```
+
+要备份？复制文件。要迁移到新手机？复制文件。要彻底删除？删除文件。
+
+Rust 写的内核。接上 LLM 做智能提取，不接也能跑——纯向量模式延迟低于 10ms。Python、Node.js、Swift/Kotlin 原生绑定（UniFFI），嵌入式设备和机器人也能跑，不是 HTTP 套壳。
+
+应用倒了，记忆还在。模型换了，记忆还在。平台跑了，记忆还在。
+
+## 试一下
+
+```bash
+pip install memme
+python demos/playground/server.py
+```
+
+浏览器自动打开。存记忆、搜记忆、跟记忆对话。数据就在你的机器上。
+
+## 跑分
+
+[LoCoMo 基准测试](https://github.com/snap-stanford/locomo)（1540 题，GPT-4o-mini 评判）：
 
 | 类别 | **MemMe** | mem0 | mem0-graph | Zep |
-|---|---|---|---|---|
-| **单跳推理** | **80.50** | 67.13 | 65.71 | 61.70 |
-| **多跳推理** | **55.76** | 51.15 | 47.19 | 41.35 |
-| **时序推理** | **59.38** | 55.51 | 58.13 | 49.31 |
-| **开放域** | **74.55** | 72.93 | 75.71 | 76.60 |
+|------|-----------|------|------------|-----|
+| 单跳 | **80.50** | 67.13 | 65.71 | 61.70 |
+| 多跳 | **55.76** | 51.15 | 47.19 | 41.35 |
+| 时序 | **59.38** | 55.51 | 58.13 | 49.31 |
+| 开放域 | **74.55** | 72.93 | 75.71 | 76.60 |
 
-MemMe 在 [LoCoMo benchmark](https://github.com/snap-stanford/locomo) 的**全部四个类别**中均优于 mem0。检索流水线：4 路搜索（向量 + BM25 + 实体扩散 + 时序），RRF 融合后经 cross-encoder reranking。
+## 它能做什么
 
-## MemMe vs mem0 / Zep — 功能对比
+### 四层记忆架构
+
+模拟人类从感知到认知的完整层次：
+
+- **Stream（感知流）** — 原始输入，忠实记录
+- **Episode（情景记忆）** — 事件聚合成有意义的"故事"
+- **Semantic（语义记忆）** — 从故事中提炼知识和事实
+- **Identity（身份记忆）** — 最高阶抽象：你是谁
+
+### "冥想"机制
+
+人在睡眠时整理白天的经历。MemMe 也一样——空闲时自动把零散对话聚合成情景、从情景中提炼知识、让不重要的记忆自然衰减。内置 FSRS 遗忘曲线，三个月前随口提的餐厅自然淡出，反复提及的偏好越来越牢固。
+
+### 四通道混合检索
+
+向量语义搜索 + BM25 全文搜索 + 实体图谱导航 + 时间维度，四路并行，RRF 融合后经 cross-encoder 重排序。
+
+### 知识图谱
+
+LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要外挂 Neo4j。
+
+### 隐私控制
+
+每条记忆独立设置隐私级别——仅本地、可同步、加密同步。医疗记录锁在手机里，咖啡偏好同步到所有设备。完整审计日志，每次读写都有记录。
+
+### 全端原生
+
+| 平台 | 方式 |
+|------|------|
+| Mac / Linux / Windows | Rust 原生 |
+| iPhone / iPad | Swift 绑定 (UniFFI) |
+| Android | NDK 原生 |
+| Web / Electron | Node.js 绑定 (NAPI-RS) |
+| Python 生态 | PyO3 绑定 |
+| 机器人 / IoT | Rust 编译到 ARM |
+
+所有平台共享同一个 Rust 内核，同一个 `.duckdb` 文件格式。
+
+### 生态集成
+
+| 集成 | 状态 | 说明 |
+|------|------|------|
+| **Claude Desktop / Cursor** | 已完成 | MCP 协议接入，作为 AI 的长期记忆 |
+| **REST API** | 已完成 | axum 服务，23 个端点，Bearer 认证 |
+| **[YiYi](https://github.com/vibeinging/YiYi)** | 已集成 | 桌面 AI 个人助手——能操作电脑、执行任务、管理文件，记忆系统由 MemMe 驱动 |
+| **OpenClaw** | 初步搭建 | 开源 Agent 框架的记忆插件 |
+| **Dora-rs** | 初步搭建 | Rust 机器人框架的记忆节点 |
+| **LeRobot** | 初步搭建 | Hugging Face 机器人框架的记忆封装 |
+| **Copper-rs** | 初步搭建 | 实时机器人框架的 CuTask 集成 |
+| **LangChain / LlamaIndex** | 规划中 | 主流 LLM 框架适配 |
+
+## 对比
 
 | | **MemMe** | **mem0** | **Zep** |
 |---|---|---|---|
-| **部署方式** | 单个 `.duckdb` 文件 | 服务器 + Qdrant/Pinecone + Neo4j | 托管云服务 |
-| **移动端 / iOS** | 原生支持（UniFFI） | 不支持 | 不支持 |
-| **离线支持** | 完整离线 | 需要云端 API | 仅云端 |
-| **无 LLM 延迟** | <10ms | 始终需要 LLM | 始终需要 LLM |
-| **语言** | Rust 核心 | 仅 Python | Go（服务端） |
-| **存储** | 嵌入式 DuckDB | 外部向量库 + 图数据库 | 托管 |
-| **知识图谱** | 内置（DuckPGQ） | 外部 Neo4j | 无 |
-| **FTS + 混合搜索** | 内置（RRF） | 无 | 部分支持 |
-| **Reranking** | 内置（API / ONNX） | 可选（Cohere） | 无 |
-| **遗忘曲线** | 内置 | 无 | 无 |
-| **隐私分级** | 每条记忆独立设置 | 无 | SOC2/HIPAA（云端） |
+| 部署 | 一个 `.duckdb` 文件 | 服务器 + Qdrant + Neo4j | 托管云 |
+| 移动端 | 原生支持 | 不支持 | 不支持 |
+| 离线 | 完整支持 | 需要云 API | 仅云端 |
+| 无 LLM 延迟 | <10ms | 必须有 LLM | 必须有 LLM |
+| 语言 | Rust | 仅 Python | Go |
+| 知识图谱 | 内置 | 外挂 Neo4j | 无 |
+| 混合检索 | 四通道 + RRF | 无 | 部分 |
+| 遗忘曲线 | 内置 | 无 | 无 |
 
-## 快速开始
+## 谁应该用 MemMe
 
-### Rust
+- **在意数据主权的人** — 记忆在你的设备上，不在别人的服务器里
+- **数字分身开发者** — 跨年的人格一致性，应用迭代但"我是谁"不丢
+- **端侧 AI 助手** — 手机上的私人助理，完全离线
+- **隐私敏感场景** — 医疗、法律、金融，数据不出设备
+- **非 Python 开发者** — Rust / Swift / Node.js 终于有了原生记忆引擎
+- **具身智能** — 低延迟、可嵌入，一个文件扔进去就能跑
 
-```toml
-[dependencies]
-memme-core = "0.1"
-memme-embeddings = { version = "0.1", features = ["onnx"] }
+---
+
+## 技术文档
+
+以下是面向开发者的技术细节。
+
+### 快速上手
+
+**Python**
+
+```python
+from memme import MemoryStore
+
+store = MemoryStore("memory.duckdb")
+store.add("Alex 喜欢喝燕麦拿铁", user_id="alex")
+store.add("女儿 Mia 的生日是 3 月 15 日", user_id="alex")
+
+results = store.search("家人的生日", user_id="alex")
+for r in results:
+    print(r["content"], r["score"])
 ```
+
+**Rust**
 
 ```rust
 use std::sync::Arc;
@@ -83,306 +187,126 @@ fn main() -> memme_core::Result<()> {
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
-    store.add("User prefers dark mode", AddOptions::new("alice"))?;
-    store.add("User drinks coffee every morning", AddOptions::new("alice"))?;
-
-    let results = store.search("morning routine", SearchOptions::new("alice").limit(5))?;
-    for r in &results {
-        println!("{} (score: {:.4})", r.content, r.score.unwrap_or(0.0));
-    }
+    store.add("Alex 喜欢喝燕麦拿铁", AddOptions::new("alex"))?;
+    let results = store.search("饮品偏好", SearchOptions::new("alex").limit(5))?;
     Ok(())
 }
 ```
 
-### Python
-
-```bash
-pip install memme
-```
-
-```python
-from memme import MemoryStore
-
-store = MemoryStore("memory.duckdb")  # 默认使用本地 ONNX embedding
-store.add("User prefers dark mode", user_id="alice")
-results = store.search("preferences", user_id="alice")
-for r in results:
-    print(r["content"], r["score"])
-```
-
-### Node.js
-
-```bash
-npm install memme
-```
+**Node.js**
 
 ```javascript
 const { MemoryStore } = require("memme");
 
-const store = new MemoryStore("memory.duckdb");
-await store.add("User prefers dark mode", { userId: "alice" });
-const results = await store.search("preferences", { userId: "alice" });
-console.log(results);
+// OpenAI embedding（或 newMock() 免 API 测试）
+const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.duckdb");
+await store.add("Alex 喜欢喝燕麦拿铁", "alex");
+const results = await store.search("饮品偏好", "alex");
 ```
 
-### Swift（UniFFI）
+**Swift (UniFFI)**
 
 ```swift
 import MemMe
 
-let store = try MemoryStore(dbPath: "memory.duckdb", embedder: "onnx")
-try store.add("User prefers dark mode", userId: "alice")
-let results = try store.search("preferences", userId: "alice")
+// 宿主 App 提供 HTTP 传输（URLSession / OkHttp）
+let store = try MemoryStore.newWithHttpClient(
+    dbPath: "memory.duckdb",
+    httpClient: myHttpClient,  // 实现 HttpClient 协议
+    apiKey: "sk-...",
+    model: "text-embedding-3-small",
+    dims: 1536
+)
+try store.add("Alex 喜欢喝燕麦拿铁", userId: "alex")
+let results = try store.search("饮品偏好", userId: "alex")
 ```
 
-## 架构 — MemMe 工作原理
+### 架构
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      语言绑定层                               │
-│  Python (PyO3)  │  Swift (UniFFI)  │  Node.js (NAPI-RS)     │
-│  memme-python      memme-ffi          memme-node             │
-├──────────────────────────────────────────────────────────────┤
-│                      memme-server (axum REST API)            │
-│                      memme-mcp (MCP stdio server)            │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│                    memme-core (Rust)                          │
-│                                                              │
-│  ┌────────────┐  ┌────────────┐  ┌─────────────────────┐    │
-│  │ MemoryStore │  │ GraphStore │  │ SearchEngine         │    │
-│  │ add()       │  │ add_graph()│  │ vector search        │    │
-│  │ search()    │  │ entities   │  │ FTS (BM25)           │    │
-│  │ update_trace│  │ relations  │  │ hybrid RRF           │    │
-│  │ delete_trace│  │ traverse   │  │ rerank (API / ONNX)   │    │
-│  └─────┬──────┘  └─────┬──────┘  └──────────┬──────────┘    │
-│        │               │                     │               │
-│  ┌─────┴───────────────┴─────────────────────┴─────────┐     │
-│  │          DuckDB 存储层（.duckdb 文件）               │     │
-│  │  memories │ entities │ relationships │ history        │     │
-│  │  FTS index │ vector index (MemMe-DB optional)      │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                              │
-│  ┌──────────────────┐   ┌──────────────────────────────┐     │
-│  │ memme-embeddings  │   │ memme-llm                    │     │
-│  │ ├ OnnxEmbedder    │   │ ├ OllamaProvider             │     │
-│  │ ├ OpenAIEmbedder  │   │ ├ OpenAIProvider              │     │
-│  │ └ OllamaEmbedder  │   │ ├ AnthropicProvider           │     │
-│  └──────────────────┘   │ ├ GeminiProvider              │     │
-│                          │ └ NoopProvider (fallback)     │     │
-│                          └──────────────────────────────┘     │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      语言绑定                              │
+│  Python (PyO3)  │  Node.js (NAPI-RS)  │  Swift (UniFFI)  │
+├──────────────────────────────────────────────────────────┤
+│  REST API (axum)          │  MCP 服务 (stdio)             │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│                   memme-core (Rust)                       │
+│                                                          │
+│  事件流 ──► 会话 ──► 片段 ──► 记忆                         │
+│                                │                         │
+│                      ┌─────────┤                         │
+│                      ▼         ▼                         │
+│                  身份特征     知识图谱                      │
+│                                                          │
+│  搜索：向量 + BM25 + 图谱 + 时间                           │
+│        ──► RRF 融合 ──► 重排序                             │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  DuckDB（.duckdb 单文件）                            │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  memme-embeddings          memme-llm                     │
+│  (ONNX / OpenAI / Ollama)  (OpenAI / Anthropic / Gemini  │
+│                             / Ollama / Noop)             │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**工作空间 crate 说明：**
-
-| Crate | 用途 |
-|---|---|
-| `memme-core` | 核心记忆引擎：CRUD、搜索、图谱、去重、分析 |
-| `memme-embeddings` | Embedding trait + ONNX/OpenAI/Ollama 后端 |
-| `memme-llm` | LLM trait + Ollama/OpenAI/Anthropic/Gemini 后端，用于事实提取 |
-| `memme-python` | Python 绑定，基于 PyO3 + maturin |
-| `memme-ffi` | Swift/C 绑定，基于 UniFFI |
-| `memme-node` | Node.js 绑定，基于 NAPI-RS |
-| `memme-wasm` | WASM 绑定，基于 wasm-bindgen |
-| `memme-server` | REST API 服务器（axum） |
-| `memme-mcp` | MCP stdio 服务器，适配 Claude Desktop / Cursor |
-
-## API 概览
-
-| 方法 | 说明 |
-|---|---|
-| `add(content, AddOptions)` | 添加记忆，自动去重 |
-| `add_smart(messages, AddOptions)` | LLM 驱动的事实提取和记忆管理 |
-| `search(query, SearchOptions)` | 向量相似度搜索 |
-| `hybrid_search(query, HybridSearchOptions)` | 向量 + FTS，通过 RRF 融合 |
-| `get(id)` | 根据 ID 获取单条记忆 |
-| `update_trace(id, content, UpdateOptions)` | 更新记忆内容 |
-| `delete_trace(id)` | 删除记忆 |
-| `list_traces(ListOptions)` | 按 user/agent/app/run 过滤列出记忆 |
-| `history(memory_id)` | 获取记忆的变更历史 |
-| `batch_update(ids, contents)` | 批量更新（跳过不可变记忆） |
-| `batch_delete(ids)` | 批量删除（跳过不可变记忆） |
-| `add_graph(text, user_id, llm)` | 提取实体/关系并写入知识图谱 |
-| `search_graph(query, user_id)` | 搜索知识图谱 |
-| `consolidate()` | 衰减保留率，清理已过期/低保留率的记忆 |
-| `export(user_id) / import(data)` | 完整 JSON 导出/导入 |
-| `user_stats(user_id)` | 用户维度的 OLAP 分析 |
-| `memory_frequency(user_id)` | 记忆创建趋势 |
-| `top_entities(user_id)` | 知识图谱中出现频率最高的实体 |
-| `add_procedure / get_procedure` | 程序性记忆（技能、工作流） |
-| `export_changes_since(version)` | 增量同步 delta |
-| `storage_stats()` | 记忆数量、实体数量、估计数据库大小 |
-
-## 配置
-
-```rust
-let config = MemoryConfig {
-    db_path: "memory.duckdb".into(),       // 或 ":memory:"
-    collection_name: "default".into(),      // 表前缀
-    embedding_dims: 384,                    // 必须与 embedder 维度一致
-    dedup_threshold: 0.15,                  // 去重用的余弦距离阈值
-    default_limit: 10,                      // 默认搜索/列表返回条数
-    enable_graph: true,                     // smart 模式下自动进行图谱提取
-    enable_forgetting_curve: true,          // 艾宾浩斯衰减
-    retention_weight: 0.7,                  // 保留率在评分中的权重
-    max_memories_per_user: Some(1000),      // 超出后自动剪枝
-    pruning_strategy: PruningStrategy::LRU, // 或 Importance、Decay
-    auto_prune: true,                       // add() 超限时自动剪枝
-    inclusion_prompt: Some("Extract work-related tasks".into()),
-    exclusion_prompt: Some("Ignore passwords and secrets".into()),
-    power_config: Some(PowerConfig {        // 移动端电量感知
-        full_power_threshold: 0.5,
-        power_save_threshold: 0.2,
-        defer_when_critical: true,
-    }),
-    ..Default::default()
-};
-```
-
-## REST API
-
-启动服务器：
+### REST API
 
 ```bash
-cargo run -p memme-server -- --db memory.duckdb --port 8080
+cargo run -p memme-server -- --db-path memory.duckdb --port 8080
 ```
 
-请求示例：
-
 ```bash
-# 添加记忆
+# 存记忆
 curl -X POST http://localhost:8080/v1/memories \
   -H "Content-Type: application/json" \
-  -d '{"content": "User likes dark mode", "user_id": "alice"}'
+  -d '{"content": "Alex 喜欢喝燕麦拿铁", "user_id": "alex"}'
 
 # 搜索
 curl -X POST http://localhost:8080/v1/memories/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "UI preferences", "user_id": "alice", "limit": 5}'
-
-# 根据 ID 获取
-curl http://localhost:8080/v1/memories/{id}
-
-# 更新
-curl -X PUT http://localhost:8080/v1/memories/{id} \
-  -H "Content-Type: application/json" \
-  -d '{"content": "User switched to light mode"}'
-
-# 删除
-curl -X DELETE http://localhost:8080/v1/memories/{id}
-
-# 列表
-curl -X POST http://localhost:8080/v1/memories/list \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "alice"}'
-
-# 历史记录
-curl http://localhost:8080/v1/memories/{id}/history
-
-# 导出 / 导入
-curl -X POST http://localhost:8080/v1/memories/export \
-  -d '{"user_id": "alice"}'
-curl -X POST http://localhost:8080/v1/memories/import \
-  -H "Content-Type: application/json" \
-  -d @exported.json
-
-# 健康检查
-curl http://localhost:8080/health
+  -d '{"query": "饮品偏好", "user_id": "alex"}'
 ```
 
-## MCP 服务器
+完整 API：[docs/openapi.yaml](docs/openapi.yaml) — 粘贴到 [Swagger Editor](https://editor.swagger.io) 浏览 23 个端点。
 
-MemMe 内置 MCP（Model Context Protocol）stdio 服务器，可与 Claude Desktop、Cursor 及其他 MCP 客户端集成。
-
-在 Claude Desktop 配置文件（`claude_desktop_config.json`）中添加：
+### MCP 服务
 
 ```json
 {
   "mcpServers": {
     "memme": {
       "command": "/path/to/memme-mcp",
-      "args": ["--db", "memory.duckdb"]
+      "args": ["--db-path", "memory.duckdb"]
     }
   }
 }
 ```
 
-可用 MCP 工具：`add_memory`、`search_memory`、`get_memory`、`update_memory`、`delete_memory`、`list_memories`、`delete_all_memories`。
-
-构建 MCP 服务器：
-
-```bash
-cargo build -p memme-mcp --release
-```
-
-## 从源码构建
-
-### 默认（捆绑 DuckDB）
+### 从源码构建
 
 ```bash
 git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
 cd MemMe
 cargo build --release
+cargo test   # 450+ 测试
 ```
-
-### 使用 MemMe-DB（HNSW）
-
-用于支持分区级过滤的高级向量索引：
-
-```bash
-# 1. 构建 DuckDB + MemMe-DB 静态库
-./scripts/build_memme_db.sh
-
-# 2. 启用 memme-db feature 构建 MemMe
-export DUCKDB_LIB_DIR=<path>/build/release/src
-export DUCKDB_INCLUDE_DIR=<path>/src/include
-cargo build -p memme-core --no-default-features --features memme-db --release
-```
-
-### Feature 标志
 
 | Feature | 说明 |
 |---|---|
 | `bundled`（默认） | 从源码编译 DuckDB |
-| `memme-db` | 链接预编译的 DuckDB + MemMe-DB |
-| `api-rerank` | 基于 API 的 cross-encoder reranker（Jina/Cohere/DashScope） |
-| `onnx-rerank` | 通过 fastembed 在本地运行 ONNX cross-encoder reranker |
+| `memme-db` | 预编译 DuckDB + MemMe-DB (HNSW) |
+| `api-rerank` | API 重排序 (Jina/Cohere) |
+| `onnx-rerank` | 本地 ONNX 重排序 |
 
-### 运行测试
+---
 
-```bash
-cargo test                                    # 全部单元测试（244 个）
-```
+## 参与贡献
 
-### 构建 Python 包
-
-```bash
-cd crates/memme-python
-maturin develop --release
-```
-
-## 贡献
-
-欢迎贡献！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解贡献指南。
-
-- [报告 Bug](https://github.com/vibeinging/MemMe/issues/new?template=bug_report.md)
-- [提交功能请求](https://github.com/vibeinging/MemMe/issues/new?template=feature_request.md)
-- [路线图](docs/ROADMAP.md)
-
-## 应用场景
-
-- **AI Agents** — 为聊天机器人和自主代理提供跨对话的持久记忆
-- **Personal AI 助手** — 在设备端记住用户偏好、习惯和上下文
-- **移动应用** — 离线优先的记忆系统，无需网络即可使用，联网时自动同步
-- **RAG 管道** — 混合检索（vector + graph + FTS）构建本地知识库
-- **Digital Twins（数字分身）** — 构建基于记忆的个人数字化表示
-
-## 社区
-
-- [GitHub Discussions](https://github.com/vibeinging/MemMe/discussions) — 问题与想法
-- [Issue Tracker](https://github.com/vibeinging/MemMe/issues) — Bug 报告与功能请求
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。[路线图](docs/ROADMAP.md)。
 
 ## 许可证
 
-Apache-2.0 —— 详见 [LICENSE](LICENSE)。
+Apache-2.0 — 见 [LICENSE](LICENSE)。

@@ -16,7 +16,7 @@ An embeddable AI memory engine. One file. Your device. Your rules.
 
 ---
 
-MemMe gives AI agents and apps long-term memory — stored in a single `.duckdb` file on your device, not in the cloud. Built in Rust with native bindings for Python, Node.js, Swift, and WASM.
+MemMe gives AI agents and apps long-term memory — stored in a single `.duckdb` file on your device, not in the cloud. Built in Rust with native bindings for Python, Node.js, and Swift/Kotlin (via UniFFI).
 
 Vectors, knowledge graph, full-text search, and change history — all in one file. No Qdrant, no Neo4j, no infrastructure. Plug in any LLM for smart extraction, or run pure vector mode at sub-10ms latency without one.
 
@@ -31,7 +31,7 @@ A local web app opens in your browser. Store memories, search by meaning, chat w
 
 ## Benchmark
 
-MemMe outperforms mem0 across **all four categories** on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, GPT-4o-mini judge):
+MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, GPT-4o-mini judge):
 
 | Category | **MemMe** | mem0 | mem0-graph | Zep |
 |---|---|---|---|---|
@@ -51,7 +51,7 @@ MemMe outperforms mem0 across **all four categories** on the [LoCoMo benchmark](
 | Offline | Full support | Requires cloud APIs | Cloud only |
 | Latency (no LLM) | <10ms | Always needs LLM | Always needs LLM |
 | Language | Rust core | Python only | Go (server) |
-| Knowledge graph | Built-in (DuckPGQ) | External Neo4j | No |
+| Knowledge graph | Built-in (DuckDB) | External Neo4j | No |
 | Hybrid search | Vector + BM25 + RRF | No | Partial |
 | Reranking | Built-in (API / ONNX) | Optional | No |
 | Forgetting curve | Built-in | No | No |
@@ -113,18 +113,26 @@ npm install memme
 ```javascript
 const { MemoryStore } = require("memme");
 
-const store = new MemoryStore("memory.duckdb");
-await store.add("User prefers dark mode", { userId: "alice" });
-const results = await store.search("preferences", { userId: "alice" });
+// Use OpenAI embeddings (or newMock() for testing without API)
+const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.duckdb");
+await store.add("User prefers dark mode", "alice");
+const results = await store.search("preferences", "alice");
 console.log(results);
 ```
 
-### Swift
+### Swift (UniFFI)
 
 ```swift
 import MemMe
 
-let store = try MemoryStore(dbPath: "memory.duckdb", embedder: "onnx")
+// Host app provides HTTP transport (URLSession, OkHttp, etc.)
+let store = try MemoryStore.newWithHttpClient(
+    dbPath: "memory.duckdb",
+    httpClient: myHttpClient,  // implements HttpClient protocol
+    apiKey: "sk-...",
+    model: "text-embedding-3-small",
+    dims: 1536
+)
 try store.add("User prefers dark mode", userId: "alice")
 let results = try store.search("preferences", userId: "alice")
 ```
@@ -192,7 +200,7 @@ let results = try store.search("preferences", userId: "alice")
 ## REST API
 
 ```bash
-cargo run -p memme-server -- --db memory.duckdb --port 8080
+cargo run -p memme-server -- --db-path memory.duckdb --port 8080
 ```
 
 ```bash
@@ -223,7 +231,7 @@ For Claude Desktop, Cursor, and other MCP clients:
   "mcpServers": {
     "memme": {
       "command": "/path/to/memme-mcp",
-      "args": ["--db", "memory.duckdb"]
+      "args": ["--db-path", "memory.duckdb"]
     }
   }
 }
@@ -239,7 +247,7 @@ cargo build -p memme-mcp --release
 git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
 cd MemMe
 cargo build --release
-cargo test   # 244 unit tests
+cargo test   # 450+ tests
 ```
 
 ### Feature Flags
