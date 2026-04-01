@@ -10,6 +10,9 @@ docs/plans/
 docs/articles/
 docs/design/
 
+# db_engine (local DuckDB fork build, not needed for bundled feature)
+db_engine/
+
 # DuckDB
 *.duckdb
 *.duckdb.wal
