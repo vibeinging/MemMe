@@ -143,7 +143,7 @@ fn handle_request(req: &JsonRpcRequest, store: &Arc<Mutex<MemoryStore>>) -> Json
                             "properties": {
                                 "query": { "type": "string", "description": "Search query" },
                                 "user_id": { "type": "string", "description": "User identifier" },
-                                "top_k": { "type": "integer", "description": "Max results (default 5)" }
+                                "limit": { "type": "integer", "description": "Max results (default 5)" }
                             },
                             "required": ["query", "user_id"]
                         }
@@ -279,8 +279,8 @@ fn call_tool(name: &str, args: &serde_json::Value, store: &MemoryStore) -> Resul
         "search_memory" => {
             let query = args["query"].as_str().ok_or("query required")?;
             let user_id = args["user_id"].as_str().ok_or("user_id required")?;
-            let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-            let opts = SearchOptions::new(user_id).limit(top_k);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+            let opts = SearchOptions::new(user_id).limit(limit);
             let results = store.search(query, opts).map_err(|e| e.to_string())?;
             serde_json::to_string_pretty(&results).map_err(|e| e.to_string())
         }

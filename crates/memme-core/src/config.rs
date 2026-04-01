@@ -150,6 +150,14 @@ pub struct MemoryConfig {
     /// Default: Some(0.1).
     pub llm_temperature: Option<f32>,
 
+    /// Interval in seconds for time-based deferred write flush.
+    /// When > 0, read operations (search, get_trace) will flush the deferred write
+    /// queue if this many seconds have elapsed since the last flush, even if the
+    /// queue has not reached the 500-item cap.
+    /// Set to 0 to disable time-based flushing (cap-only mode).
+    /// Default: 30.
+    pub deferred_flush_interval_secs: u64,
+
     /// Enable cross-encoder reranking after RRF fusion. Default: false.
     /// When true and a reranker is configured, search() will fetch more candidates
     /// and re-score them with the reranker before returning.
@@ -209,6 +217,7 @@ impl Default for MemoryConfig {
             rrf_temporal_weight: 0.15,
             llm_max_tokens: 2048,
             llm_temperature: Some(0.1),
+            deferred_flush_interval_secs: 30,
             enable_rerank: false,
             rerank_candidate_multiplier: 3,
         }

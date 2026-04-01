@@ -35,7 +35,7 @@ pub struct SearchRequest {
     pub agent_id: Option<String>,
     pub app_id: Option<String>,
     pub run_id: Option<String>,
-    pub top_k: Option<usize>,
+    pub limit: Option<usize>,
     pub threshold: Option<f32>,
     pub keyword_search: Option<bool>,
     pub fields: Option<Vec<String>>,
@@ -198,7 +198,7 @@ pub async fn search_memories(
     if let Some(rid) = req.run_id {
         opts = opts.run_id(rid);
     }
-    if let Some(k) = req.top_k {
+    if let Some(k) = req.limit {
         opts = opts.limit(k);
     }
     if let Some(t) = req.threshold {
@@ -391,7 +391,7 @@ pub struct HybridSearchRequest {
     pub agent_id: Option<String>,
     pub app_id: Option<String>,
     pub run_id: Option<String>,
-    pub top_k: Option<usize>,
+    pub limit: Option<usize>,
     pub vector_weight: Option<f64>,
     pub fts_weight: Option<f64>,
 }
@@ -498,7 +498,7 @@ pub async fn hybrid_search(
     if let Some(rid) = req.run_id {
         opts = opts.run_id(rid);
     }
-    if let Some(k) = req.top_k {
+    if let Some(k) = req.limit {
         opts = opts.limit(k);
     }
 

@@ -99,8 +99,8 @@ impl CuTask for MemMeTask {
             MemMeRequest::Search {
                 query,
                 user_id,
-                top_k,
-            } => handle_search(&self.store, query, user_id, *top_k),
+                limit,
+            } => handle_search(&self.store, query, user_id, *limit),
 
             MemMeRequest::IngestEvent {
                 content,
@@ -157,8 +157,8 @@ fn handle_store(
     }
 }
 
-fn handle_search(store: &MemoryStore, query: &str, user_id: &str, top_k: u32) -> MemMeResponse {
-    let opts = SearchOptions::new(user_id).limit(top_k as usize);
+fn handle_search(store: &MemoryStore, query: &str, user_id: &str, limit: u32) -> MemMeResponse {
+    let opts = SearchOptions::new(user_id).limit(limit as usize);
 
     match store.search(query, opts) {
         Ok(results) => {

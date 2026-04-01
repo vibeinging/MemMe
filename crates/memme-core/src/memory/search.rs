@@ -368,45 +368,26 @@ impl super::MemoryStore {
         }
 
         // Defer access tracking writes to avoid blocking reads with write locks.
-        // Auto-flush when queue exceeds cap to prevent unbounded growth in read-heavy workloads.
+        // Auto-flush when queue exceeds cap or flush interval has elapsed.
         {
             const DEFERRED_QUEUE_CAP: usize = 500;
+            let needs_time_flush = self.should_time_flush();
+            {
+                let queue = recover_lock(&self.deferred_writes, "deferred_writes");
+                if queue.len() >= DEFERRED_QUEUE_CAP || needs_time_flush {
+                    drop(queue);
+                    self.flush_deferred_writes();
+                }
+            }
             let mut queue = recover_lock(&self.deferred_writes, "deferred_writes");
-            if queue.len() >= DEFERRED_QUEUE_CAP {
-                let ops = std::mem::take(&mut *queue);
-                drop(queue); // release lock before writing
-                for op in ops {
-                    match op {
-                        super::DeferredWrite::IncrementAccess(id) => {
-                            let _ = self.storage.increment_access_count(&id);
-                        }
-                        super::DeferredWrite::ReinforceStability(id, factor) => {
-                            let _ = self.storage.reinforce_stability(&id, factor);
-                        }
-                    }
-                }
-                // Re-acquire for the push below
-                let mut queue = recover_lock(&self.deferred_writes, "deferred_writes");
-                for r in &results {
-                    if self.config.enable_forgetting_curve {
-                        queue.push(super::DeferredWrite::ReinforceStability(
-                            r.id.clone(),
-                            self.config.stability_growth_factor,
-                        ));
-                    } else {
-                        queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
-                    }
-                }
-            } else {
-                for r in &results {
-                    if self.config.enable_forgetting_curve {
-                        queue.push(super::DeferredWrite::ReinforceStability(
-                            r.id.clone(),
-                            self.config.stability_growth_factor,
-                        ));
-                    } else {
-                        queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
-                    }
+            for r in &results {
+                if self.config.enable_forgetting_curve {
+                    queue.push(super::DeferredWrite::ReinforceStability(
+                        r.id.clone(),
+                        self.config.stability_growth_factor,
+                    ));
+                } else {
+                    queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
                 }
             }
         }

@@ -33,9 +33,9 @@ pub fn search_from_json(
 ) -> Result<Vec<MemoryResult>, String> {
     let query = json["query"].as_str().ok_or("'query' field required")?;
     let user_id = json["user_id"].as_str().ok_or("'user_id' field required")?;
-    let top_k = json.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let limit = json.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
-    let opts = SearchOptions::new(user_id).limit(top_k);
+    let opts = SearchOptions::new(user_id).limit(limit);
     store.search(query, opts).map_err(|e| e.to_string())
 }
 
@@ -88,7 +88,7 @@ mod tests {
         let json = serde_json::json!({
             "query": "hello",
             "user_id": "u1",
-            "top_k": 3
+            "limit": 3
         });
         let results = search_from_json(&json, &store).unwrap();
         assert!(!results.is_empty());
