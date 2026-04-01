@@ -53,9 +53,9 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 
 # Internal crates
-memme-core = { path = "crates/memme-core", default-features = false }
-memme-embeddings = { path = "crates/memme-embeddings", default-features = false }
-memme-llm = { path = "crates/memme-llm", default-features = false }
+memme-core = { version = "0.1.0", path = "crates/memme-core", default-features = false }
+memme-embeddings = { version = "0.1.0", path = "crates/memme-embeddings", default-features = false }
+memme-llm = { version = "0.1.0", path = "crates/memme-llm", default-features = false }
 
 # Release profile: balanced optimization
 [profile.release]
