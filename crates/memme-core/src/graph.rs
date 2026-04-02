@@ -187,6 +187,7 @@ mod smart_graph {
         }
 
         /// Search the graph for entities matching query, return neighborhood.
+        #[allow(dead_code)]
         pub fn search(
             &self,
             storage: &Storage,

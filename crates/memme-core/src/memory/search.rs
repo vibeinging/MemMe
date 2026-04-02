@@ -407,7 +407,7 @@ impl super::MemoryStore {
                 // Pure vector: score is cosine distance (lower = better): keep if <= threshold
                 results
                     .into_iter()
-                    .filter(|r| r.score.is_none_or(|s| s <= t))
+                    .filter(|r| r.score.map_or(true, |s| s <= t))
                     .collect()
             }
         } else {

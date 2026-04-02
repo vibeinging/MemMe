@@ -27,6 +27,7 @@ pub struct SmartProcessor {
 }
 
 impl SmartProcessor {
+    #[allow(dead_code)]
     pub fn new(llm: Arc<dyn LlmProvider>) -> Self {
         Self {
             llm,

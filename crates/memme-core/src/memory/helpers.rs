@@ -232,8 +232,9 @@ fn parse_days_since(timestamp: &str) -> f32 {
     (elapsed_seconds / 86400.0).max(0.0) as f32
 }
 
+#[allow(dead_code)]
 fn is_leap_year(year: u32) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 /// Compute initial stability based on memory importance tier.

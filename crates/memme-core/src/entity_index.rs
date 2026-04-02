@@ -69,6 +69,7 @@ impl EntityIndex {
     }
 
     /// Check if the index has any patterns.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.patterns.is_empty()
     }

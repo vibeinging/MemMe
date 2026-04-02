@@ -68,6 +68,7 @@ pub fn rrf_fuse_episodes(
 }
 
 /// RRF fusion for Event lists.
+#[allow(dead_code)]
 pub fn rrf_fuse_events(ranked_lists: &[(&[Event], f64)], k: usize, limit: usize) -> Vec<Event> {
     let mut scores: HashMap<String, (f64, Event)> = HashMap::new();
 
