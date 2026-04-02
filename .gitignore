@@ -12,6 +12,7 @@ docs/design/
 
 # memme-db build artifacts (DuckDB source auto-downloaded at build time)
 memme-db/duckdb/
+memme-db/duckpgq/
 memme-db/build/
 
 # DuckDB
