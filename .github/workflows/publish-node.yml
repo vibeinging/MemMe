@@ -28,8 +28,6 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # submodule not needed for bundled build
 
       - uses: actions/setup-node@v4
         with:

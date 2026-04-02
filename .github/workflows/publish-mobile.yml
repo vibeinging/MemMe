@@ -27,8 +27,6 @@ jobs:
             artifact_name: ios-sim-x86_64
     steps:
       - uses: actions/checkout@v4
-        with:
-          # submodule not needed for bundled build
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -77,8 +75,6 @@ jobs:
             abi: x86_64
     steps:
       - uses: actions/checkout@v4
-        with:
-          # submodule not needed for bundled build
 
       - uses: dtolnay/rust-toolchain@stable
         with:
