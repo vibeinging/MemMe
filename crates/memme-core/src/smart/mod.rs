@@ -90,12 +90,9 @@ impl SmartProcessor {
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };
-        let facts_response = generate_structured(
-            self.llm.as_ref(),
-            &messages,
-            &config,
-            |raw| parse_fact_retrieval_response(raw).map(|r| r.facts),
-        )
+        let facts_response = generate_structured(self.llm.as_ref(), &messages, &config, |raw| {
+            parse_fact_retrieval_response(raw).map(|r| r.facts)
+        })
         .map_err(|e| MemoryError::Llm(e.to_string()))?;
         Ok(facts_response)
     }
@@ -135,12 +132,9 @@ impl SmartProcessor {
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };
-        generate_structured(
-            self.llm.as_ref(),
-            &messages,
-            &config,
-            |raw| parse_temporal_facts(raw),
-        )
+        generate_structured(self.llm.as_ref(), &messages, &config, |raw| {
+            parse_temporal_facts(raw)
+        })
         .map_err(|e| MemoryError::Llm(e.to_string()))
     }
 
@@ -153,12 +147,9 @@ impl SmartProcessor {
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };
-        let facts = generate_structured(
-            self.llm.as_ref(),
-            &messages,
-            &config,
-            |raw| parse_fact_retrieval_response(raw).map(|r| r.facts),
-        )
+        let facts = generate_structured(self.llm.as_ref(), &messages, &config, |raw| {
+            parse_fact_retrieval_response(raw).map(|r| r.facts)
+        })
         .map_err(|e| MemoryError::Llm(e.to_string()))?;
         Ok(facts)
     }
@@ -337,13 +328,11 @@ impl SmartProcessor {
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };
-        let update_response = generate_structured(
-            self.llm.as_ref(),
-            &update_messages,
-            &config,
-            |raw| parse_update_memory_response(raw),
-        )
-        .map_err(|e| MemoryError::Llm(e.to_string()))?;
+        let update_response =
+            generate_structured(self.llm.as_ref(), &update_messages, &config, |raw| {
+                parse_update_memory_response(raw)
+            })
+            .map_err(|e| MemoryError::Llm(e.to_string()))?;
 
         // 5. Execute operations, mapping integer indices back to real UUIDs.
         //    Individual operation failures are logged and skipped (best-effort),

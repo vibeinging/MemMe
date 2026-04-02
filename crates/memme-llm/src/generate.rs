@@ -40,9 +40,9 @@ impl Default for StructuredGenConfig {
 impl StructuredGenConfig {
     /// Build `GenerateOptions` for a given attempt number (0-based).
     fn options_for_attempt(&self, attempt: u32) -> GenerateOptions {
-        let temperature = self.base_temperature.map(|base| {
-            base + self.temperature_increment * attempt as f32
-        });
+        let temperature = self
+            .base_temperature
+            .map(|base| base + self.temperature_increment * attempt as f32);
         GenerateOptions {
             temperature,
             max_tokens: self.max_tokens,
@@ -206,12 +206,7 @@ mod tests {
 
     #[test]
     fn test_exhausts_retries() {
-        let llm = MockLlm::new(vec![
-            "bad".into(),
-            "bad".into(),
-            "bad".into(),
-            "bad".into(),
-        ]);
+        let llm = MockLlm::new(vec!["bad".into(), "bad".into(), "bad".into(), "bad".into()]);
         let messages = vec![Message {
             role: MessageRole::User,
             content: "test".into(),

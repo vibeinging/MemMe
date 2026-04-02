@@ -31,16 +31,70 @@ fn main() {
     // Add memories for two different users with varied metadata
     let memories = vec![
         // user_alice's memories
-        ("User prefers Rust for systems programming", "user_alice", json!({"category": "tech"}), Some(0.9_f32), vec!["tech", "preferences"]),
-        ("User drinks matcha every morning before work", "user_alice", json!({"category": "habits"}), Some(0.5), vec!["habits", "food"]),
-        ("User works remotely from Tokyo, Japan", "user_alice", json!({"category": "location"}), Some(0.7), vec!["location", "work"]),
-        ("User is learning Japanese through weekly tutoring sessions", "user_alice", json!({"category": "learning"}), Some(0.6), vec!["learning", "language"]),
-        ("User built a personal note-taking app using Rust and DuckDB", "user_alice", json!({"category": "projects"}), Some(0.8), vec!["tech", "projects"]),
-        ("User enjoys hiking in the mountains on weekends", "user_alice", json!({"category": "hobbies"}), Some(0.4), vec!["hobbies", "outdoor"]),
+        (
+            "User prefers Rust for systems programming",
+            "user_alice",
+            json!({"category": "tech"}),
+            Some(0.9_f32),
+            vec!["tech", "preferences"],
+        ),
+        (
+            "User drinks matcha every morning before work",
+            "user_alice",
+            json!({"category": "habits"}),
+            Some(0.5),
+            vec!["habits", "food"],
+        ),
+        (
+            "User works remotely from Tokyo, Japan",
+            "user_alice",
+            json!({"category": "location"}),
+            Some(0.7),
+            vec!["location", "work"],
+        ),
+        (
+            "User is learning Japanese through weekly tutoring sessions",
+            "user_alice",
+            json!({"category": "learning"}),
+            Some(0.6),
+            vec!["learning", "language"],
+        ),
+        (
+            "User built a personal note-taking app using Rust and DuckDB",
+            "user_alice",
+            json!({"category": "projects"}),
+            Some(0.8),
+            vec!["tech", "projects"],
+        ),
+        (
+            "User enjoys hiking in the mountains on weekends",
+            "user_alice",
+            json!({"category": "hobbies"}),
+            Some(0.4),
+            vec!["hobbies", "outdoor"],
+        ),
         // user_bob's memories
-        ("User is a Python developer specializing in machine learning", "user_bob", json!({"category": "tech"}), Some(0.8), vec!["tech", "career"]),
-        ("User runs 5km every morning before breakfast", "user_bob", json!({"category": "fitness"}), Some(0.6), vec!["fitness", "habits"]),
-        ("User lives in San Francisco and commutes to Palo Alto", "user_bob", json!({"category": "location"}), Some(0.7), vec!["location", "work"]),
+        (
+            "User is a Python developer specializing in machine learning",
+            "user_bob",
+            json!({"category": "tech"}),
+            Some(0.8),
+            vec!["tech", "career"],
+        ),
+        (
+            "User runs 5km every morning before breakfast",
+            "user_bob",
+            json!({"category": "fitness"}),
+            Some(0.6),
+            vec!["fitness", "habits"],
+        ),
+        (
+            "User lives in San Francisco and commutes to Palo Alto",
+            "user_bob",
+            json!({"category": "location"}),
+            Some(0.7),
+            vec!["location", "work"],
+        ),
     ];
 
     println!("[2] Adding {} memories for two users...\n", memories.len());
@@ -122,12 +176,12 @@ fn main() {
     // Combine multiple filter conditions with AND/OR logic.
     println!("[6] Search with compound filter: importance >= 0.7 AND category 'tech'...\n");
 
-    let search_opts = SearchOptions::new("user_alice").limit(5).filter(
-        FilterExpression::and(vec![
+    let search_opts = SearchOptions::new("user_alice")
+        .limit(5)
+        .filter(FilterExpression::and(vec![
             FilterExpression::gte("importance", json!(0.7)),
             FilterExpression::contains("categories", "tech"),
-        ]),
-    );
+        ]));
     let results = store
         .search("software development", search_opts)
         .expect("Search failed");
@@ -146,9 +200,7 @@ fn main() {
     // ── 7. Search with score threshold ──────────────────────────────
     println!("[7] Search with score threshold: only results with score < 0.5...\n");
 
-    let search_opts = SearchOptions::new("user_alice")
-        .limit(5)
-        .threshold(0.5);
+    let search_opts = SearchOptions::new("user_alice").limit(5).threshold(0.5);
     let results = store
         .search("hiking outdoors", search_opts)
         .expect("Search failed");
@@ -191,8 +243,8 @@ fn main() {
     // ── 9. List with filter (no vector search) ──────────────────────
     println!("[9] Listing memories with filter (no vector search)...\n");
 
-    let list_opts = ListOptions::new("user_alice")
-        .filter(FilterExpression::contains("categories", "learning"));
+    let list_opts =
+        ListOptions::new("user_alice").filter(FilterExpression::contains("categories", "learning"));
     let results = store.list_traces(list_opts).expect("List failed");
 
     println!("  Memories in 'learning' category:");

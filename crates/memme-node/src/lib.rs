@@ -459,8 +459,7 @@ impl MemoryStore {
         let d = dims.unwrap_or(384) as usize;
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(d));
         let config = memme_core::config::MemoryConfig::new(&path, d);
-        let llm = Arc::new(ScriptedMockLlm::new(responses))
-            as Arc<dyn memme_llm::LlmProvider>;
+        let llm = Arc::new(ScriptedMockLlm::new(responses)) as Arc<dyn memme_llm::LlmProvider>;
         let store = memme_core::memory::MemoryStore::new(config, embedder)
             .map_err(|e| Error::from_reason(e.to_string()))?
             .with_llm(llm);

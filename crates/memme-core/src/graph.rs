@@ -106,13 +106,11 @@ mod smart_graph {
 
             // Single LLM call: extract entities + relationships together
             let messages = get_graph_extraction_messages(text);
-            let graph_response = generate_structured(
-                self.llm.as_ref(),
-                &messages,
-                &config,
-                |raw| parse_graph_extraction_response(raw),
-            )
-            .map_err(|e| MemoryError::Llm(e.to_string()))?;
+            let graph_response =
+                generate_structured(self.llm.as_ref(), &messages, &config, |raw| {
+                    parse_graph_extraction_response(raw)
+                })
+                .map_err(|e| MemoryError::Llm(e.to_string()))?;
 
             if graph_response.entities.is_empty() {
                 return Ok(GraphSearchResult {

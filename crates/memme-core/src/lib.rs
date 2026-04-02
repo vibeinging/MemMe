@@ -54,22 +54,53 @@ pub use error::{MemoryError, Result};
 pub use memory::MemoryStore;
 pub use procedural::{Procedure, ProcedureStep};
 pub use types::{
-    // types/mod.rs
-    AddOptions, AppendEventsResult, ChatMessage, CompactResult, ConsolidateResult, Entity,
-    FullExport, GraphRelation, GraphSearchResult, HistoryEvent, HistoryRecord, ListOptions,
-    MemoryExport, MemoryResult, Privacy, PruningStrategy, Resolution, SearchOptions,
-    SmartAddResult, UpdateOptions,
-    // types/filter.rs
-    FilterExpression, FilterOp,
-    // types/stream.rs
-    Event, EventType, IngestEventOptions, ListEventsOptions, Source,
-    // types/session.rs
-    GetSessionContextOptions, ListSessionsOptions, Session, SessionContext,
-    // types/episode.rs
-    CreateEpisodeOptions, Episode, EpisodeMessagesOptions, ListEpisodesOptions,
-    SearchEpisodesOptions,
     // types/identity.rs
-    AddIdentityTraitOptions, IdentityTrait, TraitType,
+    AddIdentityTraitOptions,
+    // types/mod.rs
+    AddOptions,
+    AppendEventsResult,
+    ChatMessage,
+    CompactResult,
+    ConsolidateResult,
+    // types/episode.rs
+    CreateEpisodeOptions,
+    Entity,
+    Episode,
+    EpisodeMessagesOptions,
+    // types/stream.rs
+    Event,
+    EventType,
+    // types/filter.rs
+    FilterExpression,
+    FilterOp,
+    FullExport,
+    // types/session.rs
+    GetSessionContextOptions,
+    GraphRelation,
+    GraphSearchResult,
+    HistoryEvent,
+    HistoryRecord,
+    IdentityTrait,
+    IngestEventOptions,
+    ListEpisodesOptions,
+    ListEventsOptions,
+    ListOptions,
+    ListSessionsOptions,
     // types/meditation.rs
-    MeditateOptions, MeditationRecord, MeditationStatus,
+    MeditateOptions,
+    MeditationRecord,
+    MeditationStatus,
+    MemoryExport,
+    MemoryResult,
+    Privacy,
+    PruningStrategy,
+    Resolution,
+    SearchEpisodesOptions,
+    SearchOptions,
+    Session,
+    SessionContext,
+    SmartAddResult,
+    Source,
+    TraitType,
+    UpdateOptions,
 };

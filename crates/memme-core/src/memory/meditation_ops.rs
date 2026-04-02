@@ -183,12 +183,9 @@ impl super::MemoryStore {
             ..Default::default()
         };
 
-        let facts = generate_structured(
-            llm.as_ref(),
-            &messages,
-            &config,
-            |raw| parse_fact_retrieval_response(raw).map(|r| r.facts),
-        )
+        let facts = generate_structured(llm.as_ref(), &messages, &config, |raw| {
+            parse_fact_retrieval_response(raw).map(|r| r.facts)
+        })
         .map_err(|e| MemoryError::Llm(e.to_string()))?;
         Ok(facts)
     }

@@ -141,7 +141,11 @@ fn main() {
         )
         .expect("add_graph failed");
 
-    println!("  Added {} entities, {} relationships.\n", result2.entities.len(), result2.relations.len());
+    println!(
+        "  Added {} entities, {} relationships.\n",
+        result2.entities.len(),
+        result2.relations.len()
+    );
 
     // ── 4. Search the graph for "Alice" ─────────────────────────────
     // Graph search is pure SQL — no LLM required.

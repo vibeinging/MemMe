@@ -119,9 +119,7 @@ impl OllamaEmbedder {
                     let status = response.status();
                     if status.is_success() {
                         let resp: OllamaEmbedResponse = response.json().await.map_err(|e| {
-                            EmbedError::ApiError(format!(
-                                "failed to parse Ollama response: {e}"
-                            ))
+                            EmbedError::ApiError(format!("failed to parse Ollama response: {e}"))
                         })?;
                         return Ok(resp.embeddings);
                     }
@@ -132,9 +130,8 @@ impl OllamaEmbedder {
                         .unwrap_or_else(|_| "failed to read body".into());
 
                     if status.as_u16() == 429 || status.is_server_error() {
-                        last_err = EmbedError::ApiError(format!(
-                            "Ollama API returned {status}: {body}"
-                        ));
+                        last_err =
+                            EmbedError::ApiError(format!("Ollama API returned {status}: {body}"));
                         continue;
                     }
 
@@ -145,8 +142,7 @@ impl OllamaEmbedder {
                 }
                 Err(e) => {
                     // Network/timeout errors are retriable
-                    last_err =
-                        EmbedError::ApiError(format!("request to Ollama failed: {e}"));
+                    last_err = EmbedError::ApiError(format!("request to Ollama failed: {e}"));
                     continue;
                 }
             }

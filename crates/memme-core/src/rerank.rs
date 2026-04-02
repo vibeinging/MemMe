@@ -85,20 +85,19 @@ impl Reranker for LlmReranker {
             ..Default::default()
         };
 
-        let scores_vec = memme_llm::generate_structured(
-            self.llm.as_ref(),
-            &messages,
-            &config,
-            |raw| {
+        let scores_vec =
+            memme_llm::generate_structured(self.llm.as_ref(), &messages, &config, |raw| {
                 let parsed: serde_json::Value = serde_json::from_str(raw)
                     .map_err(|e| format!("Failed to parse reranker response: {e}"))?;
                 let scores = parsed["scores"]
                     .as_array()
                     .ok_or_else(|| "Reranker response missing 'scores' array".to_string())?;
-                Ok(scores.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect::<Vec<f64>>())
-            },
-        )
-        .map_err(|e| MemoryError::Llm(e.to_string()))?;
+                Ok(scores
+                    .iter()
+                    .map(|v| v.as_f64().unwrap_or(0.0))
+                    .collect::<Vec<f64>>())
+            })
+            .map_err(|e| MemoryError::Llm(e.to_string()))?;
 
         let mut scored: Vec<(f64, MemoryResult)> = results
             .into_iter()

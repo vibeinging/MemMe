@@ -294,26 +294,21 @@ Respond ONLY with the JSON object, no other text."#
         ..Default::default()
     };
     let text_for_fallback = text.clone();
-    match memme_llm::generate_structured(
-        llm.as_ref(),
-        &messages,
-        &config,
-        |raw| {
-            let repaired = memme_llm::try_repair_json(raw);
-            let parsed: serde_json::Value = serde_json::from_str(&repaired)
-                .map_err(|e| format!("JSON parse failed: {e}"))?;
-            let title = parsed["title"]
-                .as_str()
-                .unwrap_or("Conversation")
-                .to_string();
-            let summary = parsed["summary"]
-                .as_str()
-                .unwrap_or(&text_for_fallback[..text_for_fallback.len().min(200)])
-                .to_string();
-            let significance = parsed["significance"].as_f64().unwrap_or(0.5) as f32;
-            Ok((title, summary, significance.clamp(0.0, 1.0)))
-        },
-    ) {
+    match memme_llm::generate_structured(llm.as_ref(), &messages, &config, |raw| {
+        let repaired = memme_llm::try_repair_json(raw);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&repaired).map_err(|e| format!("JSON parse failed: {e}"))?;
+        let title = parsed["title"]
+            .as_str()
+            .unwrap_or("Conversation")
+            .to_string();
+        let summary = parsed["summary"]
+            .as_str()
+            .unwrap_or(&text_for_fallback[..text_for_fallback.len().min(200)])
+            .to_string();
+        let significance = parsed["significance"].as_f64().unwrap_or(0.5) as f32;
+        Ok((title, summary, significance.clamp(0.0, 1.0)))
+    }) {
         Ok(result) => result,
         Err(_) => fallback_episode_summary(events),
     }
@@ -443,53 +438,48 @@ fn purify_events(events: &[Event], llm: &Arc<dyn memme_llm::LlmProvider>) -> Vec
     };
 
     let expected_len = events.len();
-    match memme_llm::generate_structured(
-        llm.as_ref(),
-        &messages,
-        &config,
-        |raw| {
-            let repaired = memme_llm::try_repair_json(raw);
-            let parsed: serde_json::Value = serde_json::from_str(&repaired)
-                .map_err(|e| format!("JSON parse failed: {e}"))?;
-            let purified_arr = parsed
-                .get("purified")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| "Missing 'purified' array".to_string())?;
-            let result: Vec<PurifiedEvent> = purified_arr
-                .iter()
-                .map(|item| {
-                    let content = item
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let event_time = item
-                        .get("event_time")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty() && s != &"null")
-                        .map(|s| s.to_string());
-                    let location = item
-                        .get("location")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty() && s != &"null")
-                        .map(|s| s.to_string());
-                    PurifiedEvent {
-                        purified_content: content,
-                        event_time,
-                        location,
-                    }
-                })
-                .collect();
-            if result.len() != expected_len {
-                return Err(format!(
-                    "Purification returned {} results for {} events",
-                    result.len(),
-                    expected_len,
-                ));
-            }
-            Ok(result)
-        },
-    ) {
+    match memme_llm::generate_structured(llm.as_ref(), &messages, &config, |raw| {
+        let repaired = memme_llm::try_repair_json(raw);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&repaired).map_err(|e| format!("JSON parse failed: {e}"))?;
+        let purified_arr = parsed
+            .get("purified")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "Missing 'purified' array".to_string())?;
+        let result: Vec<PurifiedEvent> = purified_arr
+            .iter()
+            .map(|item| {
+                let content = item
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let event_time = item
+                    .get("event_time")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty() && s != &"null")
+                    .map(|s| s.to_string());
+                let location = item
+                    .get("location")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty() && s != &"null")
+                    .map(|s| s.to_string());
+                PurifiedEvent {
+                    purified_content: content,
+                    event_time,
+                    location,
+                }
+            })
+            .collect();
+        if result.len() != expected_len {
+            return Err(format!(
+                "Purification returned {} results for {} events",
+                result.len(),
+                expected_len,
+            ));
+        }
+        Ok(result)
+    }) {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!("LLM purification failed: {e}, using fallback");
