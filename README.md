@@ -55,7 +55,8 @@ MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo)
 | Hybrid search | Vector + BM25 + RRF | No | Partial |
 | Reranking | Built-in (API / ONNX) | Optional | No |
 | Forgetting curve | Built-in | No | No |
-| Privacy | Per-memory levels | No | SOC2/HIPAA (cloud) |
+| Data protection | Dual-replica + full export | No | SOC2/HIPAA (cloud) |
+| Chat import | ChatGPT / Claude / Gemini | No | No |
 
 ## Quick Start
 
@@ -139,21 +140,78 @@ let results = try store.search("preferences", userId: "alice")
 
 ## Features
 
-- **Single-file deployment** — one `.duckdb` file holds vectors, graph, FTS index, and history
-- **Session/Episode architecture** — Stream → Session → Episode → Memory four-layer data model
-- **Knowledge graph** — entity/relationship extraction with graph traversal
-- **Four-channel hybrid search** — vector + BM25 + entity graph + temporal, fused via RRF
+### Memory Pipeline
+
+- **Session/Episode architecture** — Stream -> Session -> Episode -> Memory four-layer data model
+- **Meditation** — memory consolidation: decay + fact extraction + LLM reconciliation (ADD/UPDATE/DELETE) + graph building + entity-memory linking
 - **Forgetting curve** — FSRS-based memory decay with stability reinforcement on access
-- **Meditation** — memory consolidation: decay + fact extraction + reconciliation (ADD/UPDATE/DELETE) + graph building + entity-memory linking
-- **Reflection** — LLM-powered analysis of recent memories, identifying themes, patterns and focus areas
+- **Knowledge graph** — entity/relationship extraction with spreading activation traversal
+- **Reflection** — LLM-powered analysis of recent memories, identifying themes, patterns, and focus areas
 - **Feedback learning** — extract behavioral principles from user corrections, stored as high-importance memories and identity traits
-- **Diagnostics** — built-in health checks for storage, embedder, and LLM with per-check latency reporting
-- **Pluggable LLM** — OpenAI, Anthropic, Gemini, Ollama, or none
+
+### Search
+
+- **Four-channel hybrid search** — vector + BM25 + entity graph + temporal, fused via RRF
 - **Reranking** — API reranker (Jina/Cohere) or local ONNX cross-encoder
-- **Four-level scoping** — `user_id` / `agent_id` / `app_id` / `run_id` isolation
+
+### Data Safety
+
+- **Single-file deployment** — one `.duckdb` file holds vectors, graph, FTS index, and history
+- **Dual-replica protection** — CHECKPOINT + atomic file copy before meditation; auto-recovery from replica on corruption
+- **Full export/import** — export all 8 data layers (memories, sessions, events, episodes, entities, relations, identity, sources) as JSON; import back losslessly
+- **External chat import** — import conversations from ChatGPT, Claude, and Gemini exports into the memory pipeline
 - **Privacy controls** — `LocalOnly`, `Syncable`, `EncryptedSync` per-memory
+
+### Platform
+
+- **Pluggable LLM** — OpenAI, Anthropic, Gemini, Ollama, or none
+- **Diagnostics** — built-in health checks for storage, embedder, and LLM with per-check latency
+- **Four-level scoping** — `user_id` / `agent_id` / `app_id` / `run_id` isolation
 - **Battery-aware** — defers heavy operations on low battery
 - **Analytics** — user stats, memory frequency, top entities (powered by DuckDB OLAP)
+
+## Import Your Chat History
+
+Bring your existing conversations from other AI platforms:
+
+```rust
+use memme_core::import::{parse_chatgpt, parse_claude_export, parse_gemini};
+
+// Parse ChatGPT export (conversations.json from Settings > Export)
+let convs = parse_chatgpt(&std::fs::read_to_string("conversations.json")?)?;
+
+// Parse Claude export (conversations.jsonl from Settings > Export Data)
+let convs = parse_claude_export(&std::fs::read_to_string("conversations.jsonl")?)?;
+
+// Parse Gemini export (from Google Takeout)
+let convs = parse_gemini(&std::fs::read_to_string("gemini_export.json")?)?;
+
+// Ingest into MemMe → then compact & meditate to extract memories
+store.import_conversations(&convs, "alice")?;
+```
+
+## Data Protection
+
+MemMe maintains a dual-replica system to ensure your memories are never lost:
+
+```rust
+// Sync primary → replica (CHECKPOINT + atomic file copy)
+store.sync_replica()?;
+
+// Check status of both copies
+let status = store.replica_status()?;
+println!("Primary: {} bytes, Replica: {:?} bytes", status.primary_size_bytes, status.replica_size_bytes);
+
+// Full export: all 8 data layers as a single JSON
+let export = store.full_export(Some("alice"))?;
+std::fs::write("backup.json", serde_json::to_string_pretty(&export)?)?;
+
+// Full import: restore everything
+let data: FullExport = serde_json::from_str(&std::fs::read_to_string("backup.json")?)?;
+store.full_import(&data)?;
+```
+
+Meditation automatically syncs the replica before starting. If the primary file corrupts, MemMe auto-recovers from the replica on next startup.
 
 ## Architecture
 
@@ -168,18 +226,18 @@ let results = try store.search("preferences", userId: "alice")
 │                   memme-core (Rust)                       │
 │                                                          │
 │  Stream ──► Session ──► Episode ──► Memory                │
-│                                      │                   │
-│                            ┌─────────┤                   │
-│                            ▼         ▼                   │
-│                        Identity    Graph                  │
+│                    compact    meditate  │                 │
+│                            ┌───────────┤                 │
+│                            ▼           ▼                 │
+│                        Identity      Graph               │
 │                                                          │
 │  Search: Vector + BM25 + Graph + Temporal                │
 │          ──► RRF Fusion ──► Rerank                       │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  DuckDB (.duckdb single file)                      │  │
+│  │  DuckDB (.duckdb single file + .replica backup)    │  │
 │  │  memories │ entities │ relationships │ episodes     │  │
-│  │  sessions │ events │ identity │ history             │  │
+│  │  sessions │ events │ identity │ history │ meditations│  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
 │  memme-embeddings          memme-llm                     │
@@ -190,7 +248,7 @@ let results = try store.search("preferences", userId: "alice")
 
 | Crate | Purpose |
 |---|---|
-| `memme-core` | Core engine: CRUD, search, graph, dedup, analytics |
+| `memme-core` | Core engine: CRUD, search, graph, meditation, replica, export/import |
 | `memme-embeddings` | Embedding trait + ONNX/OpenAI/Ollama backends |
 | `memme-llm` | LLM trait + OpenAI/Anthropic/Gemini/Ollama backends |
 | `memme-python` | Python bindings (PyO3 + maturin) |
@@ -250,7 +308,7 @@ cargo build -p memme-mcp --release
 git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
 cd MemMe
 cargo build --release
-cargo test   # 450+ tests
+cargo test   # 340+ tests
 ```
 
 ### Feature Flags
@@ -275,7 +333,8 @@ cd crates/memme-python && maturin develop --release
 - **Mobile Apps** — offline-first memory that syncs when connected
 - **RAG Pipelines** — local hybrid retrieval as a knowledge base
 - **Digital Twins** — memory-powered digital representation of a person
-- **Embodied AI** — on-device memory for robots and IoT
+- **Embodied AI** — sub-10ms on-device memory for robots, drones, and IoT; single-file deployment with no network dependency; native Rust integrations with Dora-rs, LeRobot, and Copper-rs
+- **Chat Migration** — import your ChatGPT/Claude/Gemini history, own your data
 
 ## Contributing
 

@@ -39,8 +39,9 @@ AI 记忆比普通数据敏感得多。它不只是你说了什么，更是你**
 ## MemMe：一个文件，装下全部记忆
 
 ```
-memory.duckdb              ← 你的全部记忆，一个文件
-│
+memory.duckdb              <- 你的全部记忆，一个文件
+memory.duckdb.replica      <- 自动备份副本，防丢失
+|
 ├── memories               内容 + 向量 + 元数据
 ├── entities / relationships   知识图谱（人、地、事 + 关系）
 ├── sessions / events      原始对话流
@@ -52,7 +53,7 @@ memory.duckdb              ← 你的全部记忆，一个文件
 └── memme_config           运行时配置
 ```
 
-要备份？复制文件。要迁移到新手机？复制文件。要彻底删除？删除文件。
+要备份？`sync_replica()` 自动双副本。要迁移？`full_export()` 导出全部数据为 JSON。要导入 ChatGPT 历史？一行代码搞定。要彻底删除？删除文件。
 
 Rust 写的内核。接上 LLM 做智能提取，不接也能跑——纯向量模式延迟低于 10ms。Python、Node.js、Swift/Kotlin 原生绑定（UniFFI），嵌入式设备和机器人也能跑，不是 HTTP 套壳。
 
@@ -91,13 +92,55 @@ python demos/playground/server.py
 
 ### "冥想"机制
 
-人在睡眠时整理白天的经历。MemMe 也一样——空闲时自动把零散对话聚合成情景、从情景中提炼事实、用 LLM 裁决每条事实是新增/更新/删除、构建知识图谱并关联实体与记忆。内置 FSRS 遗忘曲线，三个月前随口提的餐厅自然淡出，反复提及的偏好越来越牢固。
+人在睡眠时整理白天的经历。MemMe 也一样——空闲时自动：
+
+1. 衰减旧记忆（FSRS 遗忘曲线）
+2. 从情景中提炼事实
+3. 用 LLM 裁决每条事实：新增 / 更新 / 删除
+4. 构建知识图谱，关联实体与记忆
+
+三个月前随口提的餐厅自然淡出，反复提及的偏好越来越牢固。冥想前自动备份副本，失败不会丢数据。
 
 ### 反思与反馈学习
 
 - **反思（Reflect）** — 基于近期记忆和身份特征，LLM 生成主题洞察和聚焦建议
 - **反馈学习（Learn from Feedback）** — 从用户纠正中提炼行为原则，存为高重要度记忆和身份特征
 - **健康诊断（Diagnose）** — 一键检测存储、Embedder、LLM 连通性，每项附带延迟报告
+
+### 数据保护
+
+你的记忆绝对不能丢。MemMe 提供三层保护：
+
+- **双副本** — 主文件 + `.replica` 备份，CHECKPOINT + 原子复制，冥想前自动同步
+- **自动恢复** — 主文件损坏时，启动时自动从副本恢复
+- **完整导出** — 8 层数据（记忆、会话、事件、情景、实体、关系、身份、来源）一键导出为 JSON，可完整导入
+
+```rust
+store.sync_replica()?;                         // 同步副本
+store.full_export(Some("alice"))?;             // 导出全部数据
+store.full_import(&data)?;                     // 导入全部数据
+```
+
+### 聊天记录导入
+
+把你在其他平台的对话历史带回来：
+
+```rust
+use memme_core::import::{parse_chatgpt, parse_claude_export, parse_gemini};
+
+// ChatGPT：设置 > 导出数据 > conversations.json
+let convs = parse_chatgpt(&json_string)?;
+
+// Claude：设置 > 导出数据 > conversations.jsonl
+let convs = parse_claude_export(&jsonl_string)?;
+
+// Gemini：Google Takeout > Gemini Apps
+let convs = parse_gemini(&json_string)?;
+
+// 导入到 MemMe
+store.import_conversations(&convs, "alice")?;
+// 然后运行 compact + meditate 提取记忆
+```
 
 ### 四通道混合检索
 
@@ -149,15 +192,18 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 | 知识图谱 | 内置 | 外挂 Neo4j | 无 |
 | 混合检索 | 四通道 + RRF | 无 | 部分 |
 | 遗忘曲线 | 内置 | 无 | 无 |
+| 数据保护 | 双副本 + 完整导出 | 无 | SOC2/HIPAA（云） |
+| 聊天导入 | ChatGPT / Claude / Gemini | 无 | 无 |
 
 ## 谁应该用 MemMe
 
 - **在意数据主权的人** — 记忆在你的设备上，不在别人的服务器里
+- **想带走聊天历史的人** — 从 ChatGPT/Claude/Gemini 导入，数据属于你
 - **数字分身开发者** — 跨年的人格一致性，应用迭代但"我是谁"不丢
 - **端侧 AI 助手** — 手机上的私人助理，完全离线
 - **隐私敏感场景** — 医疗、法律、金融，数据不出设备
 - **非 Python 开发者** — Rust / Swift / Node.js 终于有了原生记忆引擎
-- **具身智能** — 低延迟、可嵌入，一个文件扔进去就能跑
+- **具身智能** — 10ms 以内的端侧记忆，单文件部署无网络依赖；机器人记住走过的路线、抓过的物体、听到的指令；原生集成 Dora-rs / LeRobot / Copper-rs，ARM 交叉编译直接跑在嵌入式设备上
 
 ---
 
@@ -240,16 +286,16 @@ let results = try store.search("饮品偏好", userId: "alex")
 │                   memme-core (Rust)                       │
 │                                                          │
 │  事件流 ──► 会话 ──► 片段 ──► 记忆                         │
-│                                │                         │
-│                      ┌─────────┤                         │
-│                      ▼         ▼                         │
-│                  身份特征     知识图谱                      │
+│                   compact  meditate │                     │
+│                          ┌─────────┤                     │
+│                          ▼         ▼                     │
+│                      身份特征    知识图谱                   │
 │                                                          │
 │  搜索：向量 + BM25 + 图谱 + 时间                           │
 │        ──► RRF 融合 ──► 重排序                             │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  DuckDB（.duckdb 单文件）                            │  │
+│  │  DuckDB（.duckdb 单文件 + .replica 备份）            │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
 │  memme-embeddings          memme-llm                     │
@@ -297,7 +343,7 @@ curl -X POST http://localhost:8080/v1/memories/search \
 git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
 cd MemMe
 cargo build --release
-cargo test   # 450+ 测试
+cargo test   # 340+ 测试
 ```
 
 | Feature | 说明 |
