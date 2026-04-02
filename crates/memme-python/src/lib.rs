@@ -95,15 +95,17 @@ impl MemoryStore {
                 let key = api_key.ok_or_else(|| {
                     PyRuntimeError::new_err("api_key required for openai embedder")
                 })?;
-                let mut e = memme_embeddings::openai::OpenAiEmbedder::new(key);
-                if let Some(url) = base_url {
-                    e = e.with_base_url(url);
-                }
+                let url = base_url.ok_or_else(|| {
+                    PyRuntimeError::new_err("base_url required for openai embedder (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)")
+                })?;
+                let mut e = memme_embeddings::openai::OpenAiEmbedder::new(key, url)
+                    .with_batch_size(10);
                 if let Some(model) = embed_model {
                     let d = dims.unwrap_or(1536);
                     e = e.with_model(memme_embeddings::openai::OpenAiModel::Custom {
                         name: model.to_string(),
                         dims: d,
+                        send_dims: false,
                     });
                     (Arc::new(e) as Arc<dyn Embedder>, d)
                 } else {
@@ -191,7 +193,9 @@ impl MemoryStore {
                 }
                 "openai" | _ => {
                     let model = llm_model.unwrap_or("gpt-4o-mini");
-                    let url = llm_base_url.unwrap_or("https://api.openai.com");
+                    let url = llm_base_url.ok_or_else(|| {
+                        PyRuntimeError::new_err("llm_base_url required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)")
+                    })?;
                     Arc::new(memme_llm::openai::OpenAIProvider::new(
                         memme_llm::openai::OpenAIConfig {
                             api_key: key.to_string(),
@@ -424,8 +428,8 @@ impl MemoryStore {
     // =====================================================================
 
     /// Configure the LLM provider (persisted in database).
-    #[pyo3(signature = (api_key, *, model="gpt-4o-mini", base_url="https://api.openai.com"))]
-    fn set_llm(&self, py: Python<'_>, api_key: &str, model: &str, base_url: &str) -> PyResult<()> {
+    #[pyo3(signature = (api_key, base_url, *, model="gpt-4o-mini"))]
+    fn set_llm(&self, py: Python<'_>, api_key: &str, base_url: &str, model: &str) -> PyResult<()> {
         let (api_key, model, base_url) =
             (api_key.to_string(), model.to_string(), base_url.to_string());
         let llm = Arc::new(memme_llm::openai::OpenAIProvider::new(
@@ -444,61 +448,32 @@ impl MemoryStore {
         .map_err(|e: String| PyRuntimeError::new_err(e))
     }
 
-    /// Add memory using LLM (smart mode).
-    #[pyo3(signature = (text, *, user_id, agent_id=None, run_id=None, metadata=None))]
-    fn add_smart(
-        &self,
-        py: Python<'_>,
-        text: &str,
-        user_id: &str,
-        agent_id: Option<&str>,
-        run_id: Option<&str>,
-        metadata: Option<&str>,
-    ) -> PyResult<Vec<PyObject>> {
-        let meta = parse_metadata(metadata)?;
-        let (text, user_id) = (text.to_string(), user_id.to_string());
-        let (agent_id, run_id) = (
-            agent_id.map(|s| s.to_string()),
-            run_id.map(|s| s.to_string()),
-        );
-        let results = py
-            .allow_threads(|| {
-                let llm = self.inner.llm().ok_or_else(|| {
-                    "No LLM configured. Call set_llm() first or set MEMME_LLM_API_KEY env var."
-                        .to_string()
-                })?;
-                self.inner
-                    .add_smart(
-                        &text,
-                        &user_id,
-                        agent_id.as_deref(),
-                        run_id.as_deref(),
-                        meta,
-                        llm,
-                        false,
-                    )
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(|e: String| PyRuntimeError::new_err(e))?;
-        results
-            .memories
-            .iter()
-            .map(|r| memory_result_to_dict(py, r))
-            .collect()
+    /// Run diagnostic checks on storage, embedder, and LLM (if configured).
+    /// Returns a dict with check results.
+    fn diagnose(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let report = py.allow_threads(|| self.inner.diagnose());
+        let json_str = serde_json::to_string(&report)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let json_mod = py.import("json")?;
+        let result = json_mod.call_method1("loads", (json_str,))?;
+        Ok(result.into())
     }
 
-    /// Smart add from chat messages.
-    #[pyo3(signature = (messages, *, user_id, agent_id=None, run_id=None, metadata=None))]
-    fn add_smart_messages(
+    // =====================================================================
+    // Pipeline: append_events → compact → meditate
+    // =====================================================================
+
+    /// Append chat messages as events to a session.
+    #[pyo3(signature = (messages, *, session_id, user_id, metadata=None))]
+    fn append_events(
         &self,
         py: Python<'_>,
         messages: Vec<(String, String)>,
+        session_id: &str,
         user_id: &str,
-        agent_id: Option<&str>,
-        run_id: Option<&str>,
         metadata: Option<&str>,
-    ) -> PyResult<Vec<PyObject>> {
-        let _ = agent_id;
+    ) -> PyResult<PyObject> {
+        let meta = parse_metadata(metadata)?;
         let chat_messages: Vec<memme_core::types::ChatMessage> = messages
             .into_iter()
             .map(|(role, content)| memme_core::types::ChatMessage {
@@ -509,32 +484,49 @@ impl MemoryStore {
                 timestamp: None,
             })
             .collect();
-        let meta = parse_metadata(metadata)?;
-        let (user_id, run_id) = (user_id.to_string(), run_id.map(|s| s.to_string()));
+        let (session_id, user_id) = (session_id.to_string(), user_id.to_string());
+        let result = py.allow_threads(|| {
+            self.inner.append_events(&session_id, &chat_messages, &user_id, meta)
+        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("session_id", &result.session_id)?;
+        dict.set_item("events_appended", result.events_appended)?;
+        dict.set_item("total_unprocessed", result.total_unprocessed)?;
+        dict.set_item("compact_needed", result.compact_needed)?;
+        Ok(dict.into())
+    }
 
-        let (compact_result, _) = py
-            .allow_threads(|| {
-                let session_id = run_id
-                    .as_deref()
-                    .unwrap_or(&uuid::Uuid::new_v4().to_string())
-                    .to_string();
-                self.inner
-                    .append_events(&session_id, &chat_messages, &user_id, meta)
-                    .map_err(|e| e.to_string())?;
-                let compact_result = self.inner.compact(&session_id).map_err(|e| e.to_string())?;
-                Ok::<_, String>((compact_result, session_id))
-            })
-            .map_err(|e: String| PyRuntimeError::new_err(e))?;
+    /// Compact a session: purify events, create episode narrative.
+    #[pyo3(signature = (session_id))]
+    fn compact(&self, py: Python<'_>, session_id: &str) -> PyResult<PyObject> {
+        let session_id = session_id.to_string();
+        let result = py.allow_threads(|| {
+            self.inner.compact(&session_id)
+        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("session_id", &result.session_id)?;
+        dict.set_item("episode_id", &result.episode_id)?;
+        dict.set_item("events_processed", result.events_processed)?;
+        Ok(dict.into())
+    }
 
-        let wrapper = PyDict::new(py);
-        let mem_dicts: Vec<PyObject> = compact_result
-            .memories
-            .iter()
-            .map(|r| memory_result_to_dict(py, r))
-            .collect::<PyResult<Vec<_>>>()?;
-        wrapper.set_item("memories", mem_dicts)?;
-        wrapper.set_item("episode_id", compact_result.episode_id)?;
-        Ok(vec![wrapper.into()])
+    /// Meditate: extract facts from episodes, reconcile with existing memories,
+    /// build entity graph. Requires LLM to be configured.
+    #[pyo3(signature = (*, user_id, triggered_by="python"))]
+    fn meditate(&self, py: Python<'_>, user_id: &str, triggered_by: &str) -> PyResult<PyObject> {
+        let opts = memme_core::types::MeditateOptions {
+            user_id: user_id.to_string(),
+            triggered_by: triggered_by.to_string(),
+            since: None,
+        };
+        let record = py.allow_threads(|| {
+            self.inner.meditate(opts)
+        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let json_str = serde_json::to_string(&record)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let json_mod = py.import("json")?;
+        let result = json_mod.call_method1("loads", (json_str,))?;
+        Ok(result.into())
     }
 
     // =====================================================================

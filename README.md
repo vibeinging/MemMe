@@ -144,7 +144,10 @@ let results = try store.search("preferences", userId: "alice")
 - **Knowledge graph** — entity/relationship extraction with graph traversal
 - **Four-channel hybrid search** — vector + BM25 + entity graph + temporal, fused via RRF
 - **Forgetting curve** — FSRS-based memory decay with stability reinforcement on access
-- **Meditation** — memory consolidation: decay + extraction + graph building + identity distillation
+- **Meditation** — memory consolidation: decay + fact extraction + reconciliation (ADD/UPDATE/DELETE) + graph building + entity-memory linking
+- **Reflection** — LLM-powered analysis of recent memories, identifying themes, patterns and focus areas
+- **Feedback learning** — extract behavioral principles from user corrections, stored as high-importance memories and identity traits
+- **Diagnostics** — built-in health checks for storage, embedder, and LLM with per-check latency reporting
 - **Pluggable LLM** — OpenAI, Anthropic, Gemini, Ollama, or none
 - **Reranking** — API reranker (Jina/Cohere) or local ONNX cross-encoder
 - **Four-level scoping** — `user_id` / `agent_id` / `app_id` / `run_id` isolation

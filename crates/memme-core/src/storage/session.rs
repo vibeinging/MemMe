@@ -40,7 +40,8 @@ impl Storage {
             r#"SELECT s.session_id, s.user_id, s.source_id,
                       CAST(s.started_at AS VARCHAR), CAST(s.ended_at AS VARCHAR),
                       s.metadata, CAST(s.created_at AS VARCHAR),
-                      (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count
+                      (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
+                      s.structured_notes
                FROM sessions s
                WHERE s.session_id = $1"#,
         )?;
@@ -82,7 +83,8 @@ impl Storage {
             r#"SELECT s.session_id, s.user_id, s.source_id,
                       CAST(s.started_at AS VARCHAR), CAST(s.ended_at AS VARCHAR),
                       s.metadata, CAST(s.created_at AS VARCHAR),
-                      (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count
+                      (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
+                      s.structured_notes
                FROM sessions s
                WHERE {where_clause}
                ORDER BY s.started_at DESC
@@ -139,6 +141,28 @@ impl Storage {
         self.get_session(session_id)?
             .ok_or_else(|| crate::error::MemoryError::Config("Failed to create session".into()))
     }
+    /// Append a line to a session's structured notes, capped at 2000 chars.
+    pub(crate) fn append_structured_note(&self, session_id: &str, note: &str) -> Result<()> {
+        let conn = self.write_conn();
+        conn.execute(
+            r#"UPDATE sessions
+               SET structured_notes = LEFT(COALESCE(structured_notes, '') || $1, 2000)
+               WHERE session_id = $2"#,
+            params![note, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear structured notes for a session (after compact).
+    pub(crate) fn clear_structured_notes(&self, session_id: &str) -> Result<()> {
+        let conn = self.write_conn();
+        conn.execute(
+            "UPDATE sessions SET structured_notes = NULL WHERE session_id = $1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
     /// Delete all sessions for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_sessions(&self, user_id: &str) -> Result<()> {
@@ -160,5 +184,6 @@ fn map_session_row(row: &duckdb::Row<'_>) -> duckdb::Result<Session> {
             .and_then(|s| serde_json::from_str(&s).ok()),
         created_at: row.get::<_, String>(6)?,
         event_count: row.get::<_, Option<i64>>(7)?.unwrap_or(0) as u32,
+        structured_notes: row.get::<_, Option<String>>(8)?,
     })
 }

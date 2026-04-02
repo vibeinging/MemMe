@@ -178,6 +178,17 @@ impl Storage {
         event_time: Option<&str>,
         location: Option<&str>,
     ) -> Result<()> {
+        // Normalize incomplete date formats that DuckDB can't parse as TIMESTAMP
+        let normalized_time = event_time.map(|t| {
+            let t = t.trim();
+            if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+                format!("{t}-01-01")
+            } else if t.len() == 7 && t.as_bytes().get(4) == Some(&b'-') {
+                format!("{t}-01")
+            } else {
+                t.to_string()
+            }
+        });
         let emb_literal = Self::format_embedding(content_vec, self.config.embedding_dims)?;
         let sql = format!(
             r#"UPDATE events SET
@@ -191,7 +202,7 @@ impl Storage {
         let conn = self.write_conn();
         conn.execute(
             &sql,
-            params![purified_content, event_time, location, event_id],
+            params![purified_content, normalized_time.as_deref(), location, event_id],
         )?;
         Ok(())
     }

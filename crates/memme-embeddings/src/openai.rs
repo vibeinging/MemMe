@@ -53,8 +53,9 @@ pub enum OpenAiModel {
     TextEmbedding3Large,
     /// text-embedding-ada-002 — 1536 dimensions (legacy)
     TextEmbeddingAda002,
-    /// Custom model name with explicit dimensions
-    Custom { name: String, dims: usize },
+    /// Custom model name with explicit dimensions.
+    /// Set `send_dims = false` for providers that don't accept the `dimensions` parameter.
+    Custom { name: String, dims: usize, send_dims: bool },
 }
 
 impl OpenAiModel {
@@ -121,11 +122,11 @@ pub struct OpenAiEmbedder {
 }
 
 impl OpenAiEmbedder {
-    /// Create a new OpenAI embedder with the given API key.
-    pub fn new(api_key: impl Into<String>) -> Self {
+    /// Create a new OpenAI embedder with the given API key and full endpoint URL.
+    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: base_url.into().trim_end_matches('/').to_string(),
             model: OpenAiModel::default(),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
@@ -135,12 +136,6 @@ impl OpenAiEmbedder {
             concurrency: ConcurrencyConfig::default(),
             protocol: None,
         }
-    }
-
-    /// Set a custom base URL (e.g., for Azure OpenAI or compatible APIs).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
     }
 
     /// Set the embedding model.
@@ -190,12 +185,15 @@ impl OpenAiEmbedder {
         self
     }
 
-    /// Create from environment variable `OPENAI_API_KEY`.
+    /// Create from environment variables `OPENAI_API_KEY` and `EMBEDDING_URL`.
     pub fn from_env() -> Result<Self, EmbedError> {
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             EmbedError::InitError("OPENAI_API_KEY environment variable not set".into())
         })?;
-        Ok(Self::new(api_key))
+        let base_url = std::env::var("EMBEDDING_URL").map_err(|_| {
+            EmbedError::InitError("EMBEDDING_URL environment variable not set".into())
+        })?;
+        Ok(Self::new(api_key, base_url))
     }
 
     /// Internal async embed call with exponential backoff retry.
@@ -207,7 +205,9 @@ impl OpenAiEmbedder {
 
         // For Custom models, pass the dimensions parameter to truncate server-side
         let dimensions = match &self.model {
-            OpenAiModel::Custom { dims, .. } => Some(*dims),
+            OpenAiModel::Custom { dims, send_dims, .. } => {
+                if *send_dims { Some(*dims) } else { None }
+            }
             _ => None,
         };
 
@@ -224,7 +224,7 @@ impl OpenAiEmbedder {
                 .map_err(|e| EmbedError::ApiError(format!("failed to serialize request: {e}")))?
         };
 
-        let url = format!("{}/embeddings", self.base_url);
+        let url: &str = &self.base_url;
         let max_retries = 3u32;
         let mut last_err = EmbedError::ApiError("no attempts made".into());
 
@@ -237,7 +237,7 @@ impl OpenAiEmbedder {
 
             let result = self
                 .client
-                .post(&url)
+                .post(url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .json(&request_body)
                 .send()

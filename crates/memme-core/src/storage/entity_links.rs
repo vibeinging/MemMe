@@ -133,7 +133,7 @@ impl Storage {
                       significance, outcome, source_id, event_ids, user_id,
                       CAST(created_at AS VARCHAR), CAST(last_recalled AS VARCHAR),
                       recall_count, storage_strength, retrieval_strength,
-                      session_ids
+                      session_ids, CAST(last_meditated_at AS VARCHAR)
                FROM episodes
                WHERE user_id = $1 AND ({where_like})
                ORDER BY significance DESC
@@ -174,6 +174,7 @@ impl Storage {
                     recall_count: row.get::<_, Option<i32>>(12)?.unwrap_or(0) as u32,
                     storage_strength: row.get::<_, Option<f64>>(13)?.unwrap_or(1.0) as f32,
                     retrieval_strength: row.get::<_, Option<f64>>(14)?.unwrap_or(1.0) as f32,
+                    last_meditated_at: row.get::<_, Option<String>>(16)?,
                     score: None,
                 })
             })?

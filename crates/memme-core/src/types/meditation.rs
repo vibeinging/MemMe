@@ -72,6 +72,29 @@ pub struct MeditationRecord {
     pub metadata: Option<serde_json::Value>,
 }
 
+impl Default for MeditationRecord {
+    fn default() -> Self {
+        Self {
+            meditation_id: String::new(),
+            triggered_by: String::new(),
+            started_at: String::new(),
+            finished_at: None,
+            status: MeditationStatus::Running,
+            user_id: String::new(),
+            events_processed: 0,
+            episodes_created: 0,
+            memories_created: 0,
+            memories_updated: 0,
+            memories_decayed: 0,
+            entities_created: 0,
+            relations_created: 0,
+            conflicts_found: 0,
+            journal: None,
+            metadata: None,
+        }
+    }
+}
+
 /// Options for starting a meditation (batch consolidation).
 #[derive(Debug, Clone)]
 pub struct MeditateOptions {

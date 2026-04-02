@@ -9,9 +9,11 @@ mod helpers;
 mod agent_memory;
 mod entity_extraction;
 mod fact_extraction;
+mod reflect;
 mod update_memory;
 
 pub use agent_memory::*;
 pub use entity_extraction::*;
 pub use fact_extraction::*;
+pub use reflect::*;
 pub use update_memory::*;

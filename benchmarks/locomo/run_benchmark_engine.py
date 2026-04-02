@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""MemMe LOCOMO Benchmark — Engine Search Mode
+"""MemMe LOCOMO Benchmark — Engine Mode
 
-Hybrid approach:
-- Ingestion: Python async (proven stable with DashScope) — same as v7
+Pipeline:
+- Ingestion: append_events → compact → meditate (Rust engine)
 - Search: MemMe Rust engine four-channel (vector + BM25 + entity spreading + RRF)
 - Answer+Judge: async aiohttp
-
-This tests the engine's retrieval quality while using the stable Python ingestion pipeline.
 """
 
 import argparse
@@ -17,7 +15,6 @@ import re
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -48,7 +45,6 @@ class BenchConfig:
     judge_runs: int = 1
     # Concurrency settings
     max_llm_concurrent: int = 5   # async answer+judge
-    max_ingest_concurrent: int = 4  # threaded add_smart (LLM/embed IO parallel, DB serialized)
     # RRF weight tuning
     enable_forgetting_curve: bool = False  # disable for benchmark (all memories same age)
     rrf_vector_weight: float = 0.5
@@ -93,7 +89,7 @@ class AsyncAPIClient:
 
     async def chat_completion(self, messages: list, temperature: float = 0.0,
                               max_tokens: int = 512, model: str = None) -> str:
-        url = f"{self.config.chat_base_url}/chat/completions"
+        url = self.config.chat_base_url
         payload = {
             "model": model or self.config.chat_model,
             "messages": messages,
@@ -268,7 +264,8 @@ class QuestionResult:
 # ── Engine Ingestion (sync) ──
 
 def ingest_conversation_engine(config: BenchConfig, conv: dict):
-    """Ingest a conversation using MemMe engine's add_smart.
+    """Ingest a conversation using the full MemMe pipeline:
+    append_events → compact → meditate.
 
     Returns (store, speaker_a, speaker_b, uid_a, uid_b) or None.
     """
@@ -293,8 +290,9 @@ def ingest_conversation_engine(config: BenchConfig, conv: dict):
     user_id_b = f"{sample_id}_{speaker_b}"
 
     # Use file-based db so we can reuse ingested data
-    db_path = f"cache/{sample_id}.duckdb"
-    os.makedirs("cache", exist_ok=True)
+    cache_dir = os.environ.get("MEMME_CACHE_DIR", "cache")
+    db_path = f"{cache_dir}/{sample_id}.duckdb"
+    os.makedirs(cache_dir, exist_ok=True)
     skip_ingest = os.path.exists(db_path) and getattr(config, 'reuse_cache', False)
 
     store = memme.MemoryStore(
@@ -322,58 +320,64 @@ def ingest_conversation_engine(config: BenchConfig, conv: dict):
         print(f"  Using cached db: {db_path}", flush=True)
         return store, speaker_a, speaker_b, user_id_a, user_id_b
 
-    # Ingest each session in batches of 10 turns.
-    # batch_size=2 was too slow (13K calls); whole-session caused LLM output truncation.
-    # batch_size=10 is a good balance: 5x fewer calls than 2, short enough output.
-    batch_size = 10
-    all_batches = []
+    # Full pipeline: append_events → compact → meditate
+    # Each LoCoMo session maps to one MemMe session per user.
+    total_sessions = len(session_nums) * 2  # x2 for both speakers
+    done_sessions = 0
+
     for num in session_nums:
         session_key = f"session_{num}"
         turns = conversation.get(session_key, [])
         if not turns:
             continue
-        # Get session date — critical for multi-hop temporal questions
+
+        # Get session date for temporal grounding
+        # Normalize incomplete dates: "2023-06" → "2023-06-01", "2023" → "2023-01-01"
         date_key = f"session_{num}_date_time"
         session_date = conversation.get(date_key, "")
-        date_prefix = f"[Date: {session_date}]\n" if session_date else ""
-        for i in range(0, len(turns), batch_size):
-            batch = turns[i:i + batch_size]
-            text = date_prefix + "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in batch)
-            all_batches.append(text)
+        if session_date:
+            import re
+            if re.match(r'^\d{4}$', session_date.strip()):
+                session_date = session_date.strip() + "-01-01"
+            elif re.match(r'^\d{4}-\d{2}$', session_date.strip()):
+                session_date = session_date.strip() + "-01"
 
-    # Build (text, uid) task list
-    ingest_tasks = [(text, uid) for text in all_batches for uid in [user_id_a, user_id_b]]
-    total_calls = len(ingest_tasks)
-    done_count = 0
-    failed_count = 0
+        # Convert turns to ChatMessage format
+        # Use "user" role for all speakers; include speaker name in content
+        # so compact's purification can resolve coreference properly.
+        date_prefix = f"[Date: {session_date}] " if session_date else ""
+        messages = []
+        for turn in turns:
+            messages.append(("user", f"{date_prefix}{turn['speaker']}: {turn['text']}"))
 
-    def _ingest_one(text_uid):
-        """Call add_smart with retry. LLM/embed IO runs in parallel across threads;
-        DB writes serialize on Rust Mutex (< 1ms each)."""
-        text, uid = text_uid
-        for attempt in range(3):
+        # Ingest for both speakers (each has their own memory)
+        for uid in [user_id_a, user_id_b]:
+            session_id = f"{sample_id}_s{num}_{uid}"
             try:
-                store.add_smart(text, user_id=uid)
-                return (True, uid, None)
+                # 1. Append events
+                store.append_events(messages, session_id=session_id, user_id=uid)
+
+                # 2. Compact → create episode
+                store.compact(session_id)
             except Exception as e:
-                if attempt < 2:
-                    time.sleep(3 * (attempt + 1))
-                else:
-                    return (False, uid, str(e)[:80])
+                print(f"      [WARN] session {session_id} failed: {str(e)[:200]}", flush=True)
 
-    workers = getattr(config, 'max_ingest_concurrent', 4)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_ingest_one, task): task for task in ingest_tasks}
-        for future in as_completed(futures):
-            done_count += 1
-            ok, uid, err = future.result()
-            if not ok:
-                failed_count += 1
-                print(f"      [WARN] add_smart failed for {uid}: {err}", flush=True)
-            if done_count % 20 == 0 or done_count == total_calls:
-                print(f"      [{done_count}/{total_calls}] batches ingested", flush=True)
+            done_sessions += 1
+            if done_sessions % 10 == 0 or done_sessions == total_sessions:
+                print(f"      [{done_sessions}/{total_sessions}] sessions processed", flush=True)
 
-    # Build FTS index after all ingestion
+    # 3. Meditate — reconcile facts for each user
+    for uid in [user_id_a, user_id_b]:
+        try:
+            record = store.meditate(user_id=uid, triggered_by="benchmark")
+            created = record.get("memories_created", 0)
+            updated = record.get("memories_updated", 0)
+            deleted = record.get("conflicts_found", 0)
+            print(f"      Meditate {uid}: +{created} ~{updated} -{deleted}", flush=True)
+        except Exception as e:
+            print(f"      [WARN] meditate failed for {uid}: {str(e)[:80]}", flush=True)
+
+    # Build FTS index after all processing
     store.rebuild_fts_index()
 
     return store, speaker_a, speaker_b, user_id_a, user_id_b
@@ -491,7 +495,7 @@ async def run_benchmark(config: BenchConfig):
     print(f"Retrieval: vector + BM25 + entity spreading activation + RRF (engine)")
     print(f"RRF weights: vector={config.rrf_vector_weight} fts={config.rrf_fts_weight} entity={config.rrf_entity_weight} k={config.rrf_k}")
     print(f"Forgetting curve: {config.enable_forgetting_curve}")
-    print(f"Concurrency: Ingest={config.max_ingest_concurrent}, LLM={config.max_llm_concurrent}")
+    print(f"Concurrency: LLM={config.max_llm_concurrent}")
     print(f"Output: {results_file}")
     print()
 
@@ -502,8 +506,8 @@ async def run_benchmark(config: BenchConfig):
             sample_id = conv.get("sample_id", f"conv_{conv_idx}")
             print(f"\n--- Conversation {conv_idx + 1}/{len(conversations)}: {sample_id} ---")
 
-            # Phase 1: Ingest (sync — engine does extraction + embedding internally)
-            print("  Ingesting (engine add_smart)...", end="", flush=True)
+            # Phase 1: Ingest (append_events → compact → meditate)
+            print("  Ingesting (append → compact → meditate)...", end="", flush=True)
             t0 = time.time()
             result = ingest_conversation_engine(config, conv)
             if result is None:
@@ -514,7 +518,7 @@ async def run_benchmark(config: BenchConfig):
             print(f" done in {ingest_time:.0f}s")
 
             # Phase 2: Answer questions (async for speed)
-            qa_pairs = [qa for qa in conv.get("qa", []) if qa["category"] != 5]
+            qa_pairs = list(conv.get("qa", []))
             if config.categories is not None:
                 qa_pairs = [qa for qa in qa_pairs if qa["category"] in config.categories]
 
@@ -685,7 +689,6 @@ def main():
     parser.add_argument("--data-path", default="locomo10.json")
     parser.add_argument("--output-dir", default="results_engine")
     parser.add_argument("--max-llm-concurrent", type=int, default=5)
-    parser.add_argument("--max-ingest-concurrent", type=int, default=4, help="Threads for concurrent add_smart ingestion")
     parser.add_argument("--results-only", type=str, default=None)
     parser.add_argument("--reuse-cache", action="store_true", help="Skip ingestion, reuse cached .duckdb files")
     parser.add_argument("--enable-forgetting-curve", action="store_true", default=False)
@@ -710,8 +713,7 @@ def main():
         print_summary(summary)
         return
 
-    # Derive llm_base_url: strip /v1 suffix for Rust engine (it auto-appends /v1/chat/completions)
-    llm_base = args.llm_base_url or args.chat_base_url.rstrip("/").removesuffix("/v1")
+    llm_base = args.llm_base_url or args.chat_base_url
 
     config = BenchConfig(
         api_key=args.api_key,
@@ -729,7 +731,6 @@ def main():
         data_path=args.data_path,
         output_dir=args.output_dir,
         max_llm_concurrent=args.max_llm_concurrent,
-        max_ingest_concurrent=args.max_ingest_concurrent,
         conversations=[int(x) for x in args.conversations.split(",")] if args.conversations else None,
         categories=[int(x) for x in args.categories.split(",")] if args.categories else None,
         enable_forgetting_curve=args.enable_forgetting_curve,

@@ -102,7 +102,7 @@ impl super::MemoryStore {
 
             let content = event.purified_content.as_ref().unwrap_or(&event.content);
 
-            let event_tokens = content.len() / 4 + 10;
+            let event_tokens = super::helpers::estimate_tokens(content);
 
             if tokens_used + event_tokens <= token_budget {
                 tokens_used += event_tokens;

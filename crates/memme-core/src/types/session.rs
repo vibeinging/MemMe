@@ -26,6 +26,8 @@ pub struct Session {
     pub created_at: String,
     /// Number of events in this session.
     pub event_count: u32,
+    /// Structured notes accumulated during append_events for LLM-free compact summary.
+    pub structured_notes: Option<String>,
 }
 
 /// Options for listing sessions with optional time range and pagination.

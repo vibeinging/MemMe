@@ -560,20 +560,6 @@ pub struct GraphSearchResult {
     pub relations: Vec<GraphRelation>,
 }
 
-/// Result of a smart add operation (LLM-powered fact extraction + graph extraction).
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmartAddResult {
-    /// Memories created or updated from extracted facts.
-    pub memories: Vec<MemoryResult>,
-    /// Entities and relationships extracted from the conversation, if graph is enabled.
-    pub graph: Option<GraphSearchResult>,
-    /// Episode ID created from the conversation (only set when using add_smart_messages).
-    pub episode_id: Option<String>,
-    /// Session ID for the conversation (only set when using add_smart_messages).
-    pub session_id: Option<String>,
-}
-
 /// Result of a compact operation (session events consolidated into an episode + memories).
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -677,7 +663,39 @@ pub struct MemoryExport {
     pub stability: Option<f32>,
 }
 
-/// Full export structure for backup and migration, including memories and graph data.
+/// Result of syncing the replica.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicaSyncResult {
+    /// Path of the primary database file.
+    pub primary_path: String,
+    /// Path of the replica file.
+    pub replica_path: String,
+    /// Size of the copied file in bytes.
+    pub size_bytes: u64,
+    /// When the sync completed (ISO 8601).
+    pub synced_at: String,
+}
+
+/// Status of the primary + replica pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicaStatus {
+    /// Path of the primary database file.
+    pub primary_path: String,
+    /// Whether the primary file is accessible.
+    pub primary_ok: bool,
+    /// Primary file size in bytes.
+    pub primary_size_bytes: u64,
+    /// Path of the replica file (None for :memory: databases).
+    pub replica_path: Option<String>,
+    /// Whether the replica file is accessible.
+    pub replica_ok: bool,
+    /// Replica file size in bytes.
+    pub replica_size_bytes: Option<u64>,
+    /// When the replica was last synced (ISO 8601, from memme_config).
+    pub last_synced_at: Option<String>,
+}
+
+/// Full export structure for backup and migration, including all data layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullExport {
     /// Export format version (for forward compatibility).
@@ -692,6 +710,42 @@ pub struct FullExport {
     pub entities: Vec<Entity>,
     /// All relationships from the knowledge graph.
     pub relations: Vec<GraphRelation>,
+    /// All sessions.
+    #[serde(default)]
+    pub sessions: Vec<Session>,
+    /// All episodes.
+    #[serde(default)]
+    pub episodes: Vec<Episode>,
+    /// All raw events.
+    #[serde(default)]
+    pub events: Vec<Event>,
+    /// All identity traits.
+    #[serde(default)]
+    pub identity_traits: Vec<IdentityTrait>,
+    /// All data sources.
+    #[serde(default)]
+    pub sources: Vec<Source>,
+}
+
+/// Result of a full import operation, with counts for each data layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullImportResult {
+    /// Number of sources imported.
+    pub sources: u64,
+    /// Number of sessions imported.
+    pub sessions: u64,
+    /// Number of events imported.
+    pub events: u64,
+    /// Number of episodes imported.
+    pub episodes: u64,
+    /// Number of memories imported.
+    pub memories: u64,
+    /// Number of entities imported.
+    pub entities: u64,
+    /// Number of relations imported.
+    pub relations: u64,
+    /// Number of identity traits imported.
+    pub identity_traits: u64,
 }
 
 #[cfg(test)]
@@ -812,14 +866,25 @@ mod tests {
     #[test]
     fn test_export_serialization() {
         let export = FullExport {
-            version: "1.0".into(),
+            version: "2.0".into(),
             collection: "default".into(),
             exported_at: "2026-03-17".into(),
             memories: vec![],
             entities: vec![],
             relations: vec![],
+            sessions: vec![],
+            episodes: vec![],
+            events: vec![],
+            identity_traits: vec![],
+            sources: vec![],
         };
         let json = serde_json::to_string(&export).unwrap();
-        assert!(json.contains("\"version\":\"1.0\""));
+        assert!(json.contains("\"version\":\"2.0\""));
+        // Verify backwards compat: deserialize without new fields
+        let legacy_json = r#"{"version":"1.0","collection":"test","exported_at":"2026-01-01","memories":[],"entities":[],"relations":[]}"#;
+        let parsed: FullExport = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.version, "1.0");
+        assert!(parsed.sessions.is_empty());
+        assert!(parsed.events.is_empty());
     }
 }

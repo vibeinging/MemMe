@@ -40,6 +40,8 @@ pub struct Episode {
     pub storage_strength: f32,
     /// Bjork retrieval strength -- decays over time, boosted by recall.
     pub retrieval_strength: f32,
+    /// When this episode was last processed by meditation (ISO 8601). None = never meditated.
+    pub last_meditated_at: Option<String>,
     /// Relevance score, populated only during search results.
     pub score: Option<f32>,
 }

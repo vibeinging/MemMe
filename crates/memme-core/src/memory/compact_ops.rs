@@ -48,7 +48,8 @@ impl super::MemoryStore {
         self.storage
             .get_or_create_session(session_id, user_id, None, &now, meta_str.as_deref())?;
 
-        // Ingest each message as an Event
+        // Ingest each message as an Event, accumulate structured notes
+        let mut notes_batch = String::new();
         for msg in &non_system {
             let event_type = match msg.role.as_str() {
                 "user" => "user_message",
@@ -66,6 +67,17 @@ impl super::MemoryStore {
                 opts = opts.metadata(m.clone());
             }
             self.ingest_event(&msg.content, opts)?;
+
+            // Accumulate structured note for LLM-free compact summary
+            let preview: String = msg.content.chars().take(120).collect();
+            let ts = msg.timestamp.as_deref().unwrap_or(&now);
+            use std::fmt::Write;
+            let _ = write!(notes_batch, "[{}] {}: {}\n", ts, msg.role, preview);
+        }
+
+        // Batch-append all notes in a single SQL UPDATE
+        if !notes_batch.is_empty() {
+            let _ = self.storage.append_structured_note(session_id, &notes_batch);
         }
 
         let total_unprocessed = self
@@ -130,8 +142,19 @@ impl super::MemoryStore {
 
         let event_ids: Vec<String> = events.iter().map(|e| e.event_id.clone()).collect();
 
-        // Purify events via LLM (coreference resolution, temporal/spatial grounding)
-        let purified = purify_events(&events, &llm);
+        // Short-session optimization: skip LLM for low-token sessions
+        let estimated_tokens: usize = events
+            .iter()
+            .map(|e| super::helpers::estimate_tokens(&e.content))
+            .sum();
+        let use_fallback = self.config.compact_fallback_token_threshold > 0
+            && estimated_tokens < self.config.compact_fallback_token_threshold;
+
+        let purified = if use_fallback {
+            fallback_purify_events(&events)
+        } else {
+            purify_events(&events, &llm)
+        };
 
         // Fall back to original content if purification returned empty strings
         let purified: Vec<_> = purified
@@ -166,7 +189,19 @@ impl super::MemoryStore {
             )?;
         }
 
-        let (title, summary, significance) = generate_episode_summary(&events, &llm);
+        // Generate episode summary: use structured notes for short sessions, LLM for longer ones
+        let (title, summary, significance) = if use_fallback {
+            match session.structured_notes {
+                Some(ref notes) if !notes.trim().is_empty() => {
+                    let title_text = extract_title_from_events(&events);
+                    let summary_text: String = notes.chars().take(500).collect();
+                    (title_text, summary_text, 0.5)
+                }
+                _ => fallback_episode_summary(&events),
+            }
+        } else {
+            generate_episode_summary(&events, &llm)
+        };
 
         // Insert narrative trace into memories table
         let narrative_content = format!("{}: {}", title, summary);
@@ -175,6 +210,30 @@ impl super::MemoryStore {
             .embed(&narrative_content)
             .map_err(MemoryError::Embedding)?;
 
+        // Create Episode record first (less critical — if narrative insert fails,
+        // the episode is still usable by meditation; reverse order would leave orphan narratives)
+        let episode_id = uuid::Uuid::new_v4().to_string();
+        let episode_opts = crate::types::CreateEpisodeOptions::new(
+            &title,
+            &summary,
+            &session.user_id,
+            &events[0].timestamp,
+        )
+        .ended_at(&events[events.len() - 1].timestamp)
+        .significance(significance)
+        .outcome("completed")
+        .event_ids(event_ids.clone())
+        .session_ids(vec![session_id.to_string()]);
+
+        self.storage.insert_episode(
+            &episode_id,
+            &title,
+            &summary,
+            &narrative_embedding,
+            &episode_opts,
+        )?;
+
+        // Insert narrative trace into memories table
         let narrative_id = uuid::Uuid::new_v4().to_string();
         let narrative_hash = crate::memory::helpers::content_hash(&narrative_content);
         let meta_json = serde_json::json!({
@@ -206,6 +265,9 @@ impl super::MemoryStore {
         let event_id_refs: Vec<&str> = event_ids.iter().map(|s| s.as_str()).collect();
         self.storage.mark_events_processed(&event_id_refs)?;
 
+        // Clear structured notes after compact to avoid stale content in future compacts
+        let _ = self.storage.clear_structured_notes(session_id);
+
         if rebuild_fts {
             let _ = self.storage.create_fts_index();
             let _ = self.storage.create_fts_index_events();
@@ -214,7 +276,7 @@ impl super::MemoryStore {
         // Note: No memories extracted here — use meditate() for that
         Ok(CompactResult {
             session_id: session_id.to_string(),
-            episode_id: narrative_id,
+            episode_id,
             memories: vec![], // Empty — memories are extracted by meditate()
             graph: None,      // Graph extraction moved to meditate()
             events_processed: event_ids.len(),
@@ -230,8 +292,9 @@ impl super::MemoryStore {
     /// Sessions and events are preserved (they are immutable recordings).
     /// Only the derived traces (facts, summaries, identity) are regenerated.
     pub fn re_traces(&self, user_id: &str) -> Result<Vec<CompactResult>> {
-        // 1. Delete all existing traces for this user
+        // 1. Delete all existing traces and episodes for this user
         self.delete_all_traces(user_id, None, None, None)?;
+        self.storage.delete_episodes_for_user(user_id)?;
 
         // 2. Get all sessions for this user
         let sessions = self.list_sessions(ListSessionsOptions::new(user_id))?;
@@ -240,6 +303,7 @@ impl super::MemoryStore {
         let mut results = Vec::new();
         for session in &sessions {
             self.storage.reset_events_processed(&session.session_id)?;
+            let _ = self.storage.clear_structured_notes(&session.session_id);
 
             match self.compact_no_fts(&session.session_id) {
                 Ok(result) => results.push(result),
@@ -314,9 +378,9 @@ Respond ONLY with the JSON object, no other text."#
     }
 }
 
-/// Truncation-based fallback when LLM is unavailable.
-fn fallback_episode_summary(events: &[Event]) -> (String, String, f32) {
-    let title = events
+/// Extract a title from events: first user message truncated to 60 chars.
+fn extract_title_from_events(events: &[Event]) -> String {
+    events
         .iter()
         .find(|e| e.event_type == EventType::UserMessage)
         .map(|e| {
@@ -327,7 +391,12 @@ fn fallback_episode_summary(events: &[Event]) -> (String, String, f32) {
                 t
             }
         })
-        .unwrap_or_else(|| "Conversation".to_string());
+        .unwrap_or_else(|| "Conversation".to_string())
+}
+
+/// Truncation-based fallback when LLM is unavailable.
+fn fallback_episode_summary(events: &[Event]) -> (String, String, f32) {
+    let title = extract_title_from_events(events);
 
     let summary = events
         .iter()

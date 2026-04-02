@@ -179,7 +179,7 @@ describe("MemoryStore (mock embedder)", () => {
     });
 
     it("setLlmProvider makes hasLlm return true", () => {
-      store.setLlmProvider("test-key", "gpt-4o-mini", "https://api.openai.com");
+      store.setLlmProvider("test-key", "gpt-4o-mini", "https://api.openai.com/v1/chat/completions");
       expect(store.hasLlm()).toBe(true);
     });
 

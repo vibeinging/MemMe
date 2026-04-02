@@ -99,8 +99,10 @@ fn init_store() -> Result<(MemoryStore, tokio::runtime::Runtime)> {
         .unwrap_or(1536);
 
     let api_key = std::env::var("OPENAI_API_KEY").wrap_err("OPENAI_API_KEY env var required")?;
-    let base_url =
-        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into());
+    let embed_url = std::env::var("EMBEDDING_URL")
+        .wrap_err("EMBEDDING_URL env var required (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)")?;
+    let llm_url = std::env::var("LLM_URL")
+        .wrap_err("LLM_URL env var required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)")?;
 
     let rt = tokio::runtime::Runtime::new()?;
     let _guard = rt.enter();
@@ -113,12 +115,12 @@ fn init_store() -> Result<(MemoryStore, tokio::runtime::Runtime)> {
     };
 
     let embedder: Arc<dyn Embedder> =
-        Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(&api_key).with_base_url(&base_url));
+        Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(&api_key, &embed_url));
 
     let llm_model = std::env::var("MEMME_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-nano".into());
     let llm_config = memme_llm::openai::OpenAIConfig {
         api_key,
-        base_url: base_url.trim_end_matches("/v1").to_string(),
+        base_url: llm_url,
         model: llm_model,
         retry: Default::default(),
     };

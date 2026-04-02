@@ -23,6 +23,7 @@ mod query;
 mod recall_store;
 mod session;
 mod stream;
+pub(crate) mod replica;
 mod sync;
 mod util;
 
@@ -40,15 +41,32 @@ pub struct Storage {
 
 impl Storage {
     /// Open a DuckDB connection pool and initialize the schema.
+    ///
+    /// If the primary database file is corrupted and a replica exists,
+    /// automatically recovers from the replica before opening.
     pub fn open(config: MemoryConfig) -> Result<Self> {
         config.validate()?;
 
         let cfg_ref = config.clone();
-        let pool = ConnectionPool::open(&config, |conn| {
-            // init_schema runs on the write connection before read connections are created.
-            // We use execute_batch/execute directly on the borrowed connection.
+        let pool_result = ConnectionPool::open(&config, |conn| {
             Self::run_init_schema(conn, &cfg_ref)
-        })?;
+        });
+
+        let pool = match pool_result {
+            Ok(p) => p,
+            Err(_) if config.db_path != ":memory:" => {
+                // Primary failed to open — try recovering from replica
+                if replica::try_recover_from_replica(&config.db_path) {
+                    let cfg_ref2 = config.clone();
+                    ConnectionPool::open(&config, |conn| {
+                        Self::run_init_schema(conn, &cfg_ref2)
+                    })?
+                } else {
+                    return pool_result.map(|p| Self { pool: p, config });
+                }
+            }
+            Err(e) => return Err(e),
+        };
 
         Ok(Self { pool, config })
     }
@@ -308,6 +326,7 @@ impl Storage {
             created_at TIMESTAMP DEFAULT current_timestamp
         )"#;
         conn.execute_batch(create_sessions)?;
+        Self::exec_ignore(conn, "ALTER TABLE sessions ADD COLUMN structured_notes VARCHAR");
         debug!("Created sessions table");
 
         // --- sources table ---
@@ -380,6 +399,7 @@ impl Storage {
         );
         conn.execute_batch(&create_episodes)?;
         Self::exec_ignore(conn, "ALTER TABLE episodes ADD COLUMN session_ids VARCHAR");
+        Self::exec_ignore(conn, "ALTER TABLE episodes ADD COLUMN last_meditated_at TIMESTAMP");
         debug!("Created episodes table");
 
         // --- identity table (Identity layer) ---

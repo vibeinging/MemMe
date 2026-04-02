@@ -5,7 +5,7 @@ use crate::types::{CreateEpisodeOptions, Episode, ListEpisodesOptions, SearchEpi
 
 use super::Storage;
 
-const EPISODE_COLS: &str = "episode_id, title, summary, CAST(started_at AS VARCHAR), CAST(ended_at AS VARCHAR), significance, outcome, source_id, event_ids, user_id, CAST(created_at AS VARCHAR), CAST(last_recalled AS VARCHAR), recall_count, storage_strength, retrieval_strength, session_ids";
+const EPISODE_COLS: &str = "episode_id, title, summary, CAST(started_at AS VARCHAR), CAST(ended_at AS VARCHAR), significance, outcome, source_id, event_ids, user_id, CAST(created_at AS VARCHAR), CAST(last_recalled AS VARCHAR), recall_count, storage_strength, retrieval_strength, session_ids, CAST(last_meditated_at AS VARCHAR)";
 
 impl Storage {
     /// Insert a new episode.
@@ -91,7 +91,7 @@ impl Storage {
         let rows = stmt
             .query_map(params![user_id], |row| {
                 let mut ep = map_episode_row_inner(row)?;
-                ep.score = row.get::<_, Option<f64>>(16)?.map(|d| d as f32);
+                ep.score = row.get::<_, Option<f64>>(17)?.map(|d| d as f32);
                 Ok(ep)
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -99,6 +99,7 @@ impl Storage {
     }
 
     /// List episodes with filters.
+    #[allow(dead_code)] // used by list_episodes_for_user and list_episodes_paged
     pub(crate) fn list_episodes(&self, options: &SearchEpisodesOptions) -> Result<Vec<Episode>> {
         let mut conditions = vec!["user_id = $1".to_string()];
         let mut dynamic_params: Vec<duckdb::types::Value> =
@@ -212,6 +213,26 @@ impl Storage {
         Ok(())
     }
 
+    /// Mark an episode as meditated (set last_meditated_at to now).
+    pub(crate) fn mark_episode_meditated(&self, episode_id: &str) -> Result<()> {
+        let conn = self.write_conn();
+        conn.execute(
+            "UPDATE episodes SET last_meditated_at = current_timestamp WHERE episode_id = $1",
+            params![episode_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete all episodes for a user (used by re_traces to rebuild from scratch).
+    pub(crate) fn delete_episodes_for_user(&self, user_id: &str) -> Result<()> {
+        let conn = self.write_conn();
+        conn.execute(
+            "DELETE FROM episodes WHERE user_id = $1",
+            params![user_id],
+        )?;
+        Ok(())
+    }
+
     /// Find an episode by source_id (run_id) and user_id. Returns the most recent one.
     #[allow(dead_code)] // planned API: episode lookup
     pub(crate) fn find_episode_by_source(
@@ -258,7 +279,8 @@ impl Storage {
         Ok(())
     }
 
-    /// List all episodes for a user (helper for meditation).
+    /// List all episodes for a user.
+    #[allow(dead_code)] // public API: episode listing
     pub(crate) fn list_episodes_for_user(&self, user_id: &str) -> Result<Vec<Episode>> {
         let options = SearchEpisodesOptions {
             user_id: user_id.to_string(),
@@ -270,6 +292,28 @@ impl Storage {
         self.list_episodes(&options)
     }
 
+    /// List unmeditated episodes for meditation, filtered by significance and batch size.
+    pub(crate) fn list_episodes_for_meditation(
+        &self,
+        user_id: &str,
+        min_significance: f32,
+        batch_size: usize,
+    ) -> Result<Vec<Episode>> {
+        let limit = if batch_size == 0 { 100 } else { batch_size };
+        let sql = format!(
+            "SELECT {EPISODE_COLS} FROM episodes \
+             WHERE user_id = $1 AND last_meditated_at IS NULL AND significance >= $2 \
+             ORDER BY significance DESC \
+             LIMIT {limit}"
+        );
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![user_id, min_significance as f64], map_episode_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// FTS (BM25) search on episodes (title + summary).
     pub(crate) fn fts_search_episodes(
         &self,
@@ -278,7 +322,7 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<Episode>> {
         // For FTS we need table-qualified column names
-        let fts_cols = "e.episode_id, e.title, e.summary, CAST(e.started_at AS VARCHAR), CAST(e.ended_at AS VARCHAR), e.significance, e.outcome, e.source_id, e.event_ids, e.user_id, CAST(e.created_at AS VARCHAR), CAST(e.last_recalled AS VARCHAR), e.recall_count, e.storage_strength, e.retrieval_strength, e.session_ids";
+        let fts_cols = "e.episode_id, e.title, e.summary, CAST(e.started_at AS VARCHAR), CAST(e.ended_at AS VARCHAR), e.significance, e.outcome, e.source_id, e.event_ids, e.user_id, CAST(e.created_at AS VARCHAR), CAST(e.last_recalled AS VARCHAR), e.recall_count, e.storage_strength, e.retrieval_strength, e.session_ids, CAST(e.last_meditated_at AS VARCHAR)";
         let sql = format!(
             r#"SELECT {fts_cols},
                       fts_main_episodes.match_bm25(e.episode_id, $1) AS score
@@ -292,7 +336,7 @@ impl Storage {
         let rows = stmt
             .query_map(params![query, user_id], |row| {
                 let mut ep = map_episode_row_inner(row)?;
-                ep.score = row.get::<_, Option<f64>>(16)?.map(|d| d as f32);
+                ep.score = row.get::<_, Option<f64>>(17)?.map(|d| d as f32);
                 Ok(ep)
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -332,6 +376,7 @@ fn map_episode_row_inner(row: &duckdb::Row<'_>) -> duckdb::Result<Episode> {
         recall_count: row.get::<_, Option<i32>>(12)?.unwrap_or(0) as u32,
         storage_strength: row.get::<_, Option<f64>>(13)?.unwrap_or(1.0) as f32,
         retrieval_strength: row.get::<_, Option<f64>>(14)?.unwrap_or(1.0) as f32,
+        last_meditated_at: row.get::<_, Option<String>>(16)?,
         score: None,
     })
 }

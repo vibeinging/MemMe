@@ -38,12 +38,13 @@ pub(crate) mod dedup;
 pub(crate) mod entity_index;
 pub mod error;
 pub(crate) mod graph;
+pub mod import;
 pub mod memory;
 pub mod procedural;
 pub mod rerank;
 pub(crate) mod search;
-pub(crate) mod smart;
 pub(crate) mod storage;
+pub(crate) mod text_utils;
 pub mod sync;
 pub mod types;
 #[cfg(feature = "webhooks")]
@@ -51,7 +52,12 @@ pub mod webhook;
 
 pub use config::{MemoryConfig, PowerConfig};
 pub use error::{MemoryError, Result};
-pub use memory::MemoryStore;
+pub use import::{ImportConversationsResult, ImportedConversation};
+pub use memory::{
+    CheckResult, DiagnoseReport, LearnFromFeedbackOptions, LearnFromFeedbackResult, MemoryStore,
+    ReflectOptions, ReflectResult,
+};
+pub use memme_llm::prompts::FeedbackItem;
 pub use procedural::{Procedure, ProcedureStep};
 pub use types::{
     // types/identity.rs
@@ -74,6 +80,7 @@ pub use types::{
     FilterExpression,
     FilterOp,
     FullExport,
+    FullImportResult,
     // types/session.rs
     GetSessionContextOptions,
     GraphRelation,
@@ -94,12 +101,13 @@ pub use types::{
     MemoryResult,
     Privacy,
     PruningStrategy,
+    ReplicaStatus,
+    ReplicaSyncResult,
     Resolution,
     SearchEpisodesOptions,
     SearchOptions,
     Session,
     SessionContext,
-    SmartAddResult,
     Source,
     TraitType,
     UpdateOptions,

@@ -267,3 +267,30 @@ pub(crate) fn chrono_now() -> String {
         .as_secs();
     format!("{}", secs)
 }
+
+/// Rough token estimate: ~4 bytes per token + 10 overhead per text chunk.
+pub(crate) fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4 + 10
+}
+
+impl super::MemoryStore {
+    /// Get the internally configured LLM provider, or return an error.
+    pub(crate) fn require_llm(&self) -> crate::error::Result<std::sync::Arc<dyn memme_llm::LlmProvider>> {
+        recover_lock(&self.llm, "llm")
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::MemoryError::Config(
+                    "No LLM configured. Call set_llm() first or set MEMME_LLM_API_KEY env var."
+                        .into(),
+                )
+            })
+    }
+
+    /// **Advanced** — Most users should use `append_events()` + `compact()` instead.
+    ///
+    /// Add graph entries using the internally configured LLM.
+    pub fn add_graph_auto(&self, text: &str, user_id: &str) -> crate::error::Result<crate::types::GraphSearchResult> {
+        self.add_graph(text, user_id, self.require_llm()?)
+    }
+}

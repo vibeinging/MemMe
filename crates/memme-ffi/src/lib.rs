@@ -79,10 +79,7 @@ impl memme_llm::LlmProvider for FfiLlmProvider {
             }
         }
 
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = self.base_url.clone();
         let headers = vec![
             "Content-Type".to_string(),
             "application/json".to_string(),
@@ -140,7 +137,7 @@ impl memme_embeddings::Embedder for FfiEmbedder {
             "input": text,
         });
 
-        let url = format!("{}/v1/embeddings", self.base_url.trim_end_matches('/'));
+        let url = self.base_url.clone();
         let headers = vec![
             "Content-Type".to_string(),
             "application/json".to_string(),
@@ -224,6 +221,20 @@ pub struct Entity {
     pub name: String,
     pub entity_type: Option<String>,
     pub user_id: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct DiagnoseCheck {
+    pub name: String,
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub detail: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct DiagnoseReport {
+    pub all_ok: bool,
+    pub checks: Vec<DiagnoseCheck>,
 }
 
 #[derive(uniffi::Record)]
@@ -370,7 +381,7 @@ impl MemoryStore {
         llm_base_url: Option<String>,
     ) -> Result<Arc<Self>, MemmeError> {
         let http_arc: Arc<dyn HttpClient> = Arc::from(http_client);
-        let base_url = llm_base_url.unwrap_or_else(|| "https://api.openai.com".to_string());
+        let base_url = llm_base_url.ok_or(MemmeError::Runtime { msg: "llm_base_url required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)".to_string() })?;
 
         let embed_model = embedding_model.unwrap_or_else(|| "text-embedding-3-small".to_string());
         let dims = embedding_dims.unwrap_or(1536) as usize;
@@ -539,65 +550,24 @@ impl MemoryStore {
         Ok(())
     }
 
-    // -- Smart (LLM-powered) ------------------------------------------------
+    // -- Diagnostics ---------------------------------------------------------
 
-    /// Smart add: extract facts via LLM. Uses the LLM configured at construction time.
-    /// Optional `llm_model` / `llm_base_url` override the defaults.
-    pub fn add_smart(
-        &self,
-        text: String,
-        user_id: String,
-        llm_model: Option<String>,
-        llm_base_url: Option<String>,
-        agent_id: Option<String>,
-        run_id: Option<String>,
-        metadata: Option<String>,
-    ) -> Result<Vec<MemoryResult>, MemmeError> {
-        let llm = self.make_llm_provider(llm_model, llm_base_url)?;
-        let meta = parse_metadata(metadata)?;
+    pub fn diagnose(&self) -> Result<DiagnoseReport, MemmeError> {
         let store = self.lock_store()?;
-        let result = store.add_smart(
-            &text,
-            &user_id,
-            agent_id.as_deref(),
-            run_id.as_deref(),
-            meta,
-            llm,
-            false,
-        )?;
-        Ok(result.memories.iter().map(convert_result).collect())
-    }
-
-    /// Smart add from chat messages.
-    pub fn add_smart_messages(
-        &self,
-        messages: Vec<ChatMessage>,
-        user_id: String,
-        llm_model: Option<String>,
-        llm_base_url: Option<String>,
-        agent_id: Option<String>,
-        run_id: Option<String>,
-        metadata: Option<String>,
-    ) -> Result<Vec<MemoryResult>, MemmeError> {
-        let text: String = messages
-            .iter()
-            .map(|m| format!("{}: {}", m.role, m.content))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let llm = self.make_llm_provider(llm_model, llm_base_url)?;
-        let meta = parse_metadata(metadata)?;
-        let store = self.lock_store()?;
-        let result = store.add_smart(
-            &text,
-            &user_id,
-            agent_id.as_deref(),
-            run_id.as_deref(),
-            meta,
-            llm,
-            false,
-        )?;
-        Ok(result.memories.iter().map(convert_result).collect())
+        let report = store.diagnose();
+        Ok(DiagnoseReport {
+            all_ok: report.all_ok,
+            checks: report
+                .checks
+                .into_iter()
+                .map(|c| DiagnoseCheck {
+                    name: c.name.to_string(),
+                    ok: c.ok,
+                    latency_ms: c.latency_ms,
+                    detail: c.detail,
+                })
+                .collect(),
+        })
     }
 
     /// Extract knowledge-graph entities and relationships via LLM.

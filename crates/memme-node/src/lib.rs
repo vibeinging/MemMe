@@ -218,13 +218,6 @@ pub struct CompactResult {
     pub events_processed: u32,
 }
 
-/// Smart add result with episode.
-#[napi(object)]
-pub struct SmartMessagesResult {
-    pub memories: Vec<MemoryResult>,
-    pub episode_id: Option<String>,
-}
-
 /// Graph search result.
 #[napi(object)]
 pub struct GraphSearchResult {
@@ -408,7 +401,7 @@ fn create_llm(
 ) -> Result<std::sync::Arc<dyn memme_llm::LlmProvider>> {
     let config = memme_llm::openai::OpenAIConfig {
         api_key: api_key.to_string(),
-        base_url: base_url.unwrap_or("https://api.openai.com").to_string(),
+        base_url: base_url.ok_or_else(|| napi::Error::from_reason("base_url required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)"))?.to_string(),
         model: model.to_string(),
     };
     Ok(std::sync::Arc::new(memme_llm::openai::OpenAIProvider::new(
@@ -478,14 +471,12 @@ impl MemoryStore {
         dims: Option<u32>,
     ) -> Result<Self> {
         let path = db_path.unwrap_or_else(|| ":memory:".to_string());
-        let mut embedder = memme_embeddings::openai::OpenAiEmbedder::new(&api_key);
-        if let Some(url) = base_url {
-            embedder = embedder.with_base_url(url);
-        }
+        let embed_url = base_url.ok_or_else(|| napi::Error::from_reason("base_url required (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)"))?;
+        let mut embedder = memme_embeddings::openai::OpenAiEmbedder::new(&api_key, embed_url);
         let final_dims = if let Some(m) = model {
             let d = dims.unwrap_or(1536) as usize;
             embedder = embedder
-                .with_model(memme_embeddings::openai::OpenAiModel::Custom { name: m, dims: d });
+                .with_model(memme_embeddings::openai::OpenAiModel::Custom { name: m, dims: d, send_dims: true });
             d
         } else {
             use memme_embeddings::Embedder;
@@ -517,6 +508,13 @@ impl MemoryStore {
         let llm = create_llm(&api_key, &model, base_url.as_deref())?;
         self.inner.set_llm_provider(llm);
         Ok(())
+    }
+
+    /// Run diagnostic checks on storage, embedder, and LLM.
+    #[napi]
+    pub fn diagnose(&self) -> Result<serde_json::Value> {
+        let report = self.inner.diagnose();
+        serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Check if an LLM provider is configured.
@@ -729,47 +727,6 @@ impl MemoryStore {
                 .rebuild_fts_index()
                 .map_err(|e| Error::from_reason(e.to_string()))?;
             Ok(())
-        })
-        .await
-        .map_err(|e| Error::from_reason(e.to_string()))?
-    }
-
-    /// Smart add with LLM (per-call credentials).
-    #[napi]
-    pub async fn add_smart(
-        &self,
-        text: String,
-        user_id: String,
-        llm_api_key: String,
-        llm_model: Option<String>,
-        llm_base_url: Option<String>,
-        agent_id: Option<String>,
-        run_id: Option<String>,
-        metadata: Option<String>,
-    ) -> Result<Vec<MemoryResult>> {
-        let store = self.inner.clone();
-        let meta = metadata
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(|e| Error::from_reason(format!("Invalid JSON: {e}")))?;
-        let llm = create_llm(
-            &llm_api_key,
-            &llm_model.unwrap_or("gpt-4o-mini".into()),
-            llm_base_url.as_deref(),
-        )?;
-        tokio::task::spawn_blocking(move || {
-            let result = store
-                .add_smart(
-                    &text,
-                    &user_id,
-                    agent_id.as_deref(),
-                    run_id.as_deref(),
-                    meta,
-                    llm,
-                    false,
-                )
-                .map_err(|e| Error::from_reason(e.to_string()))?;
-            Ok(result.memories.iter().map(convert_result).collect())
         })
         .await
         .map_err(|e| Error::from_reason(e.to_string()))?
@@ -1002,47 +959,6 @@ impl MemoryStore {
                 episode_summary: ctx.episode_summary,
                 purified_count: ctx.purified_count as u32,
                 raw_count: ctx.raw_count as u32,
-            })
-        })
-        .await
-        .map_err(|e| Error::from_reason(e.to_string()))?
-    }
-
-    // -----------------------------------------------------------------------
-    // Smart add from messages (existing, kept for backward compat)
-    // -----------------------------------------------------------------------
-
-    /// Smart add from chat messages (append + compact bundled). Returns memories + episode_id.
-    #[napi]
-    pub async fn add_smart_messages(
-        &self,
-        messages: Vec<ChatMessage>,
-        user_id: String,
-        llm_api_key: String,
-        llm_model: Option<String>,
-        llm_base_url: Option<String>,
-        agent_id: Option<String>,
-        run_id: Option<String>,
-        metadata: Option<String>,
-    ) -> Result<SmartMessagesResult> {
-        let _ = (llm_api_key, llm_model, llm_base_url, agent_id);
-        let store = self.inner.clone();
-        let meta = metadata
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(|e| Error::from_reason(format!("Invalid JSON: {e}")))?;
-        let core_messages = convert_chat_messages(messages);
-        tokio::task::spawn_blocking(move || {
-            let session_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            store
-                .append_events(&session_id, &core_messages, &user_id, meta)
-                .map_err(|e| Error::from_reason(e.to_string()))?;
-            let compact_result = store
-                .compact(&session_id)
-                .map_err(|e| Error::from_reason(e.to_string()))?;
-            Ok(SmartMessagesResult {
-                memories: compact_result.memories.iter().map(convert_result).collect(),
-                episode_id: Some(compact_result.episode_id),
             })
         })
         .await

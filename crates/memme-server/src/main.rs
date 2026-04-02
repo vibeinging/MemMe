@@ -47,9 +47,13 @@ struct Cli {
     #[arg(long, env = "OPENAI_API_KEY")]
     openai_api_key: Option<String>,
 
-    /// OpenAI base URL
-    #[arg(long, env = "OPENAI_BASE_URL")]
-    openai_base_url: Option<String>,
+    /// Embedding endpoint URL (e.g. https://api.openai.com/v1/embeddings)
+    #[arg(long, env = "EMBEDDING_URL")]
+    embedding_url: Option<String>,
+
+    /// LLM endpoint URL (e.g. https://api.openai.com/v1/chat/completions)
+    #[arg(long, env = "LLM_URL")]
+    llm_url: Option<String>,
 
     /// LLM model name
     #[arg(long, default_value = "gpt-4.1-nano")]
@@ -150,10 +154,14 @@ async fn main() -> Result<()> {
             eprintln!("Error: OPENAI_API_KEY required. Set via --openai-api-key or env var, or use --mock for testing.");
             std::process::exit(1);
         });
-        let base_url = cli
-            .openai_base_url
-            .as_deref()
-            .unwrap_or("https://api.openai.com/v1");
+        let embed_url = cli.embedding_url.as_deref().unwrap_or_else(|| {
+            eprintln!("Error: EMBEDDING_URL required (e.g. https://api.openai.com/v1/embeddings).");
+            std::process::exit(1);
+        });
+        let llm_url = cli.llm_url.as_deref().unwrap_or_else(|| {
+            eprintln!("Error: LLM_URL required (e.g. https://api.openai.com/v1/chat/completions).");
+            std::process::exit(1);
+        });
 
         let embed_model = if cli.embedding_model == "text-embedding-3-small"
             && cli.embedding_dims == 1536
@@ -165,18 +173,17 @@ async fn main() -> Result<()> {
             memme_embeddings::openai::OpenAiModel::Custom {
                 name: cli.embedding_model.clone(),
                 dims: cli.embedding_dims,
+                send_dims: true,
             }
         };
 
         let embedder: Arc<dyn Embedder> = Arc::new(
-            memme_embeddings::openai::OpenAiEmbedder::new(api_key)
-                .with_base_url(base_url)
-                .with_model(embed_model),
+            memme_embeddings::openai::OpenAiEmbedder::new(api_key, embed_url).with_model(embed_model),
         );
 
         let llm_config = memme_llm::openai::OpenAIConfig {
             api_key: api_key.to_string(),
-            base_url: base_url.trim_end_matches("/v1").to_string(),
+            base_url: llm_url.to_string(),
             model: cli.llm_model.clone(),
         };
         let llm = Arc::new(memme_llm::openai::OpenAIProvider::new(llm_config));
@@ -232,12 +239,6 @@ async fn main() -> Result<()> {
         .route("/v1/memories/{id}", delete(handlers::delete_memory))
         .route("/v1/memories/{id}/history", get(handlers::memory_history))
         .route("/v1/memories", delete(handlers::delete_all_memories))
-        // Smart (LLM-powered)
-        .route("/v1/memories/smart", post(handlers::smart_add))
-        .route(
-            "/v1/memories/smart/messages",
-            post(handlers::smart_add_messages),
-        )
         // Episodes: removed (merged into traces; use search() with resolution filter)
         // Knowledge graph
         .route("/v1/graph", post(handlers::graph_add))
@@ -266,6 +267,7 @@ async fn main() -> Result<()> {
             auth_middleware,
         ))
         .route("/health", get(handlers::health))
+        .route("/diagnose", get(handlers::diagnose))
         .layer(cors)
         .with_state(state);
 

@@ -3,16 +3,6 @@ use crate::types::PruningStrategy;
 #[cfg(feature = "webhooks")]
 use crate::webhook::WebhookConfig;
 
-/// Controls fact extraction thoroughness.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum ExtractionDepth {
-    /// Single-pass extraction (fast, default).
-    #[default]
-    Standard,
-    /// Sliding window + detail pass (slower, more complete).
-    Thorough,
-}
-
 /// Configuration for the memory store.
 #[derive(Debug, Clone)]
 pub struct MemoryConfig {
@@ -44,7 +34,7 @@ pub struct MemoryConfig {
     pub custom_update_memory_prompt: Option<String>,
 
     /// Whether to automatically extract and search knowledge graph alongside vector memories.
-    /// Requires the `smart` feature and an LLM provider.
+    /// Requires an LLM provider to be configured.
     pub enable_graph: bool,
 
     /// How many hops the entity spreading activation traverses in the knowledge graph.
@@ -104,11 +94,6 @@ pub struct MemoryConfig {
     /// Power/battery configuration for mobile-aware processing.
     pub power_config: Option<PowerConfig>,
 
-    /// Controls fact extraction thoroughness.
-    /// `Standard` = single-pass extraction (fast, default).
-    /// `Thorough` = sliding window + detail pass (slower, more complete).
-    pub extraction_depth: ExtractionDepth,
-
     /// Maximum number of texts per embedding API call.
     /// Some providers limit batch size (e.g., some allow only 1-10).
     /// Default: 10
@@ -117,6 +102,24 @@ pub struct MemoryConfig {
     /// Number of unprocessed events in a session before auto-triggering compact.
     /// Set to 0 to disable auto-compact. Default: 20.
     pub compact_threshold: usize,
+
+    /// Minimum hours between meditation runs for the same user.
+    /// Set to 0 to disable cooldown. Default: 1.
+    pub meditation_cooldown_hours: u64,
+
+    /// Maximum number of episodes to process per meditation run.
+    /// Set to 0 to use the internal cap (100). Default: 20.
+    pub meditation_batch_size: usize,
+
+    /// Minimum significance threshold for episodes to be processed by meditation.
+    /// Episodes below this threshold are skipped. Default: 0.0 (process all).
+    pub meditation_min_significance: f32,
+
+    /// Minimum estimated token count before using LLM for compact.
+    /// Sessions with total content below this threshold use fallback (no LLM calls).
+    /// Token estimation: content_bytes / 4 + 10 per event.
+    /// Set to 0 to always use LLM. Default: 200.
+    pub compact_fallback_token_threshold: usize,
 
     /// RRF weight for the vector search channel. Default: 0.5.
     pub rrf_vector_weight: f64,
@@ -206,9 +209,12 @@ impl Default for MemoryConfig {
             pruning_strategy: PruningStrategy::default(),
             auto_prune: false,
             power_config: None,
-            extraction_depth: ExtractionDepth::default(),
             embed_batch_size: 10,
             compact_threshold: 20,
+            meditation_cooldown_hours: 1,
+            meditation_batch_size: 20,
+            meditation_min_significance: 0.0,
+            compact_fallback_token_threshold: 200,
             rrf_vector_weight: 0.5,
             rrf_fts_weight: 0.3,
             rrf_entity_weight: 0.2,
@@ -305,6 +311,11 @@ impl MemoryConfig {
                     )));
                 }
             }
+        }
+        if self.meditation_min_significance < 0.0 || self.meditation_min_significance > 1.0 {
+            return Err(MemoryError::Config(
+                "meditation_min_significance must be in the range [0.0, 1.0]".to_string(),
+            ));
         }
         // Prevent division-by-zero in RRF and candidate retrieval
         if self.rrf_k == 0 {

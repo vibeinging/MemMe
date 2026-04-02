@@ -93,7 +93,7 @@ impl ConnectionPool {
             // Use single-connection mode for file-backed databases too.
             // DuckDB multi-connection has snapshot isolation which prevents
             // read connections from seeing writes made by the write connection.
-            // This causes read-after-write failures in flows like add_smart.
+            // This causes read-after-write failures in flows like compact.
             let conn = Connection::open(&config.db_path).map_err(MemoryError::DuckDb)?;
             init(&conn)?;
 

@@ -21,11 +21,11 @@ fn api_pause() {
     std::thread::sleep(std::time::Duration::from_secs(2));
 }
 fn embedding_base_url() -> String {
-    std::env::var("EMBEDDING_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
+    std::env::var("EMBEDDING_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string())
 }
 
 fn llm_base_url() -> String {
-    std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "https://api.openai.com".to_string())
+    std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string())
 }
 
 fn embedding_model() -> String {
@@ -45,11 +45,11 @@ fn embedding_dims() -> usize {
 
 fn make_embedder() -> Arc<OpenAiEmbedder> {
     Arc::new(
-        OpenAiEmbedder::new(&api_key())
-            .with_base_url(&embedding_base_url())
+        OpenAiEmbedder::new(&api_key(), &embedding_base_url())
             .with_model(OpenAiModel::Custom {
                 name: embedding_model(),
                 dims: embedding_dims(),
+                send_dims: true,
             }),
     )
 }
@@ -297,152 +297,6 @@ fn test_real_multilingual_search() {
 
 #[test]
 #[ignore]
-fn test_real_smart_add_single_fact() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let store = make_store_no_graph();
-    let llm = make_llm();
-
-    let result = store
-        .add_smart(
-            "I moved to Beijing in 2025",
-            "user1",
-            None,
-            None,
-            None,
-            llm,
-            false,
-        )
-        .unwrap();
-
-    eprintln!(
-        "Smart add result: {} memories extracted",
-        result.memories.len()
-    );
-    for m in &result.memories {
-        eprintln!("  - {}", m.content);
-    }
-    assert!(
-        !result.memories.is_empty(),
-        "Should extract at least one fact from 'I moved to Beijing in 2025'"
-    );
-    // Verify the fact is searchable
-    let search_results = store
-        .search("where does the user live", SearchOptions::new("user1"))
-        .unwrap();
-    eprintln!("Search after smart add:");
-    for r in &search_results {
-        eprintln!("  score={:?} content={}", r.score, r.content);
-    }
-    assert!(!search_results.is_empty(), "Should find the extracted fact");
-}
-
-#[test]
-#[ignore]
-fn test_real_smart_add_conversation() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let store = make_store_no_graph();
-    let llm = make_llm();
-
-    let conversation = r#"
-User: Hi, I just started a new job at Google as a senior engineer.
-Assistant: Congratulations! That sounds exciting. What team are you on?
-User: I'm on the Cloud AI team. I'm also studying for my MBA at Stanford on weekends.
-Assistant: That's impressive! Balancing work and studies must be challenging.
-User: Yes, but I enjoy it. My wife Sarah is very supportive. We have two kids.
-"#;
-
-    let result = store
-        .add_smart(conversation, "user1", None, None, None, llm, false)
-        .unwrap();
-
-    eprintln!(
-        "Smart add conversation result: {} memories extracted",
-        result.memories.len()
-    );
-    for m in &result.memories {
-        eprintln!("  - {}", m.content);
-    }
-    assert!(
-        result.memories.len() >= 2,
-        "Should extract multiple facts from a conversation, got {}",
-        result.memories.len()
-    );
-}
-
-#[test]
-#[ignore]
-fn test_real_smart_update_existing() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let store = make_store_no_graph();
-    let llm = make_llm();
-
-    // First, add a fact
-    store
-        .add_smart(
-            "User: I drink coffee every day\nAssistant: Nice!",
-            "user1",
-            None,
-            None,
-            None,
-            llm.clone(),
-            false,
-        )
-        .unwrap();
-
-    let list_before = store
-        .list_traces(ListOptions::new("user1").limit(50))
-        .unwrap();
-    eprintln!("Memories before update:");
-    for m in &list_before {
-        eprintln!("  - {}", m.content);
-    }
-
-    api_pause();
-
-    // Now add an update that should modify the existing memory
-    let result = store
-        .add_smart(
-            "User: I actually switched from coffee to green tea recently.\nAssistant: That's a healthy change!",
-            "user1",
-            None,
-            None,
-            None,
-            llm,
-            false,
-        )
-        .unwrap();
-
-    eprintln!("Smart update result: {} memories", result.memories.len());
-    for m in &result.memories {
-        eprintln!("  - {}", m.content);
-    }
-
-    let list_after = store
-        .list_traces(ListOptions::new("user1").limit(50))
-        .unwrap();
-    eprintln!("Memories after update:");
-    for m in &list_after {
-        eprintln!("  - {}", m.content);
-    }
-
-    // The store should have handled the update (either updating existing or adding new)
-    assert!(
-        !list_after.is_empty(),
-        "Should have memories after smart update"
-    );
-    // Search for tea should find something
-    let tea_results = store.search("tea", SearchOptions::new("user1")).unwrap();
-    assert!(
-        !tea_results.is_empty(),
-        "Should find tea-related memory after update"
-    );
-}
-
-#[test]
-#[ignore]
 fn test_real_smart_add_messages() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
@@ -496,47 +350,6 @@ fn test_real_smart_add_messages() {
         !result.memories.is_empty(),
         "Should extract facts from chat messages"
     );
-}
-
-#[test]
-#[ignore]
-fn test_real_smart_chinese_content() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let store = make_store_no_graph();
-    let llm = make_llm();
-
-    let result = store
-        .add_smart(
-            "用户: 我在北京工作，喜欢吃火锅，周末经常去爬长城。\n助手: 听起来很有趣！",
-            "user1",
-            None,
-            None,
-            None,
-            llm,
-            false,
-        )
-        .unwrap();
-
-    eprintln!(
-        "Chinese smart add result: {} memories extracted",
-        result.memories.len()
-    );
-    for m in &result.memories {
-        eprintln!("  - {}", m.content);
-    }
-    assert!(
-        !result.memories.is_empty(),
-        "Should extract facts from Chinese content"
-    );
-
-    // Search in Chinese
-    let results = store.search("北京", SearchOptions::new("user1")).unwrap();
-    eprintln!("Search for '北京' after Chinese smart add:");
-    for r in &results {
-        eprintln!("  score={:?} content={}", r.score, r.content);
-    }
-    assert!(!results.is_empty(), "Should find Beijing-related memory");
 }
 
 // ============================================================
@@ -1058,67 +871,6 @@ fn test_real_empty_search_query() {
     assert!(
         !results.is_empty(),
         "Generic search should still return results"
-    );
-}
-
-#[test]
-#[ignore]
-fn test_real_long_content_smart() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let store = make_store_no_graph();
-    let llm = make_llm();
-
-    // Generate ~2000 chars of realistic text
-    let long_text = format!(
-        "User: {}\nAssistant: That's a lot of information! Let me note all of that.",
-        "I've been working on several projects this year. \
-         First, I completed the migration of our backend from Java to Rust, which improved \
-         performance by 40%. Then I led the design of our new microservices architecture \
-         using gRPC and Protocol Buffers. My team consists of 8 engineers, and we use \
-         Scrum methodology with two-week sprints. We deploy to AWS using EKS for Kubernetes \
-         orchestration. I also started learning Go for a side project, which is a CLI tool \
-         for managing Docker containers. On the personal side, I moved to San Francisco \
-         last month and adopted a rescue dog named Charlie. I enjoy running in Golden Gate \
-         Park and have completed two half-marathons this year. My wife works as a UX designer \
-         at Figma. We're planning to visit Japan next spring for cherry blossom season. \
-         I'm also reading 'Designing Data-Intensive Applications' by Martin Kleppmann, \
-         which has been incredibly useful for my work. My current goal is to get promoted \
-         to Staff Engineer by the end of the year. I've been mentoring two junior engineers \
-         on the team, helping them with system design concepts. We recently won an internal \
-         hackathon with a real-time collaboration tool built using CRDTs. I'm particularly \
-         interested in distributed systems and consensus algorithms like Raft and Paxos. \
-         Our team uses PostgreSQL as the primary database and Redis for caching. We also \
-         have a data pipeline built with Apache Kafka for event streaming."
-    );
-
-    eprintln!("Long text length: {} chars", long_text.len());
-
-    // This test may fail transiently due to API timeouts on large prompts.
-    // We retry once with a pause if the first attempt fails.
-    let result = match store.add_smart(&long_text, "user1", None, None, None, llm.clone(), false) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("First attempt failed ({}), retrying after pause...", e);
-            api_pause();
-            api_pause();
-            store
-                .add_smart(&long_text, "user1", None, None, None, llm, false)
-                .unwrap()
-        }
-    };
-
-    eprintln!(
-        "Long content smart add: {} memories extracted",
-        result.memories.len()
-    );
-    for m in &result.memories {
-        eprintln!("  - {}", m.content);
-    }
-    assert!(
-        result.memories.len() >= 3,
-        "Should extract multiple facts from long content, got {}",
-        result.memories.len()
     );
 }
 

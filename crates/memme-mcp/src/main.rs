@@ -36,8 +36,12 @@ fn main() -> Result<()> {
         std::process::exit(1);
     });
 
-    let base_url =
-        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into());
+    let embed_url = std::env::var("EMBEDDING_URL").expect(
+        "EMBEDDING_URL env var required (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)",
+    );
+    let llm_url = std::env::var("LLM_URL").expect(
+        "LLM_URL env var required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)",
+    );
 
     // Build store inside tokio runtime for OpenAI provider
     let rt = tokio::runtime::Runtime::new()?;
@@ -50,11 +54,11 @@ fn main() -> Result<()> {
     };
 
     let embedder: Arc<dyn Embedder> =
-        Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(&api_key).with_base_url(&base_url));
+        Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(&api_key, &embed_url));
 
     let llm_config = memme_llm::openai::OpenAIConfig {
         api_key: api_key.clone(),
-        base_url: base_url.trim_end_matches("/v1").to_string(),
+        base_url: llm_url,
         model: "gpt-4.1-nano".to_string(),
     };
     let llm = Arc::new(memme_llm::openai::OpenAIProvider::new(llm_config));

@@ -831,7 +831,18 @@ fn test_append_events_and_compact() {
         }
     }
 
-    let store = make_store(384);
+    // Use compact_fallback_token_threshold: 0 to always use LLM for compact in this test
+    let config = MemoryConfig {
+        db_path: ":memory:".into(),
+        collection_name: "test".into(),
+        embedding_dims: 384,
+        dedup_threshold: 0.15,
+        default_limit: 10,
+        compact_fallback_token_threshold: 0,
+        ..Default::default()
+    };
+    let embedder = Arc::new(MockEmbedder::new(384));
+    let store = MemoryStore::new(config, embedder).unwrap();
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -901,130 +912,10 @@ fn test_append_events_and_compact() {
     );
 }
 
-#[test]
-fn test_custom_fact_prompt() {
-    use memme_llm::{LlmError, Message as LlmMessage};
-    use std::sync::Mutex;
-
-    struct CapturingMockLlm {
-        responses: Mutex<Vec<String>>,
-        captured_system_prompts: Mutex<Vec<String>>,
-    }
-    impl CapturingMockLlm {
-        fn new(responses: Vec<String>) -> Self {
-            Self {
-                responses: Mutex::new(responses),
-                captured_system_prompts: Mutex::new(Vec::new()),
-            }
-        }
-    }
-    impl memme_llm::LlmProvider for CapturingMockLlm {
-        fn generate(
-            &self,
-            messages: &[LlmMessage],
-            _options: &memme_llm::GenerateOptions,
-        ) -> std::result::Result<String, LlmError> {
-            // Capture the system prompt
-            if let Some(sys_msg) = messages
-                .iter()
-                .find(|m| matches!(m.role, memme_llm::MessageRole::System))
-            {
-                self.captured_system_prompts
-                    .lock()
-                    .unwrap()
-                    .push(sys_msg.content.clone());
-            }
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(LlmError::NotAvailable("no more mock responses".into()))
-            } else {
-                Ok(responses.remove(0))
-            }
-        }
-        fn name(&self) -> &str {
-            "capturing_mock"
-        }
-    }
-
-    let custom_prompt = "You are a CUSTOM fact extractor. Extract facts.";
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        custom_fact_extraction_prompt: Some(custom_prompt.to_string()),
-        custom_update_memory_prompt: None,
-        enable_graph: false,
-        ..Default::default()
-    };
-    let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(384));
-    let store = MemoryStore::new(config, embedder).unwrap();
-
-    let fact_response = r#"{"facts": ["Name is Bob"]}"#.to_string();
-    let update_response = r#"{
-        "memory": [
-            {"id": "new1", "text": "Name is Bob", "event": "ADD"}
-        ]
-    }"#
-    .to_string();
-
-    let llm = Arc::new(CapturingMockLlm::new(vec![fact_response, update_response]));
-    let llm_clone = llm.clone();
-
-    let result = store
-        .add_smart("Hi, I am Bob.", "user1", None, None, None, llm, false)
-        .unwrap();
-
-    assert_eq!(result.memories.len(), 1);
-    assert_eq!(result.memories[0].content, "Name is Bob");
-
-    // Verify the custom prompt was used for fact extraction (first LLM call)
-    let captured = llm_clone.captured_system_prompts.lock().unwrap();
-    assert!(
-        captured.len() >= 1,
-        "Should have captured at least 1 system prompt"
-    );
-    assert_eq!(
-        captured[0], custom_prompt,
-        "First LLM call should use the custom fact extraction prompt"
-    );
-}
-
-// ── Unified add_smart + graph tests ──
+// ── Graph search tests ──
 
 mod smart_graph_tests {
     use super::*;
-    use memme_llm::{LlmError, Message as LlmMessage};
-    use std::sync::Mutex;
-
-    struct MockLlm {
-        responses: Mutex<Vec<String>>,
-    }
-    impl MockLlm {
-        fn new(responses: Vec<String>) -> Self {
-            Self {
-                responses: Mutex::new(responses),
-            }
-        }
-    }
-    impl memme_llm::LlmProvider for MockLlm {
-        fn generate(
-            &self,
-            _messages: &[LlmMessage],
-            _options: &memme_llm::GenerateOptions,
-        ) -> std::result::Result<String, LlmError> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(LlmError::NotAvailable("no more mock responses".into()))
-            } else {
-                Ok(responses.remove(0))
-            }
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-    }
 
     fn make_store_with_graph(enable_graph: bool) -> MemoryStore {
         let config = MemoryConfig {
@@ -1038,77 +929,6 @@ mod smart_graph_tests {
         };
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(384));
         MemoryStore::new(config, embedder).unwrap()
-    }
-
-    #[test]
-    fn test_smart_add_with_graph() {
-        let store = make_store_with_graph(true);
-
-        let fact_response = r#"{"facts": ["Alice works at Google"]}"#.to_string();
-        let update_response = r#"{
-            "memory": [
-                {"id": "new1", "text": "Alice works at Google", "event": "ADD"}
-            ]
-        }"#
-        .to_string();
-        let graph_response = r#"{"entities": [{"name": "Alice", "type": "person"}, {"name": "Google", "type": "organization"}], "relationships": [{"source": "Alice", "relation": "works_at", "target": "Google"}]}"#.to_string();
-
-        let llm = Arc::new(MockLlm::new(vec![
-            fact_response,
-            update_response,
-            graph_response,
-        ]));
-
-        let result = store
-            .add_smart(
-                "Alice works at Google.",
-                "user1",
-                None,
-                None,
-                None,
-                llm,
-                false,
-            )
-            .unwrap();
-
-        assert_eq!(result.memories.len(), 1);
-        assert_eq!(result.memories[0].content, "Alice works at Google");
-
-        assert!(result.graph.is_some());
-        let graph = result.graph.unwrap();
-        assert_eq!(graph.entities.len(), 2);
-        assert_eq!(graph.relations.len(), 1);
-        assert_eq!(graph.relations[0].relation_type, "works_at");
-    }
-
-    #[test]
-    fn test_smart_add_without_graph() {
-        let store = make_store_with_graph(false);
-
-        let fact_response = r#"{"facts": ["Alice works at Google"]}"#.to_string();
-        let update_response = r#"{
-            "memory": [
-                {"id": "new1", "text": "Alice works at Google", "event": "ADD"}
-            ]
-        }"#
-        .to_string();
-
-        let llm = Arc::new(MockLlm::new(vec![fact_response, update_response]));
-
-        let result = store
-            .add_smart(
-                "Alice works at Google.",
-                "user1",
-                None,
-                None,
-                None,
-                llm,
-                false,
-            )
-            .unwrap();
-
-        assert_eq!(result.memories.len(), 1);
-        assert!(result.graph.is_none());
     }
 
     #[test]

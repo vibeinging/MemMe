@@ -27,11 +27,17 @@ mod lifecycle;
 mod procedural;
 mod search;
 mod session_ops;
-mod smart;
 mod stream_ops;
 mod sync;
 // mod recall_ops; // removed: use search() with SearchOptions instead
+mod diagnose;
+mod import_ops;
 mod meditation_ops;
+mod reflect_ops;
+mod replica_ops;
+
+pub use diagnose::{CheckResult, DiagnoseReport};
+pub use reflect_ops::{LearnFromFeedbackOptions, LearnFromFeedbackResult, ReflectOptions, ReflectResult};
 
 use battery::DeferredOp;
 use helpers::{compute_retention, initial_stability_for_tier};
@@ -233,8 +239,7 @@ impl MemoryStore {
             .storage
             .get_config("llm_base_url")
             .ok()
-            .flatten()
-            .unwrap_or_else(|| "https://api.openai.com".to_string());
+            .flatten()?;
         Some((api_key, model, base_url))
     }
 

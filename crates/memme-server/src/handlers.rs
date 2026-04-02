@@ -105,6 +105,13 @@ pub async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok", "service": "memme" }))
 }
 
+pub async fn diagnose(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let report = tokio::task::spawn_blocking(move || state.store.diagnose())
+        .await
+        .unwrap();
+    Json(report)
+}
+
 // ── Config Handlers ──
 
 #[derive(Deserialize)]
@@ -127,7 +134,16 @@ pub async fn set_llm_config(
     Json(req): Json<SetLlmRequest>,
 ) -> impl IntoResponse {
     let model = req.model.as_deref().unwrap_or("gpt-4.1-nano");
-    let base_url = req.base_url.as_deref().unwrap_or("https://api.openai.com");
+    let base_url = match req.base_url.as_deref() {
+        Some(url) => url,
+        None => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "base_url required (full endpoint URL)"})),
+            )
+                .into_response();
+        }
+    };
 
     // Create OpenAI provider and configure the store
     let llm_config = memme_llm::openai::OpenAIConfig {
@@ -351,25 +367,6 @@ pub async fn import_memories(
     }
 }
 
-// ── Smart (LLM-powered) Handlers ──
-
-#[derive(Deserialize)]
-pub struct SmartAddRequest {
-    pub text: String,
-    pub user_id: String,
-    pub agent_id: Option<String>,
-    pub run_id: Option<String>,
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-pub struct SmartMessagesRequest {
-    pub messages: Vec<ChatMessage>,
-    pub user_id: String,
-    pub agent_id: Option<String>,
-    pub run_id: Option<String>,
-    pub metadata: Option<serde_json::Value>,
-}
 
 #[derive(Deserialize)]
 pub struct GraphAddRequest {
@@ -405,60 +402,6 @@ pub struct FrequencyQuery {
 #[derive(Deserialize)]
 pub struct TopEntitiesQuery {
     pub limit: Option<usize>,
-}
-
-pub async fn smart_add(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SmartAddRequest>,
-) -> impl IntoResponse {
-    let llm = match state.store.llm() {
-        Some(l) => l,
-        None => {
-            return err_json(
-                StatusCode::BAD_REQUEST,
-                "No LLM configured. Call POST /v1/config/llm first.",
-            )
-            .into_response()
-        }
-    };
-    match state.store.add_smart(
-        &req.text,
-        &req.user_id,
-        req.agent_id.as_deref(),
-        req.run_id.as_deref(),
-        req.metadata,
-        llm,
-        false,
-    ) {
-        Ok(result) => ok_json(result).into_response(),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
-
-pub async fn smart_add_messages(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SmartMessagesRequest>,
-) -> impl IntoResponse {
-    let session_id = req
-        .run_id
-        .as_deref()
-        .unwrap_or(&uuid::Uuid::new_v4().to_string())
-        .to_string();
-
-    // Phase 1: Append events
-    if let Err(e) =
-        state
-            .store
-            .append_events(&session_id, &req.messages, &req.user_id, req.metadata)
-    {
-        return err_json(StatusCode::BAD_REQUEST, e.to_string()).into_response();
-    }
-
-    // Phase 2: Compact
-    match state.store.compact(&session_id) {
-        Ok(result) => ok_json(result).into_response(),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
 }
 
 pub async fn graph_add(

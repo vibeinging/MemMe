@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::types::MemoryExport;
+use crate::types::{FullExport, FullImportResult, MemoryExport};
 
 use super::helpers::chrono_now;
 
@@ -22,6 +22,38 @@ impl super::MemoryStore {
     ) -> Result<Vec<MemoryExport>> {
         self.storage
             .export_memories_with_privacy(user_id, include_local)
+    }
+
+    /// Export all data layers (memories, sessions, events, episodes, entities,
+    /// relations, identity traits, sources) as a single `FullExport`.
+    pub fn full_export(&self, user_id: Option<&str>) -> Result<FullExport> {
+        self.storage
+            .full_export(user_id, &self.config.collection_name)
+    }
+
+    /// Import all data layers from a `FullExport`.
+    /// Inserts in dependency order: sources -> sessions -> events -> episodes ->
+    /// memories -> entities -> relations -> identity traits.
+    /// Existing records (by primary key) are skipped.
+    pub fn full_import(&self, export: &FullExport) -> Result<FullImportResult> {
+        let sources = self.storage.import_sources(&export.sources)?;
+        let sessions = self.storage.import_sessions(&export.sessions)?;
+        let events = self.storage.import_events(&export.events)?;
+        let episodes = self.storage.import_episodes(&export.episodes)?;
+        let memories = self.storage.import_memories(&export.memories)?;
+        let entities = self.storage.import_entities(&export.entities)?;
+        let relations = self.storage.import_relations(&export.relations)?;
+        let identity_traits = self.storage.import_identity_traits(&export.identity_traits)?;
+        Ok(FullImportResult {
+            sources,
+            sessions,
+            events,
+            episodes,
+            memories,
+            entities,
+            relations,
+            identity_traits,
+        })
     }
 
     /// Export all changes since the given sync version as a `SyncDelta`.

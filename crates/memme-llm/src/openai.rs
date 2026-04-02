@@ -78,11 +78,15 @@ impl std::fmt::Debug for OpenAIConfig {
 }
 
 impl OpenAIConfig {
-    pub fn new(api_key: impl Into<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             api_key: api_key.into(),
-            base_url: "https://api.openai.com".to_string(),
-            model: "gpt-4o-mini".to_string(),
+            base_url: base_url.into(),
+            model: model.into(),
         }
     }
 }
@@ -96,7 +100,8 @@ pub struct OpenAIProvider {
 }
 
 impl OpenAIProvider {
-    pub fn new(config: OpenAIConfig) -> Self {
+    pub fn new(mut config: OpenAIConfig) -> Self {
+        config.base_url = config.base_url.trim_end_matches('/').to_string();
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(15))
@@ -232,7 +237,7 @@ impl LlmProvider for OpenAIProvider {
         messages: &[Message],
         options: &GenerateOptions,
     ) -> Result<String, LlmError> {
-        let url = format!("{}/v1/chat/completions", self.config.base_url);
+        let url: &str = &self.config.base_url;
         let body = if let Some(ref proto) = self.protocol {
             proto.build_request(&self.config.model, messages, options)
         } else {
