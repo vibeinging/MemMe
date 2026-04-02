@@ -35,9 +35,26 @@ fn days_to_ymd(days_since_epoch: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Strip optional markdown code fences (```json ... ``` or ``` ... ```).
+/// Strip optional markdown code fences (```json ... ``` or ``` ... ```)
+/// and reasoning model think blocks (`<think>...</think>`).
 pub(crate) fn strip_code_fences(s: &str) -> String {
-    let trimmed = s.trim();
+    // Strip <think>...</think> blocks first (reasoning models like qwen3, o1)
+    let mut cleaned = s.to_string();
+    while let Some(start) = cleaned.find("<think>") {
+        if let Some(end) = cleaned.find("</think>") {
+            cleaned = format!(
+                "{}{}",
+                &cleaned[..start],
+                &cleaned[end + "</think>".len()..]
+            );
+        } else {
+            // Unclosed <think> — strip from <think> to end
+            cleaned = cleaned[..start].to_string();
+            break;
+        }
+    }
+
+    let trimmed = cleaned.trim();
     let without_prefix = trimmed
         .strip_prefix("```json")
         .or_else(|| trimmed.strip_prefix("```"))

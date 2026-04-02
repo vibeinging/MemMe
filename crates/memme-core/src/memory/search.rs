@@ -30,9 +30,12 @@ impl super::MemoryStore {
             let rows = self
                 .storage
                 .vector_search(embedding, user_id, None, None, None, None, limit)?;
+            // Exclude narrative-resolution memories (episode summaries from compact)
+            // so reconciliation only sees atomic granular memories.
             results.push(
                 rows.into_iter()
                     .map(super::helpers::row_to_result)
+                    .filter(|r| r.resolution != Resolution::Narrative)
                     .collect(),
             );
         }

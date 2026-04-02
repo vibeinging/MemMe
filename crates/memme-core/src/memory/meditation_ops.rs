@@ -212,8 +212,11 @@ impl super::MemoryStore {
         }
 
         if all_facts.is_empty() {
+            tracing::warn!("No facts extracted from episodes — skipping reconciliation");
             return Ok(());
         }
+
+        tracing::info!("Extracted {} facts for reconciliation", all_facts.len());
 
         // ── Phase B: Reconcile facts against existing memories ──
         let new_memories =
@@ -320,6 +323,8 @@ impl super::MemoryStore {
                 parse_update_memory_response(raw)
             })
             .map_err(|e| MemoryError::Llm(e.to_string()))?;
+
+        tracing::info!("Reconciliation returned {} operations", update_response.memory.len());
 
         // Execute operations
         let mut results = Vec::new();
