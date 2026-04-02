@@ -15,7 +15,7 @@ The `bundled` mode works out of the box — `cargo build` and done. MemMe-DB is 
 
 ## vex Extension
 
-The `vex/` directory contains a DuckDB extension that adds:
+The `vex/` directory is a **self-developed** DuckDB extension by the MemMe team. It adds:
 
 - **HNSW index** — `CREATE INDEX ... USING HNSW (embedding)` for approximate nearest neighbor search
 - **Filtered HNSW** — `CREATE INDEX ... USING HNSW (embedding, user_id)` with ACORN-style in-graph metadata filtering
