@@ -223,26 +223,30 @@ impl super::MemoryStore {
                 continue;
             }
 
-            // ── Step 2: Reconcile in small batches ──
-            // Each batch sees memories created by previous batches,
-            // just like v10 add_smart processed ~10 turns at a time.
+            // ── Step 2: Store facts directly via add() ──
+            // Vector dedup (cosine distance < threshold) handles duplicates.
+            // LLM reconciliation was found to over-merge facts, losing temporal
+            // and relational details that hurt multi-hop and open-domain recall.
             let mut all_new_memories: Vec<MemoryResult> = Vec::new();
 
-            for chunk in facts.chunks(RECONCILE_BATCH) {
-                let chunk_meta: HashMap<String, FactMeta> = chunk
-                    .iter()
-                    .filter_map(|f| fact_meta.get(f).map(|m| (f.clone(), m.clone())))
-                    .collect();
-
-                match self.reconcile_facts(llm, chunk, &chunk_meta, &options.user_id, record) {
-                    Ok(new_memories) => {
-                        all_new_memories.extend(new_memories);
+            for fact in &facts {
+                let mut add_opts = AddOptions::new(&options.user_id);
+                if let Some(meta) = fact_meta.get(fact) {
+                    if let Some(ref et) = meta.event_time {
+                        add_opts = add_opts.event_time(et);
+                    }
+                    if let Some(ref sid) = meta.session_id {
+                        add_opts = add_opts.session_id(sid);
+                    }
+                    add_opts = add_opts.importance(meta.significance);
+                }
+                match self.add(fact, add_opts) {
+                    Ok(result) => {
+                        all_new_memories.push(result);
+                        record.memories_created += 1;
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Episode {}/{}: reconciliation batch failed: {e}",
-                            ep_idx + 1, episodes.len()
-                        );
+                        tracing::warn!(text = %fact, error = %e, "Failed to add memory, skipping");
                     }
                 }
             }
