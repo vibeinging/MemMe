@@ -15,18 +15,13 @@ use crate::text_utils;
 use crate::types::*;
 
 /// Metadata carried per-fact for operation execution.
+#[derive(Clone)]
 struct FactMeta {
     event_time: Option<String>,
     session_id: Option<String>,
     significance: f32,
 }
 
-/// Per-episode metadata used during batched fact extraction.
-struct EpisodeMeta {
-    conversation_time: String,
-    session_id: Option<String>,
-    significance: f32,
-}
 
 impl super::MemoryStore {
     /// Start a meditation session. This is the orchestrator that:
@@ -115,12 +110,19 @@ impl super::MemoryStore {
         Ok(record)
     }
 
-    /// LLM-dependent meditation operations.
+    /// LLM-dependent meditation operations — small-batch processing.
     ///
-    /// Three phases:
-    /// A. Extract facts from episodes (batched to reduce LLM calls)
-    /// B. Reconcile all facts against existing memories (single LLM call)
-    /// C. Build entity graph and link entities to memories (batched)
+    /// Mimics v10 add_smart behavior: extract facts from episodes, then
+    /// reconcile in small batches (~10 facts each) against the growing
+    /// memory base. Small batches produce better ADD/UPDATE decisions
+    /// because the LLM can focus on fewer facts at a time.
+    ///
+    /// Flow per episode:
+    /// 1. Extract facts (1 LLM call)
+    /// 2. Split facts into batches of ~10
+    /// 3. For each batch: reconcile against existing memories (1 LLM call)
+    ///    → later batches see memories created by earlier ones
+    /// 4. Build entity graph (1 LLM call, if enabled)
     fn meditate_with_llm(
         &self,
         options: &MeditateOptions,
@@ -132,8 +134,8 @@ impl super::MemoryStore {
             self.config.meditation_min_significance,
             self.config.meditation_batch_size,
         )?;
+        tracing::info!("Found {} unmeditated episodes for {}", episodes.len(), options.user_id);
         if episodes.is_empty() {
-            tracing::info!("No unmeditated episodes for user {}", options.user_id);
             return Ok(());
         }
 
@@ -143,18 +145,13 @@ impl super::MemoryStore {
             None
         };
 
-        // ── Phase A: Extract facts from episodes (batched) ──
-        //
-        // Instead of 1 LLM call per episode, we batch episode texts together
-        // and extract facts from each batch in a single call.
-        // Token budget per batch: ~6000 tokens to stay well within context limits.
-        const BATCH_TOKEN_BUDGET: usize = 6000;
+        // Small batch size for reconciliation — matches v10 add_smart behavior
+        // where each add_smart call processed ~10 turns → ~5-10 facts.
+        const RECONCILE_BATCH: usize = 10;
 
-        // Collect episode texts and metadata
-        let mut episode_entries: Vec<(String, EpisodeMeta)> = Vec::new();
-        let mut graph_texts: Vec<String> = Vec::new();
+        let mut episode_ids_to_mark: Vec<String> = Vec::new();
 
-        for episode in &episodes {
+        for (ep_idx, episode) in episodes.iter().enumerate() {
             let events = self.storage.get_events_by_ids(&episode.event_ids)?;
             if events.is_empty() {
                 let _ = self.storage.mark_episode_meditated(&episode.episode_id);
@@ -170,171 +167,105 @@ impl super::MemoryStore {
             let conversation_time = events
                 .iter()
                 .find_map(|e| e.event_time.as_deref())
-                .unwrap_or(&episode.started_at)
-                .to_string();
+                .unwrap_or(&episode.started_at);
 
             let session_id = episode.session_ids.first().cloned();
 
-            episode_entries.push((
-                text.clone(),
-                EpisodeMeta {
-                    conversation_time,
-                    session_id,
-                    significance: episode.significance,
-                },
-            ));
-
-            if graph_processor.is_some() {
-                graph_texts.push(text);
-            }
-
-            if let Err(e) = self.storage.mark_episode_meditated(&episode.episode_id) {
-                tracing::warn!("Failed to mark episode {} as meditated: {e}", episode.episode_id);
-            }
-        }
-
-        // Batch episodes by token budget and extract facts per batch
-        let mut all_facts: Vec<String> = Vec::new();
-        let mut fact_meta: HashMap<String, FactMeta> = HashMap::new();
-
-        let mut batch_text = String::new();
-        let mut batch_meta: Vec<&EpisodeMeta> = Vec::new();
-        let mut batch_tokens: usize = 0;
-        let mut batch_count: usize = 0;
-
-        for (text, meta) in &episode_entries {
-            let text_tokens = text.len() / 4 + 10;
-
-            // Flush current batch if adding this episode would exceed budget
-            if batch_tokens > 0 && batch_tokens + text_tokens > BATCH_TOKEN_BUDGET {
-                batch_count += 1;
-                self.extract_facts_from_batch(
-                    llm, &batch_text, &batch_meta, &mut all_facts, &mut fact_meta, batch_count,
-                )?;
-                batch_text.clear();
-                batch_meta.clear();
-                batch_tokens = 0;
-            }
-
-            if !batch_text.is_empty() {
-                batch_text.push_str("\n---\n");
-            }
-            batch_text.push_str(text);
-            batch_meta.push(meta);
-            batch_tokens += text_tokens;
-        }
-
-        // Flush remaining batch
-        if !batch_text.is_empty() {
-            batch_count += 1;
-            self.extract_facts_from_batch(
-                llm, &batch_text, &batch_meta, &mut all_facts, &mut fact_meta, batch_count,
-            )?;
-        }
-
-        tracing::info!(
-            "Extracted {} facts from {} episodes in {} batches",
-            all_facts.len(), episode_entries.len(), batch_count
-        );
-
-        if all_facts.is_empty() {
-            tracing::warn!("No facts extracted from episodes — skipping reconciliation");
-            return Ok(());
-        }
-
-        // ── Phase B: Reconcile facts against existing memories ──
-        let new_memories =
-            self.reconcile_facts(llm, &all_facts, &fact_meta, &options.user_id, record)?;
-
-        // ── Phase C: Graph extraction (batched) ──
-        if let Some(ref gp) = graph_processor {
-            let mut graph_batch = String::new();
-            let mut graph_batch_tokens: usize = 0;
-
-            for text in &graph_texts {
-                let text_tokens = text.len() / 4 + 10;
-
-                if graph_batch_tokens > 0 && graph_batch_tokens + text_tokens > BATCH_TOKEN_BUDGET {
-                    self.process_graph_batch(gp, &graph_batch, &options.user_id, &new_memories, record);
-                    graph_batch.clear();
-                    graph_batch_tokens = 0;
+            // ── Step 1: Extract all facts from this episode ──
+            let extracted = match self.extract_facts_from_episode(
+                llm,
+                &text,
+                self.config.custom_fact_extraction_prompt.as_deref(),
+                Some(conversation_time),
+            ) {
+                Ok(facts) => facts,
+                Err(e) => {
+                    tracing::warn!(
+                        "Episode {}/{}: fact extraction failed: {e}, skipping",
+                        ep_idx + 1, episodes.len()
+                    );
+                    continue;
                 }
+            };
 
-                if !graph_batch.is_empty() {
-                    graph_batch.push_str("\n---\n");
+            let mut facts: Vec<String> = Vec::new();
+            let mut fact_meta: HashMap<String, FactMeta> = HashMap::new();
+
+            for fact in extracted {
+                if fact.text.trim().is_empty() {
+                    continue;
                 }
-                graph_batch.push_str(text);
-                graph_batch_tokens += text_tokens;
+                let event_time = fact
+                    .happened_at
+                    .or_else(|| text_utils::extract_iso_date_from_text(&fact.text))
+                    .or_else(|| Some(conversation_time.to_string()));
+
+                if !fact_meta.contains_key(&fact.text) {
+                    fact_meta.insert(
+                        fact.text.clone(),
+                        FactMeta {
+                            event_time,
+                            session_id: session_id.clone(),
+                            significance: episode.significance,
+                        },
+                    );
+                    facts.push(fact.text);
+                }
             }
 
-            if !graph_batch.is_empty() {
-                self.process_graph_batch(gp, &graph_batch, &options.user_id, &new_memories, record);
-            }
-        }
+            tracing::info!(
+                "Episode {}/{}: extracted {} facts",
+                ep_idx + 1, episodes.len(), facts.len()
+            );
 
-        Ok(())
-    }
-
-    /// Extract facts from a batched text and accumulate into all_facts/fact_meta.
-    fn extract_facts_from_batch(
-        &self,
-        llm: &Arc<dyn LlmProvider>,
-        batch_text: &str,
-        batch_meta: &[&EpisodeMeta],
-        all_facts: &mut Vec<String>,
-        fact_meta: &mut HashMap<String, FactMeta>,
-        batch_num: usize,
-    ) -> Result<()> {
-        // Use the earliest conversation time from the batch
-        let conversation_time = batch_meta
-            .iter()
-            .map(|m| m.conversation_time.as_str())
-            .min()
-            .unwrap_or("");
-
-        let extracted = match self.extract_facts_from_episode(
-            llm,
-            batch_text,
-            self.config.custom_fact_extraction_prompt.as_deref(),
-            Some(conversation_time),
-        ) {
-            Ok(facts) => facts,
-            Err(e) => {
-                tracing::warn!(batch = batch_num, error = %e, "Fact extraction failed for batch");
-                return Ok(());
-            }
-        };
-
-        // Use the first episode's metadata as default for all facts in the batch
-        let default_meta = batch_meta.first().unwrap();
-        let avg_significance: f32 =
-            batch_meta.iter().map(|m| m.significance).sum::<f32>() / batch_meta.len() as f32;
-
-        for fact in extracted {
-            if fact.text.trim().is_empty() {
+            if facts.is_empty() {
+                episode_ids_to_mark.push(episode.episode_id.clone());
                 continue;
             }
-            let event_time = fact
-                .happened_at
-                .or_else(|| text_utils::extract_iso_date_from_text(&fact.text))
-                .or_else(|| Some(conversation_time.to_string()));
 
-            if !fact_meta.contains_key(&fact.text) {
-                fact_meta.insert(
-                    fact.text.clone(),
-                    FactMeta {
-                        event_time,
-                        session_id: default_meta.session_id.clone(),
-                        significance: avg_significance,
-                    },
-                );
-                all_facts.push(fact.text);
+            // ── Step 2: Reconcile in small batches ──
+            // Each batch sees memories created by previous batches,
+            // just like v10 add_smart processed ~10 turns at a time.
+            let mut all_new_memories: Vec<MemoryResult> = Vec::new();
+
+            for chunk in facts.chunks(RECONCILE_BATCH) {
+                let chunk_meta: HashMap<String, FactMeta> = chunk
+                    .iter()
+                    .filter_map(|f| fact_meta.get(f).map(|m| (f.clone(), m.clone())))
+                    .collect();
+
+                match self.reconcile_facts(llm, chunk, &chunk_meta, &options.user_id, record) {
+                    Ok(new_memories) => {
+                        all_new_memories.extend(new_memories);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Episode {}/{}: reconciliation batch failed: {e}",
+                            ep_idx + 1, episodes.len()
+                        );
+                    }
+                }
+            }
+
+            // ── Step 3: Graph extraction + entity linking ──
+            if let Some(ref gp) = graph_processor {
+                self.process_graph_batch(gp, &text, &options.user_id, &all_new_memories, record);
+            }
+
+            episode_ids_to_mark.push(episode.episode_id.clone());
+        }
+
+        // Mark episodes as meditated only after processing completes
+        for episode_id in &episode_ids_to_mark {
+            if let Err(e) = self.storage.mark_episode_meditated(episode_id) {
+                tracing::warn!("Failed to mark episode {episode_id} as meditated: {e}");
             }
         }
+
         Ok(())
     }
 
-    /// Process a graph extraction batch and link entities to memories.
+    /// Process graph extraction for an episode and link entities to memories.
     fn process_graph_batch(
         &self,
         gp: &crate::graph::GraphProcessor,
@@ -372,7 +303,7 @@ impl super::MemoryStore {
                     }
                 }
             }
-            Err(e) => tracing::warn!("Graph extraction failed for batch: {e}"),
+            Err(e) => tracing::warn!("Graph extraction failed: {e}"),
         }
     }
 
@@ -421,9 +352,12 @@ impl super::MemoryStore {
             } else {
                 get_update_memory_messages(facts, &indexed_old_memories)
             };
+
+        // Scale output budget: each fact generates ~50 output tokens
+        let output_budget = (facts.len() * 50 + 500).clamp(1024, 8192);
         let config = StructuredGenConfig {
             base_temperature: Some(0.1),
-            max_tokens: Some(2048),
+            max_tokens: Some(output_budget),
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };
@@ -433,7 +367,7 @@ impl super::MemoryStore {
             })
             .map_err(|e| MemoryError::Llm(e.to_string()))?;
 
-        tracing::info!("Reconciliation returned {} operations", update_response.memory.len());
+        tracing::debug!("Reconciliation: {} operations for {} facts", update_response.memory.len(), facts.len());
 
         // Execute operations
         let mut results = Vec::new();
@@ -512,9 +446,13 @@ impl super::MemoryStore {
             get_fact_retrieval_messages_with_time(text, conversation_time)
         };
 
+        // Scale max_tokens based on input length: more input → more facts → more output needed
+        let input_tokens = text.len() / 4;
+        let scaled_max = (input_tokens * 2).clamp(1024, 8192);
+
         let config = StructuredGenConfig {
             base_temperature: Some(0.1),
-            max_tokens: Some(2048),
+            max_tokens: Some(scaled_max),
             response_format: Some(ResponseFormat::Json),
             ..Default::default()
         };

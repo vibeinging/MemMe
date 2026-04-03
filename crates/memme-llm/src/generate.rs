@@ -51,11 +51,12 @@ impl StructuredGenConfig {
     }
 }
 
-/// Generate a structured response from an LLM with automatic retry on parse failure.
+/// Generate a structured response from an LLM with automatic retry.
 ///
-/// On each parse failure, the assistant's raw output and a user message describing
-/// the error are appended to the conversation, giving the model context about what
-/// went wrong. Temperature is also bumped to encourage different output.
+/// Retries on both **parse failures** (malformed JSON) and **transient network
+/// errors** (rate limits, timeouts, server errors). Parse failures append the
+/// failed output + error context to the conversation so the model can self-correct.
+/// Network errors use exponential backoff with 25% jitter.
 ///
 /// # Arguments
 /// * `llm` — the LLM provider to call
@@ -64,8 +65,8 @@ impl StructuredGenConfig {
 /// * `parse` — closure that attempts to parse the raw LLM output into `T`
 ///
 /// # Errors
-/// * `LlmError` from `generate()` propagates immediately (network/provider errors)
-/// * After `max_retries` exhausted, returns `LlmError::ParseError`
+/// * Non-retryable `LlmError` variants (`NotAvailable`, `ConfigError`) propagate immediately
+/// * After `max_retries` exhausted, returns the last error
 pub fn generate_structured<T>(
     llm: &dyn LlmProvider,
     messages: &[Message],
@@ -73,14 +74,29 @@ pub fn generate_structured<T>(
     parse: impl Fn(&str) -> Result<T, String>,
 ) -> Result<T, LlmError> {
     let mut conversation: Vec<Message> = messages.to_vec();
-    let max_attempts = config.max_retries + 1; // first attempt + retries
+    let max_attempts = config.max_retries + 1;
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
         let options = config.options_for_attempt(attempt);
 
-        // LlmError from generate() propagates immediately (network errors)
-        let raw = llm.generate(&conversation, &options)?;
+        // Call LLM — retry transient errors, propagate permanent ones
+        let raw = match llm.generate(&conversation, &options) {
+            Ok(raw) => raw,
+            Err(e) => {
+                if !is_retryable(&e) || attempt + 1 >= max_attempts {
+                    return Err(e);
+                }
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    error = %e,
+                    provider = llm.name(),
+                    "LLM request failed, retrying after backoff"
+                );
+                backoff_sleep(attempt);
+                continue;
+            }
+        };
 
         match parse(&raw) {
             Ok(value) => return Ok(value),
@@ -97,7 +113,6 @@ pub fn generate_structured<T>(
                     );
 
                     // Append the failed output so the model sees what it produced.
-                    // Truncate to 500 chars to avoid context explosion with large outputs.
                     let truncated_raw = if raw.chars().count() > 500 {
                         let prefix: String = raw.chars().take(500).collect();
                         format!("{prefix}... [truncated, {} total chars]", raw.len())
@@ -109,7 +124,6 @@ pub fn generate_structured<T>(
                         content: truncated_raw,
                     });
 
-                    // Append error context and retry instruction
                     conversation.push(Message {
                         role: MessageRole::User,
                         content: format!(
@@ -126,6 +140,32 @@ pub fn generate_structured<T>(
         "Failed to parse after {} attempts. Last error: {last_error}",
         max_attempts,
     )))
+}
+
+/// Whether an LlmError is transient and worth retrying.
+fn is_retryable(e: &LlmError) -> bool {
+    matches!(e, LlmError::RequestFailed(_) | LlmError::Timeout)
+}
+
+/// Exponential backoff with 25% jitter: 500ms, 1s, 2s, 4s... capped at 16s.
+fn backoff_sleep(attempt: u32) {
+    let base_ms: u64 = 500 * 2u64.pow(attempt);
+    let capped = base_ms.min(16_000);
+    // 25% jitter to avoid thundering herd
+    let jitter = (capped as f64 * 0.25 * rand_f64()) as u64;
+    let delay = std::time::Duration::from_millis(capped + jitter);
+    std::thread::sleep(delay);
+}
+
+/// Simple pseudo-random f64 in [0, 1) without pulling in the rand crate.
+fn rand_f64() -> f64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::SystemTime;
+    let mut hasher = DefaultHasher::new();
+    SystemTime::now().hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    (hasher.finish() % 10000) as f64 / 10000.0
 }
 
 #[cfg(test)]
