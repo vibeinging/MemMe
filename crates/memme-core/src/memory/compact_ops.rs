@@ -84,9 +84,16 @@ impl super::MemoryStore {
             .storage
             .count_unprocessed_events_in_session(session_id)?;
 
-        // Check if compact is needed (never auto-compact — let the caller decide)
+        // Auto-compact when unprocessed events exceed threshold
         let threshold = self.config.compact_threshold;
         let compact_needed = threshold > 0 && total_unprocessed >= threshold as u64;
+
+        if compact_needed && self.has_llm() {
+            match self.compact(session_id) {
+                Ok(_) => tracing::info!(session_id, "Auto-compact triggered"),
+                Err(e) => tracing::warn!(session_id, error = %e, "Auto-compact failed"),
+            }
+        }
 
         Ok(AppendEventsResult {
             session_id: session_id.to_string(),
