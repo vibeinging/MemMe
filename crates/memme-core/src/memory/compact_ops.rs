@@ -161,10 +161,20 @@ impl super::MemoryStore {
         let use_fallback = self.config.compact_fallback_token_threshold > 0
             && estimated_tokens < self.config.compact_fallback_token_threshold;
 
-        let purified = if use_fallback {
-            fallback_purify_events(&events)
+        // Purify events + generate episode summary in a single LLM call
+        let (purified, title, summary, significance) = if use_fallback {
+            let purified = fallback_purify_events(&events);
+            let (t, s, sig) = match session.structured_notes {
+                Some(ref notes) if !notes.trim().is_empty() => {
+                    let title_text = extract_title_from_events(&events);
+                    let summary_text: String = notes.chars().take(500).collect();
+                    (title_text, summary_text, 0.5)
+                }
+                _ => fallback_episode_summary(&events),
+            };
+            (purified, t, s, sig)
         } else {
-            purify_events(&events, &llm)
+            compact_with_llm(&events, &llm)
         };
 
         // Fall back to original content if purification returned empty strings
@@ -199,20 +209,6 @@ impl super::MemoryStore {
                 p.location.as_deref(),
             )?;
         }
-
-        // Generate episode summary: use structured notes for short sessions, LLM for longer ones
-        let (title, summary, significance) = if use_fallback {
-            match session.structured_notes {
-                Some(ref notes) if !notes.trim().is_empty() => {
-                    let title_text = extract_title_from_events(&events);
-                    let summary_text: String = notes.chars().take(500).collect();
-                    (title_text, summary_text, 0.5)
-                }
-                _ => fallback_episode_summary(&events),
-            }
-        } else {
-            generate_episode_summary(&events, &llm)
-        };
 
         // Insert narrative trace into memories table
         let narrative_content = format!("{}: {}", title, summary);
@@ -336,56 +332,129 @@ impl super::MemoryStore {
 
 /// Generate episode title, summary, and significance.
 /// Tries LLM first, falls back to truncation-based approach.
-fn generate_episode_summary(
+/// Combined purification + summarization in a single LLM call.
+/// Returns (purified_events, title, summary, significance).
+fn compact_with_llm(
     events: &[Event],
     llm: &Arc<dyn memme_llm::LlmProvider>,
-) -> (String, String, f32) {
-    let text = events
+) -> (Vec<PurifiedEvent>, String, String, f32) {
+    let context = events
         .iter()
-        .map(|e| e.content.as_str())
+        .enumerate()
+        .map(|(i, e)| format!("[{}] {}: {}", i + 1, e.event_type.as_str(), e.content))
         .collect::<Vec<_>>()
         .join("\n");
 
+    let conversation_time = events.first().map(|e| e.timestamp.as_str()).unwrap_or("");
+
     let prompt = format!(
-        r#"Summarize this conversation into a JSON object with three fields:
-- "title": a brief title (max 60 chars)
-- "summary": a 2-3 sentence summary of what was discussed
-- "significance": a float 0.0-1.0 indicating how important/memorable this conversation is
+        r#"Process this conversation and return a single JSON object with TWO sections:
 
-Conversation:
-{text}
+## Section 1: Purified Messages
+For each message, resolve coreferences (pronouns → names), ground temporal references (relative → absolute dates using {conversation_time} as anchor), and extract locations.
 
-Respond ONLY with the JSON object, no other text."#
+## Section 2: Episode Summary
+Summarize the entire conversation as a title, summary, and significance score.
+
+**Input** ({count} messages):
+{context}
+
+**Output format**:
+```json
+{{
+  "purified": [
+    {{"content": "Purified text with pronouns resolved", "event_time": "YYYY-MM-DD" or null, "location": "place" or null}},
+    ...
+  ],
+  "title": "Brief title (max 60 chars)",
+  "summary": "2-3 sentence summary of what was discussed",
+  "significance": 0.7
+}}
+```
+
+**Rules**:
+- "purified" must have exactly {count} items, one per input message
+- Resolve pronouns to actual names, "yesterday" to actual date, "there" to actual place
+- If no purification needed, use original content
+- "significance": 0.0 (trivial) to 1.0 (life-changing)
+- Respond ONLY with JSON, no other text."#,
+        conversation_time = conversation_time,
+        context = context,
+        count = events.len()
     );
 
     let messages = vec![memme_llm::Message {
         role: memme_llm::MessageRole::User,
         content: prompt,
     }];
+
+    // Scale tokens: ~150 per purified event + 200 for summary
+    let scaled_tokens = (events.len() * 150 + 700).min(4096);
     let config = memme_llm::StructuredGenConfig {
-        base_temperature: Some(0.3),
-        max_tokens: Some(500),
+        base_temperature: Some(0.1),
+        max_tokens: Some(scaled_tokens),
         response_format: Some(memme_llm::ResponseFormat::Json),
         ..Default::default()
     };
-    let text_for_fallback = text.clone();
+
+    let expected_len = events.len();
     match memme_llm::generate_structured(llm.as_ref(), &messages, &config, |raw| {
         let repaired = memme_llm::try_repair_json(raw);
         let parsed: serde_json::Value =
             serde_json::from_str(&repaired).map_err(|e| format!("JSON parse failed: {e}"))?;
+
+        // Parse purified events
+        let purified_arr = parsed["purified"]
+            .as_array()
+            .ok_or("Missing 'purified' array")?;
+        let purified: Vec<PurifiedEvent> = purified_arr
+            .iter()
+            .map(|p| PurifiedEvent {
+                purified_content: p["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                event_time: p["event_time"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+                location: p["location"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+            })
+            .collect();
+
+        // Parse summary
         let title = parsed["title"]
             .as_str()
             .unwrap_or("Conversation")
             .to_string();
         let summary = parsed["summary"]
             .as_str()
-            .unwrap_or(&text_for_fallback[..text_for_fallback.len().min(200)])
+            .unwrap_or("")
             .to_string();
-        let significance = parsed["significance"].as_f64().unwrap_or(0.5) as f32;
-        Ok((title, summary, significance.clamp(0.0, 1.0)))
+        let significance = parsed["significance"]
+            .as_f64()
+            .unwrap_or(0.5) as f32;
+
+        Ok((purified, title, summary, significance.clamp(0.0, 1.0)))
     }) {
-        Ok(result) => result,
-        Err(_) => fallback_episode_summary(events),
+        Ok((mut purified, title, summary, significance)) => {
+            // Pad or truncate purified to match event count
+            purified.resize_with(expected_len, || PurifiedEvent {
+                purified_content: String::new(),
+                event_time: None,
+                location: None,
+            });
+            (purified, title, summary, significance)
+        }
+        Err(e) => {
+            tracing::warn!("Combined compact LLM call failed: {e}, using fallback");
+            let purified = fallback_purify_events(events);
+            let (t, s, sig) = fallback_episode_summary(events);
+            (purified, t, s, sig)
+        }
     }
 }
 
@@ -438,135 +507,7 @@ struct PurifiedEvent {
 }
 
 /// Purify events via LLM: resolve coreferences, ground temporal/spatial references.
-///
-/// This is the core of the Compact purification process. Each event is processed
-/// to resolve ambiguous references and extract structured metadata.
-fn purify_events(events: &[Event], llm: &Arc<dyn memme_llm::LlmProvider>) -> Vec<PurifiedEvent> {
-    // Build context: all events in the session for coreference resolution
-    let context = events
-        .iter()
-        .enumerate()
-        .map(|(i, e)| format!("[{}] {}: {}", i + 1, e.event_type.as_str(), e.content))
-        .collect::<Vec<_>>()
-        .join("\n");
 
-    // Get conversation timestamp for temporal resolution
-    let conversation_time = events.first().map(|e| e.timestamp.as_str()).unwrap_or("");
-
-    let prompt = format!(
-        r#"You are an Event Purification Engine. Your job is to process each message in a conversation and output a "purified" version that:
-
-1. **Resolves Coreferences**: Replace pronouns (he/she/it/they/that/there) with the actual names/entities they refer to.
-   - "She said she'd come" → "Alice said Alice would come"
-   - "I went there yesterday" → "I went to the coffee shop yesterday"
-
-2. **Grounds Temporal References**: Resolve relative time expressions to absolute dates.
-   - Use the conversation timestamp ({conversation_time}) as the reference point.
-   - "yesterday" → compute the day before {conversation_time}
-   - "last week" → approximately 7 days before {conversation_time}
-   - "next Friday" → the first Friday after {conversation_time}
-   - If a time is mentioned, extract it to the "event_time" field
-
-3. **Grounds Spatial References**: Resolve location references.
-   - "there" → "at the office" (if previously mentioned)
-   - Extract explicit locations to the "location" field
-
-4. **Preserves Meaning**: Keep the core message intact. Don't add information that isn't implied.
-
-**Input format**: Numbered messages [1], [2], [3]...
-**Output format**: JSON array where each element corresponds to the input message by index.
-
-```json
-{{
-  "purified": [
-    {{
-      "content": "Purified message text with pronouns resolved",
-      "event_time": "2026-03-27" or null,
-      "location": "coffee shop" or null
-    }},
-    ...
-  ]
-}}
-```
-
-**Conversation**:
-{context}
-
-**Rules**:
-- Output exactly {count} objects in the "purified" array, one per input message.
-- If no purification is needed, use the original content.
-- Use ISO 8601 date format (YYYY-MM-DD) for event_time.
-- If location or time cannot be determined, set to null.
-- Respond ONLY with the JSON object, no other text."#,
-        conversation_time = conversation_time,
-        context = context,
-        count = events.len()
-    );
-
-    let messages = vec![memme_llm::Message {
-        role: memme_llm::MessageRole::User,
-        content: prompt,
-    }];
-
-    // Scale max_tokens based on event count: each purified event needs ~150 output tokens
-    let scaled_tokens = (events.len() * 150 + 500).min(4096);
-    let config = memme_llm::StructuredGenConfig {
-        base_temperature: Some(0.1),
-        max_tokens: Some(scaled_tokens),
-        response_format: Some(memme_llm::ResponseFormat::Json),
-        ..Default::default()
-    };
-
-    let expected_len = events.len();
-    match memme_llm::generate_structured(llm.as_ref(), &messages, &config, |raw| {
-        let repaired = memme_llm::try_repair_json(raw);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&repaired).map_err(|e| format!("JSON parse failed: {e}"))?;
-        let purified_arr = parsed
-            .get("purified")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing 'purified' array".to_string())?;
-        let result: Vec<PurifiedEvent> = purified_arr
-            .iter()
-            .map(|item| {
-                let content = item
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let event_time = item
-                    .get("event_time")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty() && s != &"null")
-                    .map(|s| s.to_string());
-                let location = item
-                    .get("location")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty() && s != &"null")
-                    .map(|s| s.to_string());
-                PurifiedEvent {
-                    purified_content: content,
-                    event_time,
-                    location,
-                }
-            })
-            .collect();
-        if result.len() != expected_len {
-            return Err(format!(
-                "Purification returned {} results for {} events",
-                result.len(),
-                expected_len,
-            ));
-        }
-        Ok(result)
-    }) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::warn!("LLM purification failed: {e}, using fallback");
-            fallback_purify_events(events)
-        }
-    }
-}
 
 /// Fallback purification when LLM is unavailable.
 /// Returns original content with no metadata.

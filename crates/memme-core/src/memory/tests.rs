@@ -867,16 +867,13 @@ fn test_append_events_and_compact() {
         },
     ];
 
-    // compact() now does: purify_events (LLM call 1) + generate_episode_summary (LLM call 2)
-    // It no longer extracts individual memories — that's done by meditate().
-    // system messages may be filtered out during append — provide purified for 2-3 events
-    let purify_response = r#"{"purified": [
+    // compact() does purification + summarization in a single LLM call
+    let compact_response = r#"{"purified": [
         {"content": "Alice's name is Alice and Alice loves painting.", "event_time": null, "location": null},
         {"content": "Nice to meet you, Alice! Painting is wonderful.", "event_time": null, "location": null}
-    ]}"#.to_string();
-    let summary_response = r#"{"title": "Meeting Alice", "summary": "Alice introduced herself and shared her love of painting.", "significance": 0.6}"#.to_string();
+    ], "title": "Meeting Alice", "summary": "Alice introduced herself and shared her love of painting.", "significance": 0.6}"#.to_string();
 
-    let llm = Arc::new(MockLlm::new(vec![purify_response, summary_response]));
+    let llm = Arc::new(MockLlm::new(vec![compact_response]));
     let store = store.with_llm(llm);
 
     // Phase 1: append events
