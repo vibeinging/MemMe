@@ -88,9 +88,13 @@ impl super::MemoryStore {
         let threshold = self.config.compact_threshold;
         let compact_needed = threshold > 0 && total_unprocessed >= threshold as u64;
 
+        let mut auto_compacted = false;
         if compact_needed && self.has_llm() {
             match self.compact(session_id) {
-                Ok(_) => tracing::info!(session_id, "Auto-compact triggered"),
+                Ok(_) => {
+                    tracing::info!(session_id, "Auto-compact triggered");
+                    auto_compacted = true;
+                }
                 Err(e) => tracing::warn!(session_id, error = %e, "Auto-compact failed"),
             }
         }
@@ -99,7 +103,7 @@ impl super::MemoryStore {
             session_id: session_id.to_string(),
             events_appended: non_system.len(),
             total_unprocessed,
-            compact_needed,
+            compact_needed: compact_needed && !auto_compacted,
         })
     }
 
