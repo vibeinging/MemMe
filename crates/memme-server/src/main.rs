@@ -178,7 +178,8 @@ async fn main() -> Result<()> {
         };
 
         let embedder: Arc<dyn Embedder> = Arc::new(
-            memme_embeddings::openai::OpenAiEmbedder::new(api_key, embed_url).with_model(embed_model),
+            memme_embeddings::openai::OpenAiEmbedder::new(api_key, embed_url)
+                .with_model(embed_model),
         );
 
         let llm_config = memme_llm::openai::OpenAIConfig {

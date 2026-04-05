@@ -3,23 +3,20 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::{MeditationRecord, MeditationStatus};
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
     /// Insert a new meditation record.
     pub(crate) fn insert_meditation(&self, record: &MeditationRecord) -> Result<()> {
-        let meta_val: duckdb::types::Value = match &record.metadata {
-            Some(m) => duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default()),
-            None => duckdb::types::Value::Null,
-        };
-        let journal_val: duckdb::types::Value = match &record.journal {
-            Some(j) => duckdb::types::Value::Text(j.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let finished_val: duckdb::types::Value = match &record.finished_at {
-            Some(f) => duckdb::types::Value::Text(f.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        let meta_val = opt_text(
+            record
+                .metadata
+                .as_ref()
+                .map(|m| serde_json::to_string(m).unwrap_or_default()),
+        );
+        let journal_val = opt_text(record.journal.as_deref());
+        let finished_val = opt_text(record.finished_at.as_deref());
 
         let conn = self.write_conn();
         conn.execute(
@@ -47,14 +44,8 @@ impl Storage {
         stats: &MeditationRecord,
         journal: Option<&str>,
     ) -> Result<()> {
-        let finished_val: duckdb::types::Value = match &stats.finished_at {
-            Some(f) => duckdb::types::Value::Text(f.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let journal_val: duckdb::types::Value = match journal {
-            Some(j) => duckdb::types::Value::Text(j.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let finished_val = opt_text(stats.finished_at.as_deref());
+        let journal_val = opt_text(journal);
 
         let conn = self.write_conn();
         conn.execute(

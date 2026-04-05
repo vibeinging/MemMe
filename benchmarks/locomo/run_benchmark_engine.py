@@ -154,15 +154,16 @@ def compute_bleu1(prediction: str, reference: str) -> float:
 ANSWER_PROMPT = """You are answering a question based on the memories below.
 
 RULES:
-1. Use information from the memories as your primary source. You may make reasonable inferences from the memories.
+1. Use information from the memories as your primary source. You may also use well-known world knowledge to make reasonable inferences (e.g., "Tampa is in Florida", "Xenoblade Chronicles is a Nintendo Switch game").
 2. For factual questions (what/where/who): Answer with specific details from the memories. Prefer exact names, places, dates.
 3. For list questions ("what activities/books/events/items"): Scan ALL memories carefully. List EVERY matching item found, separated by commas. Do not omit any.
-4. For "how many" questions: If an exact number is stated, use it. Otherwise count the distinct items explicitly mentioned.
+4. For "how many" / counting questions: Multiple memories may describe the SAME event in different words. First identify each DISTINCT event by its unique date or specific detail, then count. Do not equate the number of memory entries with the number of events.
 5. For time questions ("when"): Look for specific dates, relative time references ("last Friday", "2 weeks ago"), or temporal context.
 6. For inference questions ("would...?", "likely...?", "might...?"): Reason based on the person's known traits, values, and behaviors from the memories. Give a clear answer (e.g. "Likely yes/no") with brief reasoning.
 7. For open-ended questions about preferences, opinions, or characteristics: Synthesize from all relevant memories to form a complete picture.
-8. Answer concisely — no explanation needed for factual answers. Brief reasoning is OK for inference questions.
-9. If memories contain relevant information, ALWAYS attempt an answer. Only say "Unknown" if the memories have absolutely no relevant information.
+8. When memories conflict (e.g., "likes turtles" vs "is allergic to turtles"), prefer the more specific and restrictive fact. Allergies, medical conditions, and negative constraints override general positive preferences.
+9. Think step-by-step for complex questions: briefly identify the relevant memories, reason over them, then state your answer.
+10. Answer concisely — keep reasoning brief (1-2 sentences). Only say "Unknown" if the memories have absolutely no relevant information.
 
 Speaker 1 ({speaker_1}) memories:
 {speaker_1_memories}
@@ -393,7 +394,7 @@ async def answer_and_judge_question(
 ) -> QuestionResult:
     """Answer one question using engine search, then judge — can run concurrently."""
     question = qa["question"]
-    reference = str(qa["answer"])
+    reference = str(qa.get("answer", qa.get("adversarial_answer", "")))
     category = qa["category"]
 
     try:

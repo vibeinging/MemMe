@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::{Event, EventType, IngestEventOptions, ListEventsOptions, Source};
 
+use super::util::opt_text;
 use super::Storage;
 
 /// Standard columns for Event SELECT queries.
@@ -48,14 +49,8 @@ impl Storage {
         metadata: Option<&serde_json::Value>,
         user_id: &str,
     ) -> Result<()> {
-        let name_val: duckdb::types::Value = match name {
-            Some(n) => duckdb::types::Value::Text(n.to_string()),
-            None => duckdb::types::Value::Null,
-        };
-        let meta_val: duckdb::types::Value = match metadata {
-            Some(m) => duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default()),
-            None => duckdb::types::Value::Null,
-        };
+        let name_val = opt_text(name);
+        let meta_val = opt_text(metadata.map(|m| serde_json::to_string(m).unwrap_or_default()));
         let conn = self.write_conn();
         conn.execute(
             "INSERT INTO sources (source_id, source_type, name, metadata, user_id) VALUES ($1, $2, $3, $4, $5)",
@@ -126,26 +121,16 @@ impl Storage {
             Self::format_embedding(content_vec, self.config.embedding_dims)?
         };
         let event_type = options.event_type.as_deref().unwrap_or("system");
-        let timestamp_val: duckdb::types::Value = match &options.timestamp {
-            Some(t) => duckdb::types::Value::Text(t.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let source_val: duckdb::types::Value = match &options.source_id {
-            Some(s) => duckdb::types::Value::Text(s.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let session_val: duckdb::types::Value = match &options.session_id {
-            Some(s) => duckdb::types::Value::Text(s.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let parent_val: duckdb::types::Value = match &options.parent_id {
-            Some(p) => duckdb::types::Value::Text(p.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let meta_val: duckdb::types::Value = match &options.metadata {
-            Some(m) => duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default()),
-            None => duckdb::types::Value::Null,
-        };
+        let timestamp_val = opt_text(options.timestamp.as_deref());
+        let source_val = opt_text(options.source_id.as_deref());
+        let session_val = opt_text(options.session_id.as_deref());
+        let parent_val = opt_text(options.parent_id.as_deref());
+        let meta_val = opt_text(
+            options
+                .metadata
+                .as_ref()
+                .map(|m| serde_json::to_string(m).unwrap_or_default()),
+        );
 
         let sql = format!(
             r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type, content, content_vec, parent_id, metadata, user_id)
@@ -202,7 +187,12 @@ impl Storage {
         let conn = self.write_conn();
         conn.execute(
             &sql,
-            params![purified_content, normalized_time.as_deref(), location, event_id],
+            params![
+                purified_content,
+                normalized_time.as_deref(),
+                location,
+                event_id
+            ],
         )?;
         Ok(())
     }

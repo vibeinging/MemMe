@@ -223,9 +223,7 @@ pub fn parse_feedback_response(raw: &str) -> Result<FeedbackResponse, String> {
     let value: serde_json::Value = serde_json::from_str(&cleaned)
         .map_err(|e| format!("Failed to parse feedback response: {e}"))?;
 
-    let principles_value = value
-        .get("principles")
-        .ok_or("Missing 'principles' key")?;
+    let principles_value = value.get("principles").ok_or("Missing 'principles' key")?;
 
     let arr = principles_value
         .as_array()

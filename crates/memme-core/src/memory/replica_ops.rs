@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::storage::replica;
-use crate::types::{ReplicaStatus, ReplicaSyncResult};
+use crate::types::{BackupInfo, ReplicaStatus, ReplicaSyncResult};
 
 impl super::MemoryStore {
     /// Sync the primary database to its replica.
@@ -30,5 +30,31 @@ impl super::MemoryStore {
     /// Get the status of the primary and replica files.
     pub fn replica_status(&self) -> Result<ReplicaStatus> {
         self.storage.replica_status()
+    }
+
+    /// Backup the database to a user-specified path.
+    ///
+    /// Performs CHECKPOINT (flush WAL) then atomic file copy.
+    /// The resulting file is a complete, self-contained DuckDB database
+    /// that can be uploaded to cloud storage by the host application.
+    ///
+    /// Returns metadata about the backup (size, memory count, schema version).
+    /// For `:memory:` databases, returns an error.
+    pub fn backup_to_path(&self, path: &str) -> Result<BackupInfo> {
+        self.storage.backup_to_path(path)
+    }
+
+    /// Restore the primary database from a backup file.
+    ///
+    /// Validates the backup is a readable DuckDB file, then performs
+    /// an atomic copy to the primary database path.
+    ///
+    /// **Warning**: The caller must re-open the `MemoryStore` after calling this,
+    /// as the underlying database file has been replaced.
+    pub fn restore_from_backup(
+        backup_path: &str,
+        config: &crate::config::MemoryConfig,
+    ) -> Result<()> {
+        replica::restore_from_backup(backup_path, &config.db_path)
     }
 }

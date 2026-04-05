@@ -2,6 +2,7 @@ use duckdb::params;
 
 use crate::error::Result;
 
+use super::util::opt_text;
 use super::{ProcedureRow, Storage};
 
 impl Storage {
@@ -17,10 +18,7 @@ impl Storage {
         trigger_pattern: Option<&str>,
         confidence: f32,
     ) -> Result<()> {
-        let trigger_val: duckdb::types::Value = match trigger_pattern {
-            Some(t) => duckdb::types::Value::Text(t.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let trigger_val = opt_text(trigger_pattern);
         let conn = self.write_conn();
         conn.execute(
             "INSERT INTO procedures (id, name, description, steps, user_id, trigger_pattern, confidence)

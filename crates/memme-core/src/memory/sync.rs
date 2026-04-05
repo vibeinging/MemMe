@@ -43,7 +43,9 @@ impl super::MemoryStore {
         let memories = self.storage.import_memories(&export.memories)?;
         let entities = self.storage.import_entities(&export.entities)?;
         let relations = self.storage.import_relations(&export.relations)?;
-        let identity_traits = self.storage.import_identity_traits(&export.identity_traits)?;
+        let identity_traits = self
+            .storage
+            .import_identity_traits(&export.identity_traits)?;
         Ok(FullImportResult {
             sources,
             sessions,

@@ -55,7 +55,11 @@ pub enum OpenAiModel {
     TextEmbeddingAda002,
     /// Custom model name with explicit dimensions.
     /// Set `send_dims = false` for providers that don't accept the `dimensions` parameter.
-    Custom { name: String, dims: usize, send_dims: bool },
+    Custom {
+        name: String,
+        dims: usize,
+        send_dims: bool,
+    },
 }
 
 impl OpenAiModel {
@@ -205,8 +209,14 @@ impl OpenAiEmbedder {
 
         // For Custom models, pass the dimensions parameter to truncate server-side
         let dimensions = match &self.model {
-            OpenAiModel::Custom { dims, send_dims, .. } => {
-                if *send_dims { Some(*dims) } else { None }
+            OpenAiModel::Custom {
+                dims, send_dims, ..
+            } => {
+                if *send_dims {
+                    Some(*dims)
+                } else {
+                    None
+                }
             }
             _ => None,
         };

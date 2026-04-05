@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use memme_llm::prompts::{
     get_feedback_messages, get_reflect_messages, parse_feedback_response, parse_reflect_response,
-    FeedbackItem, LearnedPrinciple, ReflectResponse,
+    FeedbackItem, LearnedPrinciple,
 };
-use memme_llm::{generate_structured, LlmProvider, ResponseFormat, StructuredGenConfig};
+use memme_llm::{generate_structured, ResponseFormat, StructuredGenConfig};
 
 use crate::error::{MemoryError, Result};
 use crate::types::*;

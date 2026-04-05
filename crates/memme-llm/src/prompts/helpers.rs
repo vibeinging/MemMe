@@ -118,7 +118,8 @@ mod tests {
 
     #[test]
     fn test_strip_multiple_think_blocks() {
-        let input = "<think>first thought</think>middle<think>second thought</think>{\"end\": true}";
+        let input =
+            "<think>first thought</think>middle<think>second thought</think>{\"end\": true}";
         assert_eq!(strip_code_fences(input), "middle{\"end\": true}");
     }
 

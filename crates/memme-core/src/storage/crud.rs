@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::{MemoryError, Result};
 use crate::types::{Resolution, UpdateOptions};
 
+use super::util::opt_text;
 use super::{MemoryRow, Storage};
 
 /// Parameters for inserting a new memory (internal storage layer).
@@ -48,61 +49,30 @@ impl Storage {
             )));
         }
         let emb_literal = Self::format_embedding(embedding, self.config.embedding_dims)?;
-        let agent_val: duckdb::types::Value = match &params_.agent_id {
-            Some(a) => duckdb::types::Value::Text(a.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let run_val: duckdb::types::Value = match &params_.run_id {
-            Some(r) => duckdb::types::Value::Text(r.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let app_val: duckdb::types::Value = match &params_.app_id {
-            Some(a) => duckdb::types::Value::Text(a.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let actor_val: duckdb::types::Value = match &params_.actor_id {
-            Some(a) => duckdb::types::Value::Text(a.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let meta_val: duckdb::types::Value = match &params_.metadata {
-            Some(m) => duckdb::types::Value::Text(m.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        let agent_val = opt_text(params_.agent_id.as_deref());
+        let run_val = opt_text(params_.run_id.as_deref());
+        let app_val = opt_text(params_.app_id.as_deref());
+        let actor_val = opt_text(params_.actor_id.as_deref());
+        let meta_val = opt_text(params_.metadata.as_deref());
         let imp_val = params_.importance.unwrap_or(0.5) as f64;
-        let exp_val: duckdb::types::Value = match &params_.expiration_date {
-            Some(d) => duckdb::types::Value::Text(d.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        let exp_val = opt_text(params_.expiration_date.as_deref());
         let cats_literal = Self::format_categories(params_.categories.as_deref())?;
-        let mtype_val: duckdb::types::Value = match &params_.memory_type {
-            Some(m) => duckdb::types::Value::Text(m.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        let mtype_val = opt_text(params_.memory_type.as_deref());
         let stab_val = params_.stability.unwrap_or(1.0) as f64;
         let privacy_val = params_.privacy.as_deref().unwrap_or("syncable");
-        let event_time_val: duckdb::types::Value = match &params_.event_time {
-            Some(t) => {
-                // Normalize partial dates for DuckDB TIMESTAMP compatibility:
-                // "2020" → "2020-01-01", "2023-05" → "2023-05-01"
-                let normalized = if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
-                    format!("{}-01-01", t)
-                } else if t.len() == 7 && t.chars().nth(4) == Some('-') {
-                    format!("{}-01", t)
-                } else {
-                    t.clone()
-                };
-                duckdb::types::Value::Text(normalized)
+        // Normalize partial dates for DuckDB TIMESTAMP compatibility:
+        // "2020" → "2020-01-01", "2023-05" → "2023-05-01"
+        let event_time_val = opt_text(params_.event_time.as_ref().map(|t| {
+            if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+                format!("{}-01-01", t)
+            } else if t.len() == 7 && t.chars().nth(4) == Some('-') {
+                format!("{}-01", t)
+            } else {
+                t.clone()
             }
-            None => duckdb::types::Value::Null,
-        };
-        let episode_val: duckdb::types::Value = match &params_.episode_id {
-            Some(e) => duckdb::types::Value::Text(e.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let session_val: duckdb::types::Value = match &params_.session_id {
-            Some(s) => duckdb::types::Value::Text(s.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        }));
+        let episode_val = opt_text(params_.episode_id.as_deref());
+        let session_val = opt_text(params_.session_id.as_deref());
         let resolution_val = params_.resolution.as_str();
 
         let sql = format!(

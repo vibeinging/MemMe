@@ -72,12 +72,14 @@ impl super::MemoryStore {
             let preview: String = msg.content.chars().take(120).collect();
             let ts = msg.timestamp.as_deref().unwrap_or(&now);
             use std::fmt::Write;
-            let _ = write!(notes_batch, "[{}] {}: {}\n", ts, msg.role, preview);
+            let _ = writeln!(notes_batch, "[{}] {}: {}", ts, msg.role, preview);
         }
 
         // Batch-append all notes in a single SQL UPDATE
         if !notes_batch.is_empty() {
-            let _ = self.storage.append_structured_note(session_id, &notes_batch);
+            let _ = self
+                .storage
+                .append_structured_note(session_id, &notes_batch);
         }
 
         let total_unprocessed = self
@@ -388,8 +390,17 @@ Summarize the entire conversation as a title, summary, and significance score.
         content: prompt,
     }];
 
-    // Scale tokens: ~150 per purified event + 200 for summary
-    let scaled_tokens = (events.len() * 150 + 700).min(4096);
+    // Scale tokens: ~150 per purified event + 700 base for summary/structure
+    let uncapped = events.len() * 150 + 700;
+    let scaled_tokens = uncapped.min(16384);
+    if uncapped > 16384 {
+        tracing::warn!(
+            events = events.len(),
+            uncapped_tokens = uncapped,
+            capped_tokens = scaled_tokens,
+            "Compact output budget capped at 16384 tokens — consider chunking for very long sessions"
+        );
+    }
     let config = memme_llm::StructuredGenConfig {
         base_temperature: Some(0.1),
         max_tokens: Some(scaled_tokens),
@@ -410,10 +421,7 @@ Summarize the entire conversation as a title, summary, and significance score.
         let purified: Vec<PurifiedEvent> = purified_arr
             .iter()
             .map(|p| PurifiedEvent {
-                purified_content: p["content"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string(),
+                purified_content: p["content"].as_str().unwrap_or("").to_string(),
                 event_time: p["event_time"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -430,13 +438,8 @@ Summarize the entire conversation as a title, summary, and significance score.
             .as_str()
             .unwrap_or("Conversation")
             .to_string();
-        let summary = parsed["summary"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let significance = parsed["significance"]
-            .as_f64()
-            .unwrap_or(0.5) as f32;
+        let summary = parsed["summary"].as_str().unwrap_or("").to_string();
+        let significance = parsed["significance"].as_f64().unwrap_or(0.5) as f32;
 
         Ok((purified, title, summary, significance.clamp(0.0, 1.0)))
     }) {
@@ -505,9 +508,6 @@ struct PurifiedEvent {
     /// Extracted location if mentioned.
     location: Option<String>,
 }
-
-/// Purify events via LLM: resolve coreferences, ground temporal/spatial references.
-
 
 /// Fallback purification when LLM is unavailable.
 /// Returns original content with no metadata.

@@ -121,17 +121,17 @@ fn graph_extraction_system_prompt() -> String {
 ```json
 {
   "entities": [{"name": "Alice", "type": "person"}, ...],
-  "relationships": [{"source": "Alice", "relation": "works_at", "target": "Google"}, ...]
+  "relationships": [{"source": "Alice", "relation": "works_at", "target": "Google", "description": "Alice is employed at Google"}, ...]
 }
 ```
 
 **Examples**:
 
 Input: Alice works at Google in San Francisco.
-Output: {"entities": [{"name": "Alice", "type": "person"}, {"name": "Google", "type": "organization"}, {"name": "San Francisco", "type": "location"}], "relationships": [{"source": "Alice", "relation": "works_at", "target": "Google"}, {"source": "Google", "relation": "located_in", "target": "San Francisco"}]}
+Output: {"entities": [{"name": "Alice", "type": "person"}, {"name": "Google", "type": "organization"}, {"name": "San Francisco", "type": "location"}], "relationships": [{"source": "Alice", "relation": "works_at", "target": "Google", "description": "Alice is employed at Google"}, {"source": "Google", "relation": "located_in", "target": "San Francisco", "description": "Google has offices in San Francisco"}]}
 
 Input: Python is used for machine learning.
-Output: {"entities": [{"name": "Python", "type": "product"}, {"name": "machine learning", "type": "concept"}], "relationships": [{"source": "Python", "relation": "used_for", "target": "machine learning"}]}
+Output: {"entities": [{"name": "Python", "type": "product"}, {"name": "machine learning", "type": "concept"}], "relationships": [{"source": "Python", "relation": "used_for", "target": "machine learning", "description": "Python is a popular language used for machine learning projects"}]}
 
 Input: Hi there, how are you?
 Output: {"entities": [], "relationships": []}
@@ -140,6 +140,7 @@ Output: {"entities": [], "relationships": []}
 - Normalize entity names (proper capitalization, most common form).
 - Do NOT extract pronouns (I, you, he, she) or common nouns.
 - Use snake_case for relation types (works_at, lives_in, is_part_of).
+- Each relationship must include a "description" field with a natural language sentence describing the relationship.
 - Relationships must only reference entities in your "entities" array.
 - Choose the most natural direction for each relationship.
 - Each entity appears only once. Detect input language and preserve entity names."#.to_string()
@@ -206,6 +207,9 @@ pub struct ExtractedRelationship {
     pub source: String,
     pub relation: String,
     pub target: String,
+    /// Natural language description of the relationship.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Parse the LLM's JSON response from an entity extraction call.

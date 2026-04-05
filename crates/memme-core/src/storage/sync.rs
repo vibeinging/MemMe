@@ -2,6 +2,7 @@ use duckdb::params;
 
 use crate::error::Result;
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -194,10 +195,7 @@ impl Storage {
         memory_id: &str,
         device_id: Option<&str>,
     ) -> Result<u64> {
-        let dev_val: duckdb::types::Value = match device_id {
-            Some(d) => duckdb::types::Value::Text(d.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let dev_val = opt_text(device_id);
         let conn = self.write_conn();
         let mut stmt = conn.prepare("SELECT COALESCE(MAX(sync_version), 0) FROM memories")?;
         let max_version: i64 = stmt

@@ -44,8 +44,8 @@ pub mod procedural;
 pub mod rerank;
 pub(crate) mod search;
 pub(crate) mod storage;
-pub(crate) mod text_utils;
 pub mod sync;
+pub(crate) mod text_utils;
 pub mod types;
 #[cfg(feature = "webhooks")]
 pub mod webhook;
@@ -53,11 +53,11 @@ pub mod webhook;
 pub use config::{MemoryConfig, PowerConfig};
 pub use error::{MemoryError, Result};
 pub use import::{ImportConversationsResult, ImportedConversation};
+pub use memme_llm::prompts::FeedbackItem;
 pub use memory::{
     CheckResult, DiagnoseReport, LearnFromFeedbackOptions, LearnFromFeedbackResult, MemoryStore,
     ReflectOptions, ReflectResult,
 };
-pub use memme_llm::prompts::FeedbackItem;
 pub use procedural::{Procedure, ProcedureStep};
 pub use types::{
     // types/identity.rs
@@ -65,6 +65,7 @@ pub use types::{
     // types/mod.rs
     AddOptions,
     AppendEventsResult,
+    BackupInfo,
     ChatMessage,
     CompactResult,
     ConsolidateResult,

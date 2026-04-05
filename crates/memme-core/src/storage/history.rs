@@ -2,6 +2,7 @@ use duckdb::params;
 
 use crate::error::Result;
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -14,10 +15,7 @@ impl Storage {
         new_memory: &str,
         event: &str,
     ) -> Result<()> {
-        let old_val: duckdb::types::Value = match old_memory {
-            Some(o) => duckdb::types::Value::Text(o.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let old_val = opt_text(old_memory);
 
         let conn = self.write_conn();
         conn.execute(

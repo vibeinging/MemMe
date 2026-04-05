@@ -275,7 +275,9 @@ pub(crate) fn estimate_tokens(text: &str) -> usize {
 
 impl super::MemoryStore {
     /// Get the internally configured LLM provider, or return an error.
-    pub(crate) fn require_llm(&self) -> crate::error::Result<std::sync::Arc<dyn memme_llm::LlmProvider>> {
+    pub(crate) fn require_llm(
+        &self,
+    ) -> crate::error::Result<std::sync::Arc<dyn memme_llm::LlmProvider>> {
         recover_lock(&self.llm, "llm")
             .as_ref()
             .cloned()
@@ -290,7 +292,11 @@ impl super::MemoryStore {
     /// **Advanced** — Most users should use `append_events()` + `compact()` instead.
     ///
     /// Add graph entries using the internally configured LLM.
-    pub fn add_graph_auto(&self, text: &str, user_id: &str) -> crate::error::Result<crate::types::GraphSearchResult> {
+    pub fn add_graph_auto(
+        &self,
+        text: &str,
+        user_id: &str,
+    ) -> crate::error::Result<crate::types::GraphSearchResult> {
         self.add_graph(text, user_id, self.require_llm()?)
     }
 }

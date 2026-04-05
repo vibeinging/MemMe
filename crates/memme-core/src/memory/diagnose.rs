@@ -26,12 +26,21 @@ impl fmt::Display for DiagnoseReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for c in &self.checks {
             let status = if c.ok { "OK" } else { "FAIL" };
-            writeln!(f, "[{status}] {} ({}ms): {}", c.name, c.latency_ms, c.detail)?;
+            writeln!(
+                f,
+                "[{status}] {} ({}ms): {}",
+                c.name, c.latency_ms, c.detail
+            )?;
         }
         if self.all_ok {
             writeln!(f, "All checks passed.")
         } else {
-            let failed: Vec<&str> = self.checks.iter().filter(|c| !c.ok).map(|c| c.name).collect();
+            let failed: Vec<&str> = self
+                .checks
+                .iter()
+                .filter(|c| !c.ok)
+                .map(|c| c.name)
+                .collect();
             writeln!(f, "Failed: {}", failed.join(", "))
         }
     }
@@ -46,7 +55,10 @@ impl super::MemoryStore {
         let mut checks = Vec::new();
 
         checks.push(check_storage(&self.storage));
-        checks.push(check_embedder(self.embedder.as_ref(), self.config.embedding_dims));
+        checks.push(check_embedder(
+            self.embedder.as_ref(),
+            self.config.embedding_dims,
+        ));
 
         if let Some(llm) = recover_lock(&self.llm, "llm").clone() {
             checks.push(check_llm(llm.as_ref()));
@@ -92,7 +104,11 @@ fn check_embedder(embedder: &dyn memme_embeddings::Embedder, expected_dims: usiz
             name: "embedder",
             ok: false,
             latency_ms,
-            detail: format!("dimension mismatch: got {} expected {}", vec.len(), expected_dims),
+            detail: format!(
+                "dimension mismatch: got {} expected {}",
+                vec.len(),
+                expected_dims
+            ),
         },
         Err(e) => CheckResult {
             name: "embedder",

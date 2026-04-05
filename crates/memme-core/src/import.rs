@@ -423,7 +423,10 @@ mod tests {
         assert_eq!(convs[0].title.as_deref(), Some("Test Chat"));
         assert_eq!(convs[0].source, "chatgpt");
         assert_eq!(convs[0].messages.len(), 2);
-        assert_eq!(convs[0].messages[0], ("user".to_string(), "Hello!".to_string()));
+        assert_eq!(
+            convs[0].messages[0],
+            ("user".to_string(), "Hello!".to_string())
+        );
         assert_eq!(
             convs[0].messages[1],
             ("assistant".to_string(), "Hi there!".to_string())

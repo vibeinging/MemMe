@@ -5,6 +5,15 @@ use crate::error::{MemoryError, Result};
 
 use super::Storage;
 
+/// Convert an `Option<impl AsRef<str>>` to a DuckDB parameter value.
+/// `Some("text")` → `Value::Text`, `None` → `Value::Null`.
+pub(crate) fn opt_text(opt: Option<impl AsRef<str>>) -> duckdb::types::Value {
+    match opt {
+        Some(s) => duckdb::types::Value::Text(s.as_ref().to_string()),
+        None => duckdb::types::Value::Null,
+    }
+}
+
 impl Storage {
     /// Execute SQL that might fail (e.g. if MemMe-DB extension is not loaded),
     /// logging the error but not propagating it.

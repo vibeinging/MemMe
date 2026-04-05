@@ -166,7 +166,14 @@ mod smart_graph {
 
                 if let (Some(src_id), Some(tgt_id)) = (source_id, target_id) {
                     let rel_id = Uuid::new_v4().to_string();
-                    storage.insert_relationship(&rel_id, src_id, tgt_id, &rel.relation, user_id)?;
+                    storage.insert_relationship(
+                        &rel_id,
+                        src_id,
+                        tgt_id,
+                        &rel.relation,
+                        user_id,
+                        rel.description.as_deref(),
+                    )?;
 
                     created_relations.push(GraphRelation {
                         id: rel_id,
@@ -176,6 +183,7 @@ mod smart_graph {
                         target_id: tgt_id.clone(),
                         relation_type: rel.relation.clone(),
                         user_id: user_id.to_string(),
+                        description: rel.description.clone(),
                     });
                 }
             }
@@ -261,7 +269,7 @@ mod tests {
             .upsert_entity("e2", "Google", Some("organization"), "user1")
             .unwrap();
         storage
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
 
         // Find by source entity
@@ -287,7 +295,7 @@ mod tests {
             .upsert_entity("e2", "Google", Some("organization"), "user1")
             .unwrap();
         storage
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
 
         // Delete Alice — should also remove the relationship
@@ -345,10 +353,10 @@ mod tests {
             .upsert_entity("e3", "San Francisco", Some("location"), "user1")
             .unwrap();
         storage
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
         storage
-            .insert_relationship("r2", "e2", "e3", "located_in", "user1")
+            .insert_relationship("r2", "e2", "e3", "located_in", "user1", None)
             .unwrap();
 
         // Depth 1: from Alice, should get only the direct relationship
@@ -373,7 +381,7 @@ mod tests {
             .upsert_entity("e2", "Google", Some("organization"), "user1")
             .unwrap();
         storage
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
 
         let result = search_graph(&storage, "Alice", "user1", 1).unwrap();
@@ -512,7 +520,7 @@ mod smart_tests {
             .upsert_entity("e2", "Google", Some("organization"), "user1")
             .unwrap();
         storage
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
 
         let llm = Arc::new(MockLlm::new(vec![]));

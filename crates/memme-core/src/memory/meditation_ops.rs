@@ -4,9 +4,7 @@ use uuid::Uuid;
 
 use memme_llm::prompts::{
     get_fact_retrieval_messages_with_prompt, get_fact_retrieval_messages_with_time,
-    get_update_memory_messages, get_update_memory_messages_with_prompt,
-    parse_fact_retrieval_response, parse_update_memory_response, ExtractedFact, MemoryEvent,
-    OldMemory,
+    parse_fact_retrieval_response, ExtractedFact,
 };
 use memme_llm::{generate_structured, LlmProvider, ResponseFormat, StructuredGenConfig};
 
@@ -21,7 +19,6 @@ struct FactMeta {
     session_id: Option<String>,
     significance: f32,
 }
-
 
 impl super::MemoryStore {
     /// Start a meditation session. This is the orchestrator that:
@@ -129,141 +126,157 @@ impl super::MemoryStore {
         llm: &Arc<dyn LlmProvider>,
         record: &mut MeditationRecord,
     ) -> Result<()> {
-        let episodes = self.storage.list_episodes_for_meditation(
-            &options.user_id,
-            self.config.meditation_min_significance,
-            self.config.meditation_batch_size,
-        )?;
-        tracing::info!("Found {} unmeditated episodes for {}", episodes.len(), options.user_id);
-        if episodes.is_empty() {
-            return Ok(());
-        }
-
         let graph_processor = if self.config.enable_graph {
             Some(crate::graph::GraphProcessor::new(llm.clone()))
         } else {
             None
         };
 
-        // Small batch size for reconciliation — matches v10 add_smart behavior
-        // where each add_smart call processed ~10 turns → ~5-10 facts.
-        const RECONCILE_BATCH: usize = 10;
+        let mut total_processed: usize = 0;
 
-        let mut episode_ids_to_mark: Vec<String> = Vec::new();
-
-        for (ep_idx, episode) in episodes.iter().enumerate() {
-            let events = self.storage.get_events_by_ids(&episode.event_ids)?;
-            if events.is_empty() {
-                let _ = self.storage.mark_episode_meditated(&episode.episode_id);
-                continue;
+        // Loop until all unmeditated episodes are processed.
+        // Each iteration fetches up to meditation_batch_size episodes.
+        loop {
+            let episodes = self.storage.list_episodes_for_meditation(
+                &options.user_id,
+                self.config.meditation_min_significance,
+                self.config.meditation_batch_size,
+            )?;
+            if episodes.is_empty() {
+                break;
             }
-
-            let text: String = events
-                .iter()
-                .map(|e| e.purified_content.as_deref().unwrap_or(&e.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let conversation_time = events
-                .iter()
-                .find_map(|e| e.event_time.as_deref())
-                .unwrap_or(&episode.started_at);
-
-            let session_id = episode.session_ids.first().cloned();
-
-            // ── Step 1: Extract all facts from this episode ──
-            let extracted = match self.extract_facts_from_episode(
-                llm,
-                &text,
-                self.config.custom_fact_extraction_prompt.as_deref(),
-                Some(conversation_time),
-            ) {
-                Ok(facts) => facts,
-                Err(e) => {
-                    tracing::warn!(
-                        "Episode {}/{}: fact extraction failed: {e}, skipping",
-                        ep_idx + 1, episodes.len()
-                    );
-                    continue;
-                }
-            };
-
-            let mut facts: Vec<String> = Vec::new();
-            let mut fact_meta: HashMap<String, FactMeta> = HashMap::new();
-
-            for fact in extracted {
-                if fact.text.trim().is_empty() {
-                    continue;
-                }
-                let event_time = fact
-                    .happened_at
-                    .or_else(|| text_utils::extract_iso_date_from_text(&fact.text))
-                    .or_else(|| Some(conversation_time.to_string()));
-
-                if !fact_meta.contains_key(&fact.text) {
-                    fact_meta.insert(
-                        fact.text.clone(),
-                        FactMeta {
-                            event_time,
-                            session_id: session_id.clone(),
-                            significance: episode.significance,
-                        },
-                    );
-                    facts.push(fact.text);
-                }
-            }
-
             tracing::info!(
-                "Episode {}/{}: extracted {} facts",
-                ep_idx + 1, episodes.len(), facts.len()
+                "Meditation batch: {} episodes (processed {} so far) for {}",
+                episodes.len(),
+                total_processed,
+                options.user_id
             );
 
-            if facts.is_empty() {
-                episode_ids_to_mark.push(episode.episode_id.clone());
-                continue;
-            }
+            let mut episode_ids_to_mark: Vec<String> = Vec::new();
 
-            // ── Step 2: Store facts directly via add() ──
-            // Vector dedup (cosine distance < threshold) handles duplicates.
-            // LLM reconciliation was found to over-merge facts, losing temporal
-            // and relational details that hurt multi-hop and open-domain recall.
-            let mut all_new_memories: Vec<MemoryResult> = Vec::new();
-
-            for fact in &facts {
-                let mut add_opts = AddOptions::new(&options.user_id);
-                if let Some(meta) = fact_meta.get(fact) {
-                    if let Some(ref et) = meta.event_time {
-                        add_opts = add_opts.event_time(et);
-                    }
-                    if let Some(ref sid) = meta.session_id {
-                        add_opts = add_opts.session_id(sid);
-                    }
-                    add_opts = add_opts.importance(meta.significance);
+            for (ep_idx, episode) in episodes.iter().enumerate() {
+                let events = self.storage.get_events_by_ids(&episode.event_ids)?;
+                if events.is_empty() {
+                    let _ = self.storage.mark_episode_meditated(&episode.episode_id);
+                    continue;
                 }
-                match self.add(fact, add_opts) {
-                    Ok(result) => {
-                        all_new_memories.push(result);
-                        record.memories_created += 1;
-                    }
+
+                let text: String = events
+                    .iter()
+                    .map(|e| e.purified_content.as_deref().unwrap_or(&e.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let conversation_time = events
+                    .iter()
+                    .find_map(|e| e.event_time.as_deref())
+                    .unwrap_or(&episode.started_at);
+
+                let session_id = episode.session_ids.first().cloned();
+
+                // ── Step 1: Extract all facts from this episode ──
+                let extracted = match self.extract_facts_from_episode(
+                    llm,
+                    &text,
+                    self.config.custom_fact_extraction_prompt.as_deref(),
+                    Some(conversation_time),
+                ) {
+                    Ok(facts) => facts,
                     Err(e) => {
-                        tracing::warn!(text = %fact, error = %e, "Failed to add memory, skipping");
+                        tracing::warn!(
+                            "Episode {}/{}: fact extraction failed: {e}, skipping",
+                            ep_idx + 1,
+                            episodes.len()
+                        );
+                        continue;
                     }
+                };
+
+                let mut facts: Vec<String> = Vec::new();
+                let mut fact_meta: HashMap<String, FactMeta> = HashMap::new();
+
+                for fact in extracted {
+                    if fact.text.trim().is_empty() {
+                        continue;
+                    }
+                    let event_time = fact
+                        .happened_at
+                        .or_else(|| text_utils::extract_iso_date_from_text(&fact.text))
+                        .or_else(|| Some(conversation_time.to_string()));
+
+                    if !fact_meta.contains_key(&fact.text) {
+                        fact_meta.insert(
+                            fact.text.clone(),
+                            FactMeta {
+                                event_time,
+                                session_id: session_id.clone(),
+                                significance: episode.significance,
+                            },
+                        );
+                        facts.push(fact.text);
+                    }
+                }
+
+                tracing::info!(
+                    "Episode {}/{}: extracted {} facts",
+                    ep_idx + 1,
+                    episodes.len(),
+                    facts.len()
+                );
+
+                if facts.is_empty() {
+                    episode_ids_to_mark.push(episode.episode_id.clone());
+                    continue;
+                }
+
+                // ── Step 2: Store facts directly via add() ──
+                // Vector dedup (cosine distance < threshold) handles duplicates.
+                let mut all_new_memories: Vec<MemoryResult> = Vec::new();
+
+                for fact in &facts {
+                    let mut add_opts = AddOptions::new(&options.user_id);
+                    if let Some(meta) = fact_meta.get(fact) {
+                        if let Some(ref et) = meta.event_time {
+                            add_opts = add_opts.event_time(et);
+                        }
+                        if let Some(ref sid) = meta.session_id {
+                            add_opts = add_opts.session_id(sid);
+                        }
+                        add_opts = add_opts.importance(meta.significance);
+                    }
+                    match self.add(fact, add_opts) {
+                        Ok(result) => {
+                            all_new_memories.push(result);
+                            record.memories_created += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(text = %fact, error = %e, "Failed to add memory, skipping");
+                        }
+                    }
+                }
+
+                // ── Step 3: Graph extraction + entity linking ──
+                if let Some(ref gp) = graph_processor {
+                    self.process_graph_batch(
+                        gp,
+                        &text,
+                        &options.user_id,
+                        &all_new_memories,
+                        record,
+                    );
+                }
+
+                episode_ids_to_mark.push(episode.episode_id.clone());
+            }
+
+            // Mark episodes as meditated after this batch completes
+            for episode_id in &episode_ids_to_mark {
+                if let Err(e) = self.storage.mark_episode_meditated(episode_id) {
+                    tracing::warn!("Failed to mark episode {episode_id} as meditated: {e}");
                 }
             }
 
-            // ── Step 3: Graph extraction + entity linking ──
-            if let Some(ref gp) = graph_processor {
-                self.process_graph_batch(gp, &text, &options.user_id, &all_new_memories, record);
-            }
-
-            episode_ids_to_mark.push(episode.episode_id.clone());
-        }
-
-        // Mark episodes as meditated only after processing completes
-        for episode_id in &episode_ids_to_mark {
-            if let Err(e) = self.storage.mark_episode_meditated(episode_id) {
-                tracing::warn!("Failed to mark episode {episode_id} as meditated: {e}");
-            }
+            total_processed += episodes.len();
         }
 
         Ok(())
@@ -284,8 +297,11 @@ impl super::MemoryStore {
                 record.relations_created += graph_result.relations.len() as u32;
 
                 if !graph_result.entities.is_empty() && !new_memories.is_empty() {
-                    let entity_names: Vec<String> =
-                        graph_result.entities.iter().map(|e| e.name.clone()).collect();
+                    let entity_names: Vec<String> = graph_result
+                        .entities
+                        .iter()
+                        .map(|e| e.name.clone())
+                        .collect();
                     let entity_index = crate::entity_index::EntityIndex::build(&entity_names);
 
                     for memory in new_memories {
@@ -309,131 +325,6 @@ impl super::MemoryStore {
             }
             Err(e) => tracing::warn!("Graph extraction failed: {e}"),
         }
-    }
-
-    /// Reconcile extracted facts against existing memories using LLM-driven
-    /// ADD/UPDATE/DELETE decisions. Returns the list of memories created/updated.
-    fn reconcile_facts(
-        &self,
-        llm: &Arc<dyn LlmProvider>,
-        facts: &[String],
-        fact_meta: &HashMap<String, FactMeta>,
-        user_id: &str,
-        record: &mut MeditationRecord,
-    ) -> Result<Vec<MemoryResult>> {
-        // Search existing memories for each fact (5 nearest neighbors)
-        let mut all_old_memories: Vec<OldMemory> = Vec::new();
-        let search_results = self.batch_search_facts(facts, user_id, 5)?;
-        for results in &search_results {
-            for r in results {
-                if !all_old_memories.iter().any(|om| om.id == r.id) {
-                    all_old_memories.push(OldMemory {
-                        id: r.id.clone(),
-                        text: r.content.clone(),
-                    });
-                }
-            }
-        }
-
-        // Map UUIDs to integer indices to prevent LLM hallucination
-        let mut idx_to_uuid: HashMap<usize, String> = HashMap::new();
-        let indexed_old_memories: Vec<OldMemory> = all_old_memories
-            .iter()
-            .enumerate()
-            .map(|(idx, om)| {
-                idx_to_uuid.insert(idx, om.id.clone());
-                OldMemory {
-                    id: idx.to_string(),
-                    text: om.text.clone(),
-                }
-            })
-            .collect();
-
-        // LLM decides ADD/UPDATE/DELETE for each fact
-        let update_messages =
-            if let Some(ref prompt) = self.config.custom_update_memory_prompt {
-                get_update_memory_messages_with_prompt(facts, &indexed_old_memories, prompt)
-            } else {
-                get_update_memory_messages(facts, &indexed_old_memories)
-            };
-
-        // Scale output budget: each fact generates ~50 output tokens
-        let output_budget = (facts.len() * 50 + 500).clamp(1024, 8192);
-        let config = StructuredGenConfig {
-            base_temperature: Some(0.1),
-            max_tokens: Some(output_budget),
-            response_format: Some(ResponseFormat::Json),
-            ..Default::default()
-        };
-        let update_response =
-            generate_structured(llm.as_ref(), &update_messages, &config, |raw| {
-                parse_update_memory_response(raw)
-            })
-            .map_err(|e| MemoryError::Llm(e.to_string()))?;
-
-        tracing::debug!("Reconciliation: {} operations for {} facts", update_response.memory.len(), facts.len());
-
-        // Execute operations
-        let mut results = Vec::new();
-
-        for op in update_response.memory {
-            match op.event {
-                MemoryEvent::Add => {
-                    let mut add_opts = AddOptions::new(user_id);
-                    if let Some(meta) = fact_meta.get(&op.text) {
-                        if let Some(ref et) = meta.event_time {
-                            add_opts = add_opts.event_time(et);
-                        }
-                        if let Some(ref sid) = meta.session_id {
-                            add_opts = add_opts.session_id(sid);
-                        }
-                        add_opts = add_opts.importance(meta.significance);
-                    }
-                    match self.add(&op.text, add_opts) {
-                        Ok(result) => {
-                            results.push(result);
-                            record.memories_created += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(text = %op.text, error = %e, "Failed to add memory, skipping");
-                        }
-                    }
-                }
-                MemoryEvent::Update => {
-                    let real_id =
-                        resolve_memory_id(&op.id, &idx_to_uuid, &all_old_memories);
-                    if let Some(id) = real_id {
-                        match self.update_trace(&id, &op.text, None) {
-                            Ok(result) => {
-                                results.push(result);
-                                record.memories_updated += 1;
-                            }
-                            Err(e) => {
-                                tracing::warn!(id = %id, error = %e, "Failed to update memory, skipping");
-                            }
-                        }
-                    } else {
-                        tracing::warn!(raw_id = %op.id, "LLM returned unresolvable memory ID for UPDATE, skipping");
-                    }
-                }
-                MemoryEvent::Delete => {
-                    let real_id =
-                        resolve_memory_id(&op.id, &idx_to_uuid, &all_old_memories);
-                    if let Some(id) = real_id {
-                        if let Err(e) = self.delete_trace(&id) {
-                            tracing::warn!(id = %id, error = %e, "Failed to delete memory, skipping");
-                        } else {
-                            record.conflicts_found += 1;
-                        }
-                    } else {
-                        tracing::warn!(raw_id = %op.id, "LLM returned unresolvable memory ID for DELETE, skipping");
-                    }
-                }
-                MemoryEvent::None => {}
-            }
-        }
-
-        Ok(results)
     }
 
     /// Extract facts from episode text using LLM.
@@ -509,22 +400,4 @@ impl super::MemoryStore {
         let cooldown = chrono::Duration::hours(self.config.meditation_cooldown_hours as i64);
         chrono::Utc::now() - last_time < cooldown
     }
-}
-
-/// Resolve an LLM-returned ID (integer index) back to a real UUID.
-fn resolve_memory_id(
-    op_id: &str,
-    idx_to_uuid: &HashMap<usize, String>,
-    all_old_memories: &[OldMemory],
-) -> Option<String> {
-    if let Ok(idx) = op_id.parse::<usize>() {
-        if let Some(real_id) = idx_to_uuid.get(&idx) {
-            return Some(real_id.clone());
-        }
-    }
-    // Fallback: LLM returned the real UUID directly
-    if all_old_memories.iter().any(|om| om.id == op_id) {
-        return Some(op_id.to_string());
-    }
-    None
 }

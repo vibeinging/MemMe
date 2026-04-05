@@ -53,8 +53,9 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let embedder: Arc<dyn Embedder> =
-        Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(&api_key, &embed_url));
+    let embedder: Arc<dyn Embedder> = Arc::new(memme_embeddings::openai::OpenAiEmbedder::new(
+        &api_key, &embed_url,
+    ));
 
     let llm_config = memme_llm::openai::OpenAIConfig {
         api_key: api_key.clone(),

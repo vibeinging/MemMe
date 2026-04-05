@@ -31,16 +31,17 @@ A local web app opens in your browser. Store memories, search by meaning, chat w
 
 ## Benchmark
 
-MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, GPT-4o-mini judge):
+MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, 10 conversations, GPT-4o-mini judge):
 
 | Category | **MemMe** | mem0 | mem0-graph | Zep |
 |---|---|---|---|---|
-| Single-hop | **79.43** | 67.13 | 65.71 | 61.70 |
-| Multi-hop | **65.73** | 51.15 | 47.19 | 41.35 |
-| Temporal | **70.83** | 55.51 | 58.13 | 49.31 |
-| Open-domain | **82.28** | 72.93 | 75.71 | 76.60 |
+| Single-hop | **85.46** | 67.13 | 65.71 | 61.70 |
+| Multi-hop | **57.32** | 51.15 | 47.19 | 41.35 |
+| Temporal | **66.67** | 55.51 | 58.13 | 49.31 |
+| Open-domain | **85.26** | 72.93 | 75.71 | 76.60 |
+| **Overall** | **78.31** | — | — | — |
 
-4-channel retrieval (vector + BM25 + entity spreading + temporal) with RRF fusion and cross-encoder reranking.
+Pipeline: append_events → compact → meditate (per-episode fact extraction + vector dedup). 4-channel retrieval (vector + BM25 + entity spreading + temporal) with RRF fusion and cross-encoder reranking.
 
 ## Why MemMe
 

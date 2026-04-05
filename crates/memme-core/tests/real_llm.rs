@@ -21,11 +21,13 @@ fn api_pause() {
     std::thread::sleep(std::time::Duration::from_secs(2));
 }
 fn embedding_base_url() -> String {
-    std::env::var("EMBEDDING_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string())
+    std::env::var("EMBEDDING_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string())
 }
 
 fn llm_base_url() -> String {
-    std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string())
+    std::env::var("LLM_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string())
 }
 
 fn embedding_model() -> String {
@@ -45,12 +47,11 @@ fn embedding_dims() -> usize {
 
 fn make_embedder() -> Arc<OpenAiEmbedder> {
     Arc::new(
-        OpenAiEmbedder::new(&api_key(), &embedding_base_url())
-            .with_model(OpenAiModel::Custom {
-                name: embedding_model(),
-                dims: embedding_dims(),
-                send_dims: true,
-            }),
+        OpenAiEmbedder::new(&api_key(), &embedding_base_url()).with_model(OpenAiModel::Custom {
+            name: embedding_model(),
+            dims: embedding_dims(),
+            send_dims: true,
+        }),
     )
 }
 
@@ -1124,14 +1125,28 @@ fn test_full_pipeline_e2e() {
     ];
 
     let session_id = "e2e-session-1";
-    let append_result = store.append_events(session_id, &messages, user_id, None).unwrap();
+    let append_result = store
+        .append_events(session_id, &messages, user_id, None)
+        .unwrap();
     eprintln!("  Events appended: {}", append_result.events_appended);
-    assert!(append_result.events_appended >= 6, "Should append at least 6 events");
+    assert!(
+        append_result.events_appended >= 6,
+        "Should append at least 6 events"
+    );
 
     // Verify events exist
-    let events = store.list_events(ListEventsOptions { user_id: user_id.into(), session_id: Some(session_id.into()), ..Default::default() }).unwrap();
+    let events = store
+        .list_events(ListEventsOptions {
+            user_id: user_id.into(),
+            session_id: Some(session_id.into()),
+            ..Default::default()
+        })
+        .unwrap();
     eprintln!("  Events in session: {}", events.len());
-    assert!(events.len() >= 6, "Should have at least 6 events in session");
+    assert!(
+        events.len() >= 6,
+        "Should have at least 6 events in session"
+    );
 
     // ── Phase 2: Compact → Episode ──
     eprintln!("\n=== Phase 2: Compact ===");
@@ -1139,11 +1154,19 @@ fn test_full_pipeline_e2e() {
     let compact_result = store.compact(session_id).unwrap();
     eprintln!("  Events processed: {}", compact_result.events_processed);
     eprintln!("  Episode ID: {}", compact_result.episode_id);
-    assert!(!compact_result.episode_id.is_empty(), "Should create an episode");
-    assert!(compact_result.events_processed >= 2, "Should process events");
+    assert!(
+        !compact_result.episode_id.is_empty(),
+        "Should create an episode"
+    );
+    assert!(
+        compact_result.events_processed >= 2,
+        "Should process events"
+    );
 
     // Verify episode exists
-    let episodes = store.list_episodes(ListEpisodesOptions::new(user_id)).unwrap();
+    let episodes = store
+        .list_episodes(ListEpisodesOptions::new(user_id))
+        .unwrap();
     eprintln!("  Episodes created: {}", episodes.len());
     assert!(!episodes.is_empty(), "Should have at least 1 episode");
     eprintln!("  Episode title: {}", episodes[0].title);
@@ -1152,7 +1175,9 @@ fn test_full_pipeline_e2e() {
     // ── Phase 3: Meditate → Extract facts + Graph ──
     eprintln!("\n=== Phase 3: Meditate ===");
     api_pause();
-    let med_result = store.meditate(MeditateOptions::new(user_id, "e2e_test")).unwrap();
+    let med_result = store
+        .meditate(MeditateOptions::new(user_id, "e2e_test"))
+        .unwrap();
     eprintln!("  Status: {:?}", med_result.status);
     eprintln!("  Memories created: {}", med_result.memories_created);
     eprintln!("  Memories updated: {}", med_result.memories_updated);
@@ -1161,8 +1186,15 @@ fn test_full_pipeline_e2e() {
     eprintln!("  Decayed: {}", med_result.memories_decayed);
     eprintln!("  Journal: {:?}", med_result.journal);
 
-    assert_eq!(med_result.status, MeditationStatus::Completed, "Meditation should complete");
-    assert!(med_result.memories_created > 0, "Should extract at least 1 memory from the conversation");
+    assert_eq!(
+        med_result.status,
+        MeditationStatus::Completed,
+        "Meditation should complete"
+    );
+    assert!(
+        med_result.memories_created > 0,
+        "Should extract at least 1 memory from the conversation"
+    );
 
     // ── Phase 4: Search → Verify extracted memories ──
     eprintln!("\n=== Phase 4: Search ===");
@@ -1171,41 +1203,73 @@ fn test_full_pipeline_e2e() {
     for m in &all_memories {
         eprintln!("    [{}] {}", m.importance.unwrap_or(0.0), m.content);
     }
-    assert!(all_memories.len() >= 2, "Should have extracted multiple memories");
+    assert!(
+        all_memories.len() >= 2,
+        "Should have extracted multiple memories"
+    );
 
     // Semantic search: find Zhang Wei's workplace
-    let results = store.search("where does the user work", SearchOptions::new(user_id).limit(5)).unwrap();
+    let results = store
+        .search(
+            "where does the user work",
+            SearchOptions::new(user_id).limit(5),
+        )
+        .unwrap();
     eprintln!("\n  Search 'where does the user work':");
     for r in &results {
-        eprintln!("    score={:.4} content={}", r.score.unwrap_or(0.0), r.content);
+        eprintln!(
+            "    score={:.4} content={}",
+            r.score.unwrap_or(0.0),
+            r.content
+        );
     }
     assert!(!results.is_empty(), "Should find work-related memories");
-    let found_bytedance = results.iter().any(|r|
+    let found_bytedance = results.iter().any(|r| {
         r.content.to_lowercase().contains("bytedance") || r.content.to_lowercase().contains("byte")
-    );
+    });
     assert!(found_bytedance, "Should find ByteDance in search results");
 
     // Search for personal info
-    let results = store.search("family and children", SearchOptions::new(user_id).limit(5)).unwrap();
+    let results = store
+        .search("family and children", SearchOptions::new(user_id).limit(5))
+        .unwrap();
     eprintln!("\n  Search 'family and children':");
     for r in &results {
-        eprintln!("    score={:.4} content={}", r.score.unwrap_or(0.0), r.content);
+        eprintln!(
+            "    score={:.4} content={}",
+            r.score.unwrap_or(0.0),
+            r.content
+        );
     }
-    let found_lily = results.iter().any(|r|
+    let found_lily = results.iter().any(|r| {
         r.content.to_lowercase().contains("lily") || r.content.to_lowercase().contains("daughter")
-    );
+    });
     assert!(found_lily, "Should find info about daughter Lily");
 
     // ── Phase 5: Verify Graph ──
     eprintln!("\n=== Phase 5: Knowledge Graph ===");
-    eprintln!("  Entities created by meditation: {}", med_result.entities_created);
-    eprintln!("  Relations created by meditation: {}", med_result.relations_created);
+    eprintln!(
+        "  Entities created by meditation: {}",
+        med_result.entities_created
+    );
+    eprintln!(
+        "  Relations created by meditation: {}",
+        med_result.relations_created
+    );
     if med_result.entities_created > 0 {
         eprintln!("  Graph populated successfully");
         // Search with graph-enhanced retrieval
-        let results = store.search("Zhang Wei", SearchOptions::new(user_id).limit(5)).unwrap();
-        eprintln!("  Graph-enhanced search for 'Zhang Wei': {} results", results.len());
-        assert!(!results.is_empty(), "Graph-enhanced search should return results");
+        let results = store
+            .search("Zhang Wei", SearchOptions::new(user_id).limit(5))
+            .unwrap();
+        eprintln!(
+            "  Graph-enhanced search for 'Zhang Wei': {} results",
+            results.len()
+        );
+        assert!(
+            !results.is_empty(),
+            "Graph-enhanced search should return results"
+        );
     } else {
         eprintln!("  (Graph extraction returned no entities — LLM dependent)");
     }
@@ -1214,18 +1278,34 @@ fn test_full_pipeline_e2e() {
     eprintln!("\n=== Phase 6: Consolidation & Decay ===");
     let pre_count = store.list_traces(ListOptions::new(user_id)).unwrap().len();
     let decay_result = store.consolidate(user_id, 0.01, 0.0, false).unwrap();
-    eprintln!("  Decayed: {}, Deleted: {}, Expired: {}",
-        decay_result.decayed_count, decay_result.deleted_count, decay_result.expired_count);
+    eprintln!(
+        "  Decayed: {}, Deleted: {}, Expired: {}",
+        decay_result.decayed_count, decay_result.deleted_count, decay_result.expired_count
+    );
     let post_count = store.list_traces(ListOptions::new(user_id)).unwrap().len();
-    assert_eq!(pre_count, post_count, "No memories should be deleted (all freshly created)");
-    assert!(decay_result.decayed_count > 0, "Should report some decayed memories");
+    assert_eq!(
+        pre_count, post_count,
+        "No memories should be deleted (all freshly created)"
+    );
+    assert!(
+        decay_result.decayed_count > 0,
+        "Should report some decayed memories"
+    );
 
     // Verify retention scores exist
     let mem = store.list_traces(ListOptions::new(user_id)).unwrap();
     for m in &mem {
         if let Some(retention) = m.retention {
-            eprintln!("  Memory retention={:.4} stability={:?}: {}", retention, m.stability, &m.content[..m.content.len().min(50)]);
-            assert!(retention > 0.0, "Fresh memories should have positive retention");
+            eprintln!(
+                "  Memory retention={:.4} stability={:?}: {}",
+                retention,
+                m.stability,
+                &m.content[..m.content.len().min(50)]
+            );
+            assert!(
+                retention > 0.0,
+                "Fresh memories should have positive retention"
+            );
         }
     }
 
@@ -1239,29 +1319,47 @@ fn test_full_pipeline_e2e() {
     ];
 
     let session_id2 = "e2e-session-2";
-    store.append_events(session_id2, &messages2, user_id, None).unwrap();
+    store
+        .append_events(session_id2, &messages2, user_id, None)
+        .unwrap();
     api_pause();
     store.compact(session_id2).unwrap();
     api_pause();
 
     let memories_before = store.list_traces(ListOptions::new(user_id)).unwrap().len();
-    let med2 = store.meditate(MeditateOptions::new(user_id, "e2e_test_round2")).unwrap();
+    let med2 = store
+        .meditate(MeditateOptions::new(user_id, "e2e_test_round2"))
+        .unwrap();
     let memories_after = store.list_traces(ListOptions::new(user_id)).unwrap().len();
-    eprintln!("  Round 2: created={}, updated={}, deleted={}",
-        med2.memories_created, med2.memories_updated, med2.conflicts_found);
+    eprintln!(
+        "  Round 2: created={}, updated={}, deleted={}",
+        med2.memories_created, med2.memories_updated, med2.conflicts_found
+    );
     eprintln!("  Memories: {} -> {}", memories_before, memories_after);
 
     // The LLM should UPDATE the workplace from ByteDance to Alibaba
     // (or DELETE old + ADD new — either way, Alibaba should appear)
-    let results = store.search("where does the user work now", SearchOptions::new(user_id).limit(5)).unwrap();
+    let results = store
+        .search(
+            "where does the user work now",
+            SearchOptions::new(user_id).limit(5),
+        )
+        .unwrap();
     eprintln!("  Search 'where does the user work now':");
     for r in &results {
-        eprintln!("    score={:.4} content={}", r.score.unwrap_or(0.0), r.content);
+        eprintln!(
+            "    score={:.4} content={}",
+            r.score.unwrap_or(0.0),
+            r.content
+        );
     }
-    let found_alibaba = results.iter().any(|r|
-        r.content.to_lowercase().contains("alibaba")
+    let found_alibaba = results
+        .iter()
+        .any(|r| r.content.to_lowercase().contains("alibaba"));
+    assert!(
+        found_alibaba,
+        "Should find Alibaba after reconciliation update"
     );
-    assert!(found_alibaba, "Should find Alibaba after reconciliation update");
 
     // ── Phase 8: Full Export/Import ──
     eprintln!("\n=== Phase 8: Full Export/Import ===");
@@ -1270,10 +1368,19 @@ fn test_full_pipeline_e2e() {
         export.memories.len(), export.sessions.len(), export.events.len(),
         export.episodes.len(), export.entities.len(), export.relations.len(),
         export.identity_traits.len());
-    assert!(!export.memories.is_empty(), "Export should contain memories");
-    assert!(!export.sessions.is_empty(), "Export should contain sessions");
+    assert!(
+        !export.memories.is_empty(),
+        "Export should contain memories"
+    );
+    assert!(
+        !export.sessions.is_empty(),
+        "Export should contain sessions"
+    );
     assert!(!export.events.is_empty(), "Export should contain events");
-    assert!(!export.episodes.is_empty(), "Export should contain episodes");
+    assert!(
+        !export.episodes.is_empty(),
+        "Export should contain episodes"
+    );
 
     // Import into a fresh store
     let embedder2 = make_embedder();
@@ -1286,9 +1393,15 @@ fn test_full_pipeline_e2e() {
     };
     let store2 = MemoryStore::new(config2, embedder2).unwrap();
     let import_result = store2.full_import(&export).unwrap();
-    eprintln!("  Imported: {} memories, {} sessions, {} events, {} episodes, {} entities, {} relations",
-        import_result.memories, import_result.sessions, import_result.events,
-        import_result.episodes, import_result.entities, import_result.relations);
+    eprintln!(
+        "  Imported: {} memories, {} sessions, {} events, {} episodes, {} entities, {} relations",
+        import_result.memories,
+        import_result.sessions,
+        import_result.events,
+        import_result.episodes,
+        import_result.entities,
+        import_result.relations
+    );
     assert_eq!(import_result.memories, export.memories.len() as u64);
     assert_eq!(import_result.sessions, export.sessions.len() as u64);
     assert_eq!(import_result.events, export.events.len() as u64);
@@ -1296,11 +1409,17 @@ fn test_full_pipeline_e2e() {
     // Verify imported data is searchable (no embeddings imported, so
     // only BM25/FTS search will work — memories have content but no vectors)
     let imported_memories = store2.list_traces(ListOptions::new(user_id)).unwrap();
-    eprintln!("  Imported store has {} memories (export had {})", imported_memories.len(), export.memories.len());
+    eprintln!(
+        "  Imported store has {} memories (export had {})",
+        imported_memories.len(),
+        export.memories.len()
+    );
     // import_memories skips records that fail (e.g. missing embeddings),
     // so imported count may be <= exported count.
-    assert!(imported_memories.len() >= import_result.memories as usize / 2,
-        "Imported store should have a reasonable number of memories");
+    assert!(
+        imported_memories.len() >= import_result.memories as usize / 2,
+        "Imported store should have a reasonable number of memories"
+    );
 
     eprintln!("\n=== Full Pipeline E2E Test PASSED ===");
     eprintln!("  Covered: append_events -> compact -> meditate -> search -> graph -> decay -> update -> export/import");

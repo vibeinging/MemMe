@@ -549,6 +549,9 @@ pub struct GraphRelation {
     pub relation_type: String,
     /// Owner of this relation.
     pub user_id: String,
+    /// Natural language description of the relationship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Result of a graph search, containing matched entities and their relationships.
@@ -693,6 +696,23 @@ pub struct ReplicaStatus {
     pub replica_size_bytes: Option<u64>,
     /// When the replica was last synced (ISO 8601, from memme_config).
     pub last_synced_at: Option<String>,
+}
+
+/// Metadata returned after a successful backup operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupInfo {
+    /// Path of the source (primary) database.
+    pub source_path: String,
+    /// Path where the backup was written.
+    pub backup_path: String,
+    /// Backup file size in bytes.
+    pub size_bytes: u64,
+    /// When the backup was created (ISO 8601).
+    pub created_at: String,
+    /// Number of memories in the database at backup time.
+    pub memory_count: u64,
+    /// Schema version of the database.
+    pub schema_version: String,
 }
 
 /// Full export structure for backup and migration, including all data layers.

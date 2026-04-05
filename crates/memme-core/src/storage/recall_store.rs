@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::RecallRecord;
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -18,14 +19,8 @@ impl Storage {
         results: Option<&serde_json::Value>,
     ) -> Result<()> {
         let emb_literal = Self::format_embedding(query_vec, self.config.embedding_dims)?;
-        let source_val: duckdb::types::Value = match source_id {
-            Some(s) => duckdb::types::Value::Text(s.to_string()),
-            None => duckdb::types::Value::Null,
-        };
-        let results_val: duckdb::types::Value = match results {
-            Some(r) => duckdb::types::Value::Text(serde_json::to_string(r).unwrap_or_default()),
-            None => duckdb::types::Value::Null,
-        };
+        let source_val = opt_text(source_id);
+        let results_val = opt_text(results.map(|r| serde_json::to_string(r).unwrap_or_default()));
 
         let sql = format!(
             r#"INSERT INTO recalls (recall_id, query, query_vec, source_id, user_id, results)

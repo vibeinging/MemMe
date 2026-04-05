@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::{ListSessionsOptions, Session};
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -15,14 +16,8 @@ impl Storage {
         started_at: &str,
         metadata: Option<&str>,
     ) -> Result<()> {
-        let source_val: duckdb::types::Value = match source_id {
-            Some(s) => duckdb::types::Value::Text(s.to_string()),
-            None => duckdb::types::Value::Null,
-        };
-        let meta_val: duckdb::types::Value = match metadata {
-            Some(m) => duckdb::types::Value::Text(m.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let source_val = opt_text(source_id);
+        let meta_val = opt_text(metadata);
         let conn = self.write_conn();
         conn.execute(
             r#"INSERT INTO sessions (session_id, user_id, source_id, started_at, metadata)

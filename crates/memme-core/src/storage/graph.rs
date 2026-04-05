@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::GraphRelation;
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -17,10 +18,7 @@ impl Storage {
         user_id: &str,
     ) -> Result<()> {
         let collection = &self.config.collection_name;
-        let type_val: duckdb::types::Value = match entity_type {
-            Some(t) => duckdb::types::Value::Text(t.to_string()),
-            None => duckdb::types::Value::Null,
-        };
+        let type_val = opt_text(entity_type);
 
         // Try insert first; if conflict on id, update
         let sql = format!(
@@ -123,6 +121,7 @@ impl Storage {
         target_id: &str,
         relation_type: &str,
         user_id: &str,
+        description: Option<&str>,
     ) -> Result<()> {
         let collection = &self.config.collection_name;
         let conn = self.write_conn();
@@ -143,13 +142,15 @@ impl Storage {
             return Ok(());
         }
 
+        let desc_val = opt_text(description);
+
         let sql = format!(
-            r#"INSERT INTO relationships_{collection} (id, source_id, target_id, relation_type, user_id)
-               VALUES ($1, $2, $3, $4, $5)"#
+            r#"INSERT INTO relationships_{collection} (id, source_id, target_id, relation_type, user_id, description)
+               VALUES ($1, $2, $3, $4, $5, $6)"#
         );
         conn.execute(
             &sql,
-            params![id, source_id, target_id, relation_type, user_id],
+            params![id, source_id, target_id, relation_type, user_id, desc_val],
         )?;
         Ok(())
     }
@@ -164,7 +165,7 @@ impl Storage {
         let collection = &self.config.collection_name;
         let sql = format!(
             r#"SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id,
-                      s.name AS source_name, t.name AS target_name
+                      s.name AS source_name, t.name AS target_name, r.description
                FROM relationships_{collection} r
                JOIN entities_{collection} s ON r.source_id = s.id
                JOIN entities_{collection} t ON r.target_id = t.id
@@ -182,6 +183,7 @@ impl Storage {
                     user_id: row.get(4)?,
                     source: row.get(5)?,
                     target: row.get(6)?,
+                    description: row.get::<_, Option<String>>(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -264,14 +266,14 @@ impl Storage {
         let sql = format!(
             r#"WITH RECURSIVE neighborhood AS (
                 -- Base case: relationships directly connected to the starting entity
-                SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id, 1 AS depth
+                SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id, r.description, 1 AS depth
                 FROM relationships_{collection} r
                 WHERE (r.source_id = $1 OR r.target_id = $1) AND r.user_id = $2
 
                 UNION
 
                 -- Recursive case: expand from the frontier only
-                SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id, n.depth + 1
+                SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id, r.description, n.depth + 1
                 FROM relationships_{collection} r
                 JOIN neighborhood n ON (
                     r.source_id = n.target_id OR r.target_id = n.source_id
@@ -281,7 +283,7 @@ impl Storage {
                 AND r.id != n.id
             )
             SELECT DISTINCT nb.id, nb.source_id, nb.target_id, nb.relation_type, nb.user_id,
-                   s.name AS source_name, t.name AS target_name
+                   s.name AS source_name, t.name AS target_name, nb.description
             FROM neighborhood nb
             JOIN entities_{collection} s ON nb.source_id = s.id
             JOIN entities_{collection} t ON nb.target_id = t.id
@@ -299,6 +301,7 @@ impl Storage {
                     user_id: row.get(4)?,
                     source: row.get(5)?,
                     target: row.get(6)?,
+                    description: row.get::<_, Option<String>>(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

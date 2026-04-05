@@ -6,7 +6,7 @@ cd /Users/Four/PersonalProjects/MemMe/benchmarks/locomo
 
 API_KEY="${OPENAI_API_KEY:?Please set OPENAI_API_KEY}"
 RERANK_KEY="${RERANK_API_KEY:?Please set RERANK_API_KEY}"
-OUTDIR="results_v12_4omini"
+OUTDIR="results_v18_full"
 mkdir -p "$OUTDIR"
 
 run_conv() {
@@ -15,9 +15,9 @@ run_conv() {
   MEMME_CACHE_DIR="cache" python3 run_benchmark_engine.py \
     --api-key "$API_KEY" \
     --llm-api-key "$API_KEY" \
-    --base-url "https://api.getgoapi.com/v1/embeddings" \
-    --chat-base-url "https://api.getgoapi.com/v1/chat/completions" \
-    --llm-base-url "https://api.getgoapi.com/v1/chat/completions" \
+    --base-url "https://api.openai.com/v1/embeddings" \
+    --chat-base-url "https://api.openai.com/v1/chat/completions" \
+    --llm-base-url "https://api.openai.com/v1/chat/completions" \
     --chat-model "gpt-4o-mini" \
     --judge-model "gpt-4o-mini" \
     --engine-llm-model "gpt-4o-mini" \

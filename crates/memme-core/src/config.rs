@@ -161,6 +161,25 @@ pub struct MemoryConfig {
     /// Default: 30.
     pub deferred_flush_interval_secs: u64,
 
+    /// Score multiplier for Granular resolution memories in forgetting curve scoring.
+    /// Default: 1.0 (no adjustment).
+    pub resolution_weight_granular: f32,
+
+    /// Score multiplier for Narrative resolution memories in forgetting curve scoring.
+    /// Narrative memories (episode summaries) are semantically broad and match many queries,
+    /// so a slight penalty reduces noise. Default: 0.85.
+    pub resolution_weight_narrative: f32,
+
+    /// Score multiplier for Identity resolution memories in forgetting curve scoring.
+    /// Identity traits are the coarsest grain, penalized more. Default: 0.7.
+    pub resolution_weight_identity: f32,
+
+    /// Alpha for adaptive RRF weight scaling (0.0-1.0).
+    /// 0.0 = fixed weights (current behavior), 1.0 = fully adaptive.
+    /// When > 0, each channel's weight is scaled by its confidence score
+    /// before RRF fusion. Default: 0.0 (disabled).
+    pub adaptive_rrf_alpha: f32,
+
     /// Enable cross-encoder reranking after RRF fusion. Default: false.
     /// When true and a reranker is configured, search() will fetch more candidates
     /// and re-score them with the reranker before returning.
@@ -224,6 +243,10 @@ impl Default for MemoryConfig {
             llm_max_tokens: 2048,
             llm_temperature: Some(0.1),
             deferred_flush_interval_secs: 30,
+            resolution_weight_granular: 1.0,
+            resolution_weight_narrative: 0.85,
+            resolution_weight_identity: 0.7,
+            adaptive_rrf_alpha: 0.0,
             enable_rerank: false,
             rerank_candidate_multiplier: 3,
         }
@@ -329,6 +352,31 @@ impl MemoryConfig {
         if self.rerank_candidate_multiplier == 0 {
             return Err(MemoryError::Config(
                 "rerank_candidate_multiplier must be > 0".to_string(),
+            ));
+        }
+        for (name, val) in [
+            (
+                "resolution_weight_granular",
+                self.resolution_weight_granular,
+            ),
+            (
+                "resolution_weight_narrative",
+                self.resolution_weight_narrative,
+            ),
+            (
+                "resolution_weight_identity",
+                self.resolution_weight_identity,
+            ),
+        ] {
+            if !(0.0..=2.0).contains(&val) {
+                return Err(MemoryError::Config(format!(
+                    "{name} must be in the range [0.0, 2.0]"
+                )));
+            }
+        }
+        if !(0.0..=1.0).contains(&self.adaptive_rrf_alpha) {
+            return Err(MemoryError::Config(
+                "adaptive_rrf_alpha must be in the range [0.0, 1.0]".to_string(),
             ));
         }
         Ok(())

@@ -62,6 +62,7 @@ pub struct GraphRelation {
     pub target_id: String,
     pub relation_type: String,
     pub user_id: String,
+    pub description: Option<String>,
 }
 
 /// A history record.
@@ -290,6 +291,7 @@ fn convert_graph(r: &memme_core::types::GraphSearchResult) -> GraphSearchResult 
                 target_id: rel.target_id.clone(),
                 relation_type: rel.relation_type.clone(),
                 user_id: rel.user_id.clone(),
+                description: rel.description.clone(),
             })
             .collect(),
     }
@@ -471,12 +473,19 @@ impl MemoryStore {
         dims: Option<u32>,
     ) -> Result<Self> {
         let path = db_path.unwrap_or_else(|| ":memory:".to_string());
-        let embed_url = base_url.ok_or_else(|| napi::Error::from_reason("base_url required (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)"))?;
+        let embed_url = base_url.ok_or_else(|| {
+            napi::Error::from_reason(
+                "base_url required (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)",
+            )
+        })?;
         let mut embedder = memme_embeddings::openai::OpenAiEmbedder::new(&api_key, embed_url);
         let final_dims = if let Some(m) = model {
             let d = dims.unwrap_or(1536) as usize;
-            embedder = embedder
-                .with_model(memme_embeddings::openai::OpenAiModel::Custom { name: m, dims: d, send_dims: true });
+            embedder = embedder.with_model(memme_embeddings::openai::OpenAiModel::Custom {
+                name: m,
+                dims: d,
+                send_dims: true,
+            });
             d
         } else {
             use memme_embeddings::Embedder;
@@ -508,6 +517,28 @@ impl MemoryStore {
         let llm = create_llm(&api_key, &model, base_url.as_deref())?;
         self.inner.set_llm_provider(llm);
         Ok(())
+    }
+
+    // -- Backup / Restore ---------------------------------------------------
+
+    /// Backup the database to a file path.
+    /// Returns metadata about the backup (size, memory count, schema version).
+    #[napi]
+    pub fn backup_to_path(&self, path: String) -> Result<serde_json::Value> {
+        let info = self
+            .inner
+            .backup_to_path(&path)
+            .map_err(|e| Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&info).map_err(|e| Error::from_reason(e.to_string()))
+    }
+
+    /// Restore the database from a backup file.
+    /// **Warning**: The caller must re-create the MemoryStore after calling this.
+    #[napi]
+    pub fn restore_from_backup(&self, backup_path: String) -> Result<()> {
+        let config = self.inner.config().clone();
+        memme_core::MemoryStore::restore_from_backup(&backup_path, &config)
+            .map_err(|e| Error::from_reason(e.to_string()))
     }
 
     /// Run diagnostic checks on storage, embedder, and LLM.

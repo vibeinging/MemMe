@@ -98,8 +98,8 @@ impl MemoryStore {
                 let url = base_url.ok_or_else(|| {
                     PyRuntimeError::new_err("base_url required for openai embedder (full endpoint URL, e.g. https://api.openai.com/v1/embeddings)")
                 })?;
-                let mut e = memme_embeddings::openai::OpenAiEmbedder::new(key, url)
-                    .with_batch_size(10);
+                let mut e =
+                    memme_embeddings::openai::OpenAiEmbedder::new(key, url).with_batch_size(10);
                 if let Some(model) = embed_model {
                     let d = dims.unwrap_or(1536);
                     e = e.with_model(memme_embeddings::openai::OpenAiModel::Custom {
@@ -452,8 +452,8 @@ impl MemoryStore {
     /// Returns a dict with check results.
     fn diagnose(&self, py: Python<'_>) -> PyResult<PyObject> {
         let report = py.allow_threads(|| self.inner.diagnose());
-        let json_str = serde_json::to_string(&report)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let json_str =
+            serde_json::to_string(&report).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let json_mod = py.import("json")?;
         let result = json_mod.call_method1("loads", (json_str,))?;
         Ok(result.into())
@@ -485,9 +485,12 @@ impl MemoryStore {
             })
             .collect();
         let (session_id, user_id) = (session_id.to_string(), user_id.to_string());
-        let result = py.allow_threads(|| {
-            self.inner.append_events(&session_id, &chat_messages, &user_id, meta)
-        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let result = py
+            .allow_threads(|| {
+                self.inner
+                    .append_events(&session_id, &chat_messages, &user_id, meta)
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("session_id", &result.session_id)?;
         dict.set_item("events_appended", result.events_appended)?;
@@ -500,9 +503,9 @@ impl MemoryStore {
     #[pyo3(signature = (session_id))]
     fn compact(&self, py: Python<'_>, session_id: &str) -> PyResult<PyObject> {
         let session_id = session_id.to_string();
-        let result = py.allow_threads(|| {
-            self.inner.compact(&session_id)
-        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let result = py
+            .allow_threads(|| self.inner.compact(&session_id))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("session_id", &result.session_id)?;
         dict.set_item("episode_id", &result.episode_id)?;
@@ -519,11 +522,11 @@ impl MemoryStore {
             triggered_by: triggered_by.to_string(),
             since: None,
         };
-        let record = py.allow_threads(|| {
-            self.inner.meditate(opts)
-        }).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        let json_str = serde_json::to_string(&record)
+        let record = py
+            .allow_threads(|| self.inner.meditate(opts))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let json_str =
+            serde_json::to_string(&record).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let json_mod = py.import("json")?;
         let result = json_mod.call_method1("loads", (json_str,))?;
         Ok(result.into())

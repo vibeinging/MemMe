@@ -945,7 +945,7 @@ mod smart_graph_tests {
             .unwrap();
         store
             .storage()
-            .insert_relationship("r1", "e1", "e2", "works_at", "user1")
+            .insert_relationship("r1", "e1", "e2", "works_at", "user1", None)
             .unwrap();
 
         // search() with graph enabled includes entity-centric retrieval

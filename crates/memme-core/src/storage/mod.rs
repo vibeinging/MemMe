@@ -21,9 +21,9 @@ pub(crate) mod pool;
 mod procedural;
 mod query;
 mod recall_store;
+pub(crate) mod replica;
 mod session;
 mod stream;
-pub(crate) mod replica;
 mod sync;
 mod util;
 
@@ -48,9 +48,8 @@ impl Storage {
         config.validate()?;
 
         let cfg_ref = config.clone();
-        let pool_result = ConnectionPool::open(&config, |conn| {
-            Self::run_init_schema(conn, &cfg_ref)
-        });
+        let pool_result =
+            ConnectionPool::open(&config, |conn| Self::run_init_schema(conn, &cfg_ref));
 
         let pool = match pool_result {
             Ok(p) => p,
@@ -58,9 +57,7 @@ impl Storage {
                 // Primary failed to open — try recovering from replica
                 if replica::try_recover_from_replica(&config.db_path) {
                     let cfg_ref2 = config.clone();
-                    ConnectionPool::open(&config, |conn| {
-                        Self::run_init_schema(conn, &cfg_ref2)
-                    })?
+                    ConnectionPool::open(&config, |conn| Self::run_init_schema(conn, &cfg_ref2))?
                 } else {
                     return pool_result.map(|p| Self { pool: p, config });
                 }
@@ -314,6 +311,10 @@ impl Storage {
             conn,
             &format!("ALTER TABLE relationships_{coll} ADD COLUMN episode_ids VARCHAR"),
         );
+        Self::exec_ignore(
+            conn,
+            &format!("ALTER TABLE relationships_{coll} ADD COLUMN description VARCHAR"),
+        );
 
         // --- sessions table (immutable conversation containers) ---
         let create_sessions = r#"CREATE TABLE IF NOT EXISTS sessions (
@@ -326,7 +327,10 @@ impl Storage {
             created_at TIMESTAMP DEFAULT current_timestamp
         )"#;
         conn.execute_batch(create_sessions)?;
-        Self::exec_ignore(conn, "ALTER TABLE sessions ADD COLUMN structured_notes VARCHAR");
+        Self::exec_ignore(
+            conn,
+            "ALTER TABLE sessions ADD COLUMN structured_notes VARCHAR",
+        );
         debug!("Created sessions table");
 
         // --- sources table ---
@@ -399,7 +403,10 @@ impl Storage {
         );
         conn.execute_batch(&create_episodes)?;
         Self::exec_ignore(conn, "ALTER TABLE episodes ADD COLUMN session_ids VARCHAR");
-        Self::exec_ignore(conn, "ALTER TABLE episodes ADD COLUMN last_meditated_at TIMESTAMP");
+        Self::exec_ignore(
+            conn,
+            "ALTER TABLE episodes ADD COLUMN last_meditated_at TIMESTAMP",
+        );
         debug!("Created episodes table");
 
         // --- identity table (Identity layer) ---

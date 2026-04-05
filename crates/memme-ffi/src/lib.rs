@@ -238,6 +238,29 @@ pub struct DiagnoseReport {
 }
 
 #[derive(uniffi::Record)]
+pub struct FfiBackupInfo {
+    pub source_path: String,
+    pub backup_path: String,
+    pub size_bytes: u64,
+    pub created_at: String,
+    pub memory_count: u64,
+    pub schema_version: String,
+}
+
+impl From<memme_core::types::BackupInfo> for FfiBackupInfo {
+    fn from(info: memme_core::types::BackupInfo) -> Self {
+        Self {
+            source_path: info.source_path,
+            backup_path: info.backup_path,
+            size_bytes: info.size_bytes,
+            created_at: info.created_at,
+            memory_count: info.memory_count,
+            schema_version: info.schema_version,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
 pub struct GraphRelation {
     pub id: String,
     pub source: String,
@@ -246,6 +269,7 @@ pub struct GraphRelation {
     pub target_id: String,
     pub relation_type: String,
     pub user_id: String,
+    pub description: Option<String>,
 }
 
 #[derive(uniffi::Record)]
@@ -550,6 +574,24 @@ impl MemoryStore {
         Ok(())
     }
 
+    // -- Backup / Restore ---------------------------------------------------
+
+    pub fn backup_to_path(&self, path: String) -> Result<FfiBackupInfo, MemmeError> {
+        let store = self.lock_store()?;
+        Ok(store.backup_to_path(&path)?.into())
+    }
+
+    /// Restore the database from a backup file.
+    ///
+    /// **Warning**: The caller must re-create the MemoryStore after calling this.
+    pub fn restore_from_backup(&self, backup_path: String) -> Result<(), MemmeError> {
+        let store = self.lock_store()?;
+        let config = store.config().clone();
+        drop(store);
+        memme_core::MemoryStore::restore_from_backup(&backup_path, &config)?;
+        Ok(())
+    }
+
     // -- Diagnostics ---------------------------------------------------------
 
     pub fn diagnose(&self) -> Result<DiagnoseReport, MemmeError> {
@@ -801,6 +843,7 @@ fn convert_graph_result(r: &memme_core::types::GraphSearchResult) -> GraphSearch
                 target_id: rel.target_id.clone(),
                 relation_type: rel.relation_type.clone(),
                 user_id: rel.user_id.clone(),
+                description: rel.description.clone(),
             })
             .collect(),
     }

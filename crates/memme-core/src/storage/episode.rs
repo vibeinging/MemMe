@@ -3,6 +3,7 @@ use duckdb::params;
 use crate::error::Result;
 use crate::types::{CreateEpisodeOptions, Episode, ListEpisodesOptions, SearchEpisodesOptions};
 
+use super::util::opt_text;
 use super::Storage;
 
 const EPISODE_COLS: &str = "episode_id, title, summary, CAST(started_at AS VARCHAR), CAST(ended_at AS VARCHAR), significance, outcome, source_id, event_ids, user_id, CAST(created_at AS VARCHAR), CAST(last_recalled AS VARCHAR), recall_count, storage_strength, retrieval_strength, session_ids, CAST(last_meditated_at AS VARCHAR)";
@@ -18,18 +19,9 @@ impl Storage {
         options: &CreateEpisodeOptions,
     ) -> Result<()> {
         let emb_literal = Self::format_embedding(summary_vec, self.config.embedding_dims)?;
-        let ended_val: duckdb::types::Value = match &options.ended_at {
-            Some(t) => duckdb::types::Value::Text(t.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let outcome_val: duckdb::types::Value = match &options.outcome {
-            Some(o) => duckdb::types::Value::Text(o.clone()),
-            None => duckdb::types::Value::Null,
-        };
-        let source_val: duckdb::types::Value = match &options.source_id {
-            Some(s) => duckdb::types::Value::Text(s.clone()),
-            None => duckdb::types::Value::Null,
-        };
+        let ended_val = opt_text(options.ended_at.as_deref());
+        let outcome_val = opt_text(options.outcome.as_deref());
+        let source_val = opt_text(options.source_id.as_deref());
         let event_ids_str = serde_json::to_string(&options.event_ids).unwrap_or_default();
         let session_ids_str = serde_json::to_string(&options.session_ids).unwrap_or_default();
         let significance = options.significance.unwrap_or(0.5) as f64;
@@ -226,10 +218,7 @@ impl Storage {
     /// Delete all episodes for a user (used by re_traces to rebuild from scratch).
     pub(crate) fn delete_episodes_for_user(&self, user_id: &str) -> Result<()> {
         let conn = self.write_conn();
-        conn.execute(
-            "DELETE FROM episodes WHERE user_id = $1",
-            params![user_id],
-        )?;
+        conn.execute("DELETE FROM episodes WHERE user_id = $1", params![user_id])?;
         Ok(())
     }
 

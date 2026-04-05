@@ -24,10 +24,15 @@ impl Storage {
 
     /// Find all memories linked to ANY of the given entity names (case-insensitive).
     /// This is the core of entity-centric retrieval.
+    ///
+    /// When `query_embedding` is provided, results are ranked by cosine distance
+    /// (semantic relevance) instead of importance. This enables entity channel results
+    /// to participate meaningfully in RRF fusion.
     pub(crate) fn entity_associated_memories(
         &self,
         entity_names: &[&str],
         user_id: &str,
+        query_embedding: Option<&[f32]>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
         if entity_names.is_empty() {
@@ -40,9 +45,24 @@ impl Storage {
             .collect();
         let in_clause = escaped_names.join(", ");
 
+        // When query embedding is available, compute cosine distance for semantic ranking
+        let (distance_col, order_clause) = if let Some(emb) = query_embedding {
+            let lit = Self::format_embedding(emb, self.config.embedding_dims)?;
+            (
+                format!("array_cosine_distance(m.embedding, {lit}) AS distance"),
+                "ORDER BY distance ASC".to_string(),
+            )
+        } else {
+            (
+                "NULL AS distance".to_string(),
+                "ORDER BY m.importance DESC NULLS LAST".to_string(),
+            )
+        };
+
         let sql = format!(
             r#"SELECT DISTINCT m.id, m.content, m.user_id,
                       m.created_at::VARCHAR, m.updated_at::VARCHAR, m.metadata,
+                      {distance_col},
                       m.importance, m.access_count, m.agent_id, m.app_id, m.run_id,
                       m.immutable, m.expiration_date::VARCHAR, m.categories::VARCHAR,
                       m.memory_type, m.stability, m.privacy, m.event_time::VARCHAR,
@@ -51,7 +71,7 @@ impl Storage {
                JOIN memory_entities me ON m.id = me.memory_id
                WHERE me.user_id = $1
                  AND LOWER(me.entity_name) IN ({in_clause})
-               ORDER BY m.importance DESC NULLS LAST
+               {order_clause}
                LIMIT {limit}"#
         );
 
@@ -65,34 +85,34 @@ impl Storage {
                 created_at: row.get::<_, String>(3)?,
                 updated_at: row.get::<_, String>(4)?,
                 metadata: row.get::<_, Option<String>>(5)?,
-                score: None,
+                score: row.get::<_, Option<f64>>(6)?.map(|d| d as f32),
                 importance: row
-                    .get::<_, Option<f64>>(6)
+                    .get::<_, Option<f64>>(7)
                     .ok()
                     .flatten()
                     .map(|v| v as f32),
                 access_count: row
-                    .get::<_, Option<i32>>(7)
+                    .get::<_, Option<i32>>(8)
                     .ok()
                     .flatten()
                     .map(|v| v as u32),
-                agent_id: row.get::<_, Option<String>>(8)?,
-                app_id: row.get::<_, Option<String>>(9)?,
-                run_id: row.get::<_, Option<String>>(10)?,
-                immutable: row.get::<_, Option<bool>>(11)?.unwrap_or(false),
-                expiration_date: row.get::<_, Option<String>>(12)?,
-                categories: row.get::<_, Option<String>>(13)?,
-                memory_type: row.get::<_, Option<String>>(14)?,
+                agent_id: row.get::<_, Option<String>>(9)?,
+                app_id: row.get::<_, Option<String>>(10)?,
+                run_id: row.get::<_, Option<String>>(11)?,
+                immutable: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
+                expiration_date: row.get::<_, Option<String>>(13)?,
+                categories: row.get::<_, Option<String>>(14)?,
+                memory_type: row.get::<_, Option<String>>(15)?,
                 stability: row
-                    .get::<_, Option<f64>>(15)
+                    .get::<_, Option<f64>>(16)
                     .ok()
                     .flatten()
                     .map(|v| v as f32),
-                privacy: row.get::<_, Option<String>>(16).ok().flatten(),
-                event_time: row.get::<_, Option<String>>(17).ok().flatten(),
-                episode_id: row.get::<_, Option<String>>(18).ok().flatten(),
-                session_id: row.get::<_, Option<String>>(19).ok().flatten(),
-                resolution: row.get::<_, Option<String>>(20).ok().flatten(),
+                privacy: row.get::<_, Option<String>>(17).ok().flatten(),
+                event_time: row.get::<_, Option<String>>(18).ok().flatten(),
+                episode_id: row.get::<_, Option<String>>(19).ok().flatten(),
+                session_id: row.get::<_, Option<String>>(20).ok().flatten(),
+                resolution: row.get::<_, Option<String>>(21).ok().flatten(),
             })
         })?;
 
@@ -194,7 +214,6 @@ impl Storage {
             .map_err(crate::error::MemoryError::DuckDb)
     }
 
-    /// Get entity names connected to the given entities within 1 hop (spreading activation).
     /// Spreading activation: expand seed entity names by traversing the graph.
     ///
     /// Each hop discovers entities connected to the current frontier via relationships.
@@ -206,8 +225,28 @@ impl Storage {
         user_id: &str,
         depth: usize,
     ) -> Result<Vec<String>> {
+        Ok(self
+            .spread_entity_names_with_context(seed_names, user_id, depth)?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect())
+    }
+
+    /// Like `spread_entity_names`, but also returns the relationship description
+    /// that connects each expanded entity to its seed. Seeds have an empty description.
+    /// Returns `Vec<(entity_name, relationship_description)>`.
+    pub(crate) fn spread_entity_names_with_context(
+        &self,
+        seed_names: &[&str],
+        user_id: &str,
+        depth: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let seeds: Vec<(String, String)> = seed_names
+            .iter()
+            .map(|s| (s.to_lowercase(), String::new()))
+            .collect();
         if seed_names.is_empty() || depth == 0 {
-            return Ok(seed_names.iter().map(|s| s.to_string()).collect());
+            return Ok(seeds);
         }
 
         const MAX_SPREAD: usize = 100;
@@ -216,11 +255,11 @@ impl Storage {
 
         let mut seen: std::collections::HashSet<String> =
             seed_names.iter().map(|s| s.to_lowercase()).collect();
-        let mut all_names: Vec<String> = seen.iter().cloned().collect();
+        let mut all: Vec<(String, String)> = seeds;
         let mut frontier: Vec<String> = seen.iter().cloned().collect();
 
         for _hop in 0..depth {
-            if frontier.is_empty() || all_names.len() >= MAX_SPREAD {
+            if frontier.is_empty() || all.len() >= MAX_SPREAD {
                 break;
             }
 
@@ -231,7 +270,7 @@ impl Storage {
             let in_clause = escaped.join(", ");
 
             let sql = format!(
-                r#"SELECT DISTINCT LOWER(e2.name)
+                r#"SELECT DISTINCT LOWER(e2.name), COALESCE(r.description, r.relation_type)
                    FROM entities_{collection} e1
                    JOIN relationships_{collection} r ON (e1.id = r.source_id OR e1.id = r.target_id)
                    JOIN entities_{collection} e2 ON (e2.id = r.source_id OR e2.id = r.target_id)
@@ -243,15 +282,17 @@ impl Storage {
             );
 
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(duckdb::params![user_id], |row| row.get::<_, String>(0))?;
+            let rows = stmt.query_map(duckdb::params![user_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
 
             let mut next_frontier = Vec::new();
-            for name in rows {
-                match name {
-                    Ok(n) => {
-                        if seen.insert(n.clone()) {
-                            all_names.push(n.clone());
-                            next_frontier.push(n);
+            for pair in rows {
+                match pair {
+                    Ok((name, desc)) => {
+                        if seen.insert(name.clone()) {
+                            all.push((name.clone(), desc));
+                            next_frontier.push(name);
                         }
                     }
                     Err(e) => {
@@ -262,6 +303,6 @@ impl Storage {
             frontier = next_frontier;
         }
 
-        Ok(all_names)
+        Ok(all)
     }
 }

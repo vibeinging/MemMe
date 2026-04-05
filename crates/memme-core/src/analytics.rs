@@ -168,13 +168,13 @@ mod tests {
 
         // Alice has 3 relationships, Bob has 1, Rust has 2
         storage
-            .insert_relationship("r1", "e1", "e2", "knows", "user1")
+            .insert_relationship("r1", "e1", "e2", "knows", "user1", None)
             .unwrap();
         storage
-            .insert_relationship("r2", "e1", "e3", "uses", "user1")
+            .insert_relationship("r2", "e1", "e3", "uses", "user1", None)
             .unwrap();
         storage
-            .insert_relationship("r3", "e3", "e1", "used_by", "user1")
+            .insert_relationship("r3", "e3", "e1", "used_by", "user1", None)
             .unwrap();
 
         let top = store.top_entities("user1", 10).unwrap();

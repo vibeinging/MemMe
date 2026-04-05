@@ -2,6 +2,53 @@ use std::collections::HashMap;
 
 use crate::types::{Episode, Event, MemoryResult};
 
+/// Compute confidence score for a search channel based on its score distribution.
+///
+/// Confidence = mean(top_k_similarities) / (1 + stddev). Higher values indicate
+/// the channel returned tightly clustered, high-quality results.
+///
+/// - `is_distance`: true if scores are cosine distances (lower = better),
+///   false if scores are relevance (higher = better).
+/// - Returns 1.0 if no scores are available (no adjustment).
+pub(crate) fn compute_channel_confidence(
+    results: &[MemoryResult],
+    is_distance: bool,
+    top_k: usize,
+) -> f64 {
+    let sims: Vec<f64> = results
+        .iter()
+        .take(top_k)
+        .filter_map(|r| {
+            r.score.map(|s| {
+                let s = s as f64;
+                if is_distance {
+                    // Cosine distance [0, 2] → similarity [0, 1]
+                    (1.0 - s / 2.0).clamp(0.0, 1.0)
+                } else {
+                    // Unbounded relevance scores (e.g. BM25) → [0, 1] via sigmoid
+                    (s / (1.0 + s)).clamp(0.0, 1.0)
+                }
+            })
+        })
+        .collect();
+
+    if sims.is_empty() {
+        return 1.0; // no scores → no adjustment
+    }
+
+    let n = sims.len() as f64;
+    let mean = sims.iter().sum::<f64>() / n;
+
+    if n < 2.0 {
+        return mean.clamp(0.0, 1.0);
+    }
+
+    let variance = sims.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let stddev = variance.sqrt();
+
+    (mean / (1.0 + stddev)).clamp(0.0, 1.0)
+}
+
 /// Reciprocal Rank Fusion: combines multiple ranked lists into one.
 ///
 /// Formula: score(d) = Σ weight_i / (k + rank_i)

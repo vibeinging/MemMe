@@ -6,6 +6,7 @@ use crate::types::{
     Session, Source, TraitType,
 };
 
+use super::util::opt_text;
 use super::Storage;
 
 impl Storage {
@@ -381,7 +382,7 @@ impl Storage {
             (
                 format!(
                     r#"SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id,
-                              s.name AS source_name, t.name AS target_name
+                              s.name AS source_name, t.name AS target_name, r.description
                        FROM relationships_{collection} r
                        JOIN entities_{collection} s ON r.source_id = s.id
                        JOIN entities_{collection} t ON r.target_id = t.id
@@ -393,7 +394,7 @@ impl Storage {
             (
                 format!(
                     r#"SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id,
-                              s.name AS source_name, t.name AS target_name
+                              s.name AS source_name, t.name AS target_name, r.description
                        FROM relationships_{collection} r
                        JOIN entities_{collection} s ON r.source_id = s.id
                        JOIN entities_{collection} t ON r.target_id = t.id"#
@@ -413,6 +414,7 @@ impl Storage {
                 user_id: row.get(4)?,
                 source: row.get(5)?,
                 target: row.get(6)?,
+                description: row.get::<_, Option<String>>(7)?,
             })
         };
         let rows = if has_user {
@@ -433,21 +435,23 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for src in sources {
-            let name_val: duckdb::types::Value = match &src.name {
-                Some(n) => duckdb::types::Value::Text(n.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let meta_val: duckdb::types::Value = match &src.metadata {
-                Some(m) => {
-                    duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default())
-                }
-                None => duckdb::types::Value::Null,
-            };
+            let name_val = opt_text(src.name.as_deref());
+            let meta_val = opt_text(
+                src.metadata
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).unwrap_or_default()),
+            );
             let affected = conn.execute(
                 r#"INSERT INTO sources (source_id, source_type, name, registered_at, metadata)
                    VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP), $5)
                    ON CONFLICT (source_id) DO NOTHING"#,
-                params![src.source_id, src.source_type, name_val, src.registered_at, meta_val],
+                params![
+                    src.source_id,
+                    src.source_type,
+                    name_val,
+                    src.registered_at,
+                    meta_val
+                ],
             )?;
             count += affected as u64;
         }
@@ -460,24 +464,14 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for sess in sessions {
-            let source_val: duckdb::types::Value = match &sess.source_id {
-                Some(s) => duckdb::types::Value::Text(s.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let ended_val: duckdb::types::Value = match &sess.ended_at {
-                Some(e) => duckdb::types::Value::Text(e.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let meta_val: duckdb::types::Value = match &sess.metadata {
-                Some(m) => {
-                    duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default())
-                }
-                None => duckdb::types::Value::Null,
-            };
-            let notes_val: duckdb::types::Value = match &sess.structured_notes {
-                Some(n) => duckdb::types::Value::Text(n.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let source_val = opt_text(sess.source_id.as_deref());
+            let ended_val = opt_text(sess.ended_at.as_deref());
+            let meta_val = opt_text(
+                sess.metadata
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).unwrap_or_default()),
+            );
+            let notes_val = opt_text(sess.structured_notes.as_deref());
             let affected = conn.execute(
                 r#"INSERT INTO sessions (session_id, user_id, source_id, started_at, ended_at, metadata, created_at, structured_notes)
                    VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP),
@@ -507,36 +501,17 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for evt in events {
-            let source_val: duckdb::types::Value = match &evt.source_id {
-                Some(s) => duckdb::types::Value::Text(s.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let session_val: duckdb::types::Value = match &evt.session_id {
-                Some(s) => duckdb::types::Value::Text(s.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let parent_val: duckdb::types::Value = match &evt.parent_id {
-                Some(p) => duckdb::types::Value::Text(p.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let meta_val: duckdb::types::Value = match &evt.metadata {
-                Some(m) => {
-                    duckdb::types::Value::Text(serde_json::to_string(m).unwrap_or_default())
-                }
-                None => duckdb::types::Value::Null,
-            };
-            let purified_val: duckdb::types::Value = match &evt.purified_content {
-                Some(p) => duckdb::types::Value::Text(p.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let event_time_val: duckdb::types::Value = match &evt.event_time {
-                Some(t) => duckdb::types::Value::Text(t.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let location_val: duckdb::types::Value = match &evt.location {
-                Some(l) => duckdb::types::Value::Text(l.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let source_val = opt_text(evt.source_id.as_deref());
+            let session_val = opt_text(evt.session_id.as_deref());
+            let parent_val = opt_text(evt.parent_id.as_deref());
+            let meta_val = opt_text(
+                evt.metadata
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).unwrap_or_default()),
+            );
+            let purified_val = opt_text(evt.purified_content.as_deref());
+            let event_time_val = opt_text(evt.event_time.as_deref());
+            let location_val = opt_text(evt.location.as_deref());
             let affected = conn.execute(
                 r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type,
                                        content, parent_id, metadata, user_id,
@@ -577,28 +552,13 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for ep in episodes {
-            let ended_val: duckdb::types::Value = match &ep.ended_at {
-                Some(e) => duckdb::types::Value::Text(e.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let outcome_val: duckdb::types::Value = match &ep.outcome {
-                Some(o) => duckdb::types::Value::Text(o.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let source_val: duckdb::types::Value = match &ep.source_id {
-                Some(s) => duckdb::types::Value::Text(s.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let ended_val = opt_text(ep.ended_at.as_deref());
+            let outcome_val = opt_text(ep.outcome.as_deref());
+            let source_val = opt_text(ep.source_id.as_deref());
             let event_ids_str = serde_json::to_string(&ep.event_ids).unwrap_or_default();
             let session_ids_str = serde_json::to_string(&ep.session_ids).unwrap_or_default();
-            let last_recalled_val: duckdb::types::Value = match &ep.last_recalled {
-                Some(l) => duckdb::types::Value::Text(l.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let last_meditated_val: duckdb::types::Value = match &ep.last_meditated_at {
-                Some(l) => duckdb::types::Value::Text(l.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let last_recalled_val = opt_text(ep.last_recalled.as_deref());
+            let last_meditated_val = opt_text(ep.last_meditated_at.as_deref());
             let affected = conn.execute(
                 r#"INSERT INTO episodes (episode_id, title, summary, started_at, ended_at,
                                          significance, outcome, source_id, event_ids, user_id,
@@ -645,10 +605,7 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for ent in entities {
-            let type_val: duckdb::types::Value = match &ent.entity_type {
-                Some(t) => duckdb::types::Value::Text(t.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let type_val = opt_text(ent.entity_type.as_deref());
             let sql = format!(
                 r#"INSERT INTO entities_{collection} (id, name, entity_type, user_id)
                    VALUES ($1, $2, $3, $4)
@@ -667,14 +624,22 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for rel in relations {
+            let desc_val = opt_text(rel.description.as_deref());
             let sql = format!(
-                r#"INSERT INTO relationships_{collection} (id, source_id, target_id, relation_type, user_id)
-                   VALUES ($1, $2, $3, $4, $5)
+                r#"INSERT INTO relationships_{collection} (id, source_id, target_id, relation_type, user_id, description)
+                   VALUES ($1, $2, $3, $4, $5, $6)
                    ON CONFLICT (id) DO NOTHING"#
             );
             let affected = conn.execute(
                 &sql,
-                params![rel.id, rel.source_id, rel.target_id, rel.relation_type, rel.user_id],
+                params![
+                    rel.id,
+                    rel.source_id,
+                    rel.target_id,
+                    rel.relation_type,
+                    rel.user_id,
+                    desc_val
+                ],
             )?;
             count += affected as u64;
         }
@@ -689,10 +654,7 @@ impl Storage {
         let conn = self.write_conn();
         for t in traits {
             let evidence_str = serde_json::to_string(&t.evidence_ids).unwrap_or_default();
-            let updated_val: duckdb::types::Value = match &t.updated_at {
-                Some(u) => duckdb::types::Value::Text(u.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let updated_val = opt_text(t.updated_at.as_deref());
             let affected = conn.execute(
                 r#"INSERT INTO identity (trait_id, trait_type, content, confidence, evidence_ids, user_id, created_at, updated_at)
                    VALUES ($1, $2, $3, $4, $5, $6, CAST($7 AS TIMESTAMP),
@@ -720,30 +682,15 @@ impl Storage {
         let mut count: u64 = 0;
         let conn = self.write_conn();
         for mem in memories {
-            let meta_str = mem
-                .metadata
-                .as_ref()
-                .map(|m| serde_json::to_string(m).unwrap_or_default());
-            let meta_val: duckdb::types::Value = match &meta_str {
-                Some(s) => duckdb::types::Value::Text(s.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let agent_val: duckdb::types::Value = match &mem.agent_id {
-                Some(a) => duckdb::types::Value::Text(a.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let run_val: duckdb::types::Value = match &mem.run_id {
-                Some(r) => duckdb::types::Value::Text(r.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let app_val: duckdb::types::Value = match &mem.app_id {
-                Some(a) => duckdb::types::Value::Text(a.clone()),
-                None => duckdb::types::Value::Null,
-            };
-            let exp_val: duckdb::types::Value = match &mem.expiration_date {
-                Some(d) => duckdb::types::Value::Text(d.clone()),
-                None => duckdb::types::Value::Null,
-            };
+            let meta_val = opt_text(
+                mem.metadata
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).unwrap_or_default()),
+            );
+            let agent_val = opt_text(mem.agent_id.as_deref());
+            let run_val = opt_text(mem.run_id.as_deref());
+            let app_val = opt_text(mem.app_id.as_deref());
+            let exp_val = opt_text(mem.expiration_date.as_deref());
             let cats_literal = Self::format_categories(mem.categories.as_deref())?;
 
             // Use ON CONFLICT to skip duplicates

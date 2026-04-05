@@ -37,7 +37,9 @@ mod reflect_ops;
 mod replica_ops;
 
 pub use diagnose::{CheckResult, DiagnoseReport};
-pub use reflect_ops::{LearnFromFeedbackOptions, LearnFromFeedbackResult, ReflectOptions, ReflectResult};
+pub use reflect_ops::{
+    LearnFromFeedbackOptions, LearnFromFeedbackResult, ReflectOptions, ReflectResult,
+};
 
 use battery::DeferredOp;
 use helpers::{compute_retention, initial_stability_for_tier};
@@ -192,6 +194,11 @@ impl MemoryStore {
         self.config.embedding_dims
     }
 
+    /// Return a reference to the configuration.
+    pub fn config(&self) -> &MemoryConfig {
+        &self.config
+    }
+
     /// Set the LLM provider for smart operations (builder pattern).
     pub fn with_llm(self, llm: Arc<dyn memme_llm::LlmProvider>) -> Self {
         *recover_lock(&self.llm, "llm") = Some(llm);
@@ -235,11 +242,7 @@ impl MemoryStore {
             .ok()
             .flatten()
             .unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let base_url = self
-            .storage
-            .get_config("llm_base_url")
-            .ok()
-            .flatten()?;
+        let base_url = self.storage.get_config("llm_base_url").ok().flatten()?;
         Some((api_key, model, base_url))
     }
 

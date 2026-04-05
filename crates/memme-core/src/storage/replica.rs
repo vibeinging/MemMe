@@ -24,6 +24,19 @@ impl Storage {
         self.config.db_path != ":memory:"
     }
 
+    /// CHECKPOINT (flush WAL) then atomic file copy from primary to `dst`.
+    fn checkpoint_and_copy(&self, dst: &str) -> Result<u64> {
+        let primary = &self.config.db_path;
+        {
+            let conn = self.write_conn();
+            conn.execute_batch("CHECKPOINT")
+                .map_err(MemoryError::DuckDb)?;
+        }
+        // Lock released — file copy does not block reads/writes
+        atomic_copy(primary, dst)?;
+        Ok(fs::metadata(dst).map(|m| m.len()).unwrap_or(0))
+    }
+
     /// Sync primary → replica using CHECKPOINT + atomic file copy.
     pub(crate) fn sync_replica(&self) -> Result<Option<ReplicaSyncResult>> {
         if !self.is_file_backed() {
@@ -33,21 +46,10 @@ impl Storage {
         let primary = &self.config.db_path;
         let replica = replica_path_for(primary);
 
-        {
-            let conn = self.write_conn();
-            conn.execute_batch("CHECKPOINT")
-                .map_err(MemoryError::DuckDb)?;
-        }
-        // Lock released — file copy does not block reads/writes
-
-        atomic_copy(primary, &replica)?;
+        let size_bytes = self.checkpoint_and_copy(&replica)?;
 
         let synced_at = chrono::Utc::now().to_rfc3339();
         let _ = self.set_config("replica_last_synced_at", &synced_at);
-
-        let size_bytes = fs::metadata(primary)
-            .map(|m| m.len())
-            .unwrap_or(0);
 
         info!(primary = %primary, replica = %replica, size_bytes, "Replica synced");
 
@@ -90,6 +92,83 @@ impl Storage {
             last_synced_at: last_synced,
         })
     }
+
+    /// Backup the database to a user-specified path.
+    ///
+    /// Performs CHECKPOINT (flush WAL) then atomic file copy to `backup_path`.
+    /// Returns metadata about the backup. For `:memory:` databases, returns an error.
+    pub(crate) fn backup_to_path(&self, backup_path: &str) -> Result<crate::types::BackupInfo> {
+        if !self.is_file_backed() {
+            return Err(MemoryError::Config(
+                "Cannot backup an in-memory database".into(),
+            ));
+        }
+
+        let primary = &self.config.db_path;
+
+        // Gather metadata before CHECKPOINT so a metadata query failure
+        // doesn't mask a successful backup.
+        let memory_count = {
+            let conn = self.read_conn();
+            let mut stmt = conn.prepare("SELECT COUNT(*) FROM memories")?;
+            let count: i64 = stmt
+                .query_map([], |row| row.get(0))?
+                .next()
+                .expect("aggregate always returns a row")?;
+            count as u64
+        };
+        let schema_version = Self::SCHEMA_VERSION.to_string();
+
+        let size_bytes = self.checkpoint_and_copy(backup_path)?;
+        let created_at = chrono::Utc::now().to_rfc3339();
+
+        info!(
+            primary = %primary,
+            backup = %backup_path,
+            size_bytes,
+            memory_count,
+            "Database backed up"
+        );
+
+        Ok(crate::types::BackupInfo {
+            source_path: primary.clone(),
+            backup_path: backup_path.to_string(),
+            size_bytes,
+            created_at,
+            memory_count,
+            schema_version,
+        })
+    }
+}
+
+/// Restore primary database from a backup file.
+///
+/// Validates the backup is a readable DuckDB file, then performs an atomic copy
+/// to `primary_path`. The caller must re-open `Storage` after this call.
+pub(crate) fn restore_from_backup(backup_path: &str, primary_path: &str) -> Result<()> {
+    if primary_path == ":memory:" {
+        return Err(MemoryError::Config(
+            "Cannot restore to an in-memory database".into(),
+        ));
+    }
+    if !Path::new(backup_path).exists() {
+        return Err(MemoryError::Config(format!(
+            "Backup file not found: {backup_path}"
+        )));
+    }
+
+    // Validate that the file is a readable DuckDB database
+    duckdb::Connection::open(backup_path).map_err(|e| {
+        MemoryError::Config(format!("Backup file is not a valid DuckDB database: {e}"))
+    })?;
+
+    atomic_copy(backup_path, primary_path)?;
+    info!(
+        backup = %backup_path,
+        primary = %primary_path,
+        "Database restored from backup"
+    );
+    Ok(())
 }
 
 /// Attempt to recover from a corrupted primary by copying the replica over it.
@@ -158,9 +237,8 @@ pub(crate) fn promote_replica(db_path: &str) -> Result<()> {
     let old_primary = format!("{db_path}.old");
 
     if Path::new(db_path).exists() {
-        fs::rename(db_path, &old_primary).map_err(|e| {
-            MemoryError::Config(format!("Failed to move primary aside: {e}"))
-        })?;
+        fs::rename(db_path, &old_primary)
+            .map_err(|e| MemoryError::Config(format!("Failed to move primary aside: {e}")))?;
     }
 
     match atomic_copy(&replica, db_path) {
@@ -181,9 +259,8 @@ pub(crate) fn promote_replica(db_path: &str) -> Result<()> {
 /// Copy src → dst atomically: write to .tmp then rename.
 fn atomic_copy(src: &str, dst: &str) -> Result<()> {
     let tmp = format!("{dst}.tmp");
-    fs::copy(src, &tmp).map_err(|e| {
-        MemoryError::Config(format!("Failed to copy {src} → {tmp}: {e}"))
-    })?;
+    fs::copy(src, &tmp)
+        .map_err(|e| MemoryError::Config(format!("Failed to copy {src} → {tmp}: {e}")))?;
     fs::rename(&tmp, dst).map_err(|e| {
         // Clean up tmp on rename failure
         let _ = fs::remove_file(&tmp);
@@ -250,7 +327,10 @@ mod tests {
         assert!(status.primary_ok);
         assert!(status.replica_ok);
         assert!(status.last_synced_at.is_some());
-        assert_eq!(status.primary_size_bytes, status.replica_size_bytes.unwrap());
+        assert_eq!(
+            status.primary_size_bytes,
+            status.replica_size_bytes.unwrap()
+        );
 
         cleanup(&db_path);
     }
@@ -262,9 +342,7 @@ mod tests {
         let storage = Storage::open(config).unwrap();
 
         // Write some data and sync
-        storage
-            .set_config("test_key", "test_value")
-            .unwrap();
+        storage.set_config("test_key", "test_value").unwrap();
         storage.sync_replica().unwrap();
 
         // Promote — should succeed
@@ -286,9 +364,7 @@ mod tests {
         let config = MemoryConfig::new(&db_path, 384);
         let storage = Storage::open(config).unwrap();
 
-        storage
-            .set_config("recover_key", "recover_value")
-            .unwrap();
+        storage.set_config("recover_key", "recover_value").unwrap();
         storage.sync_replica().unwrap();
         drop(storage);
 
@@ -314,5 +390,129 @@ mod tests {
         let _ = fs::remove_file(&format!("{db_path}.replica"));
         let err = restore_primary_from_replica(db_path);
         assert!(err.is_err());
+    }
+
+    // ── Backup / Restore tests ──
+
+    fn cleanup_backup(path: &str) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&format!("{path}.tmp"));
+    }
+
+    fn temp_backup_path() -> String {
+        let id = uuid::Uuid::new_v4();
+        format!("/tmp/memme_test_backup_{id}.duckdb")
+    }
+
+    #[test]
+    fn test_backup_to_path() {
+        let db_path = temp_db_path();
+        let backup_path = temp_backup_path();
+        let config = MemoryConfig::new(&db_path, 384);
+        let storage = Storage::open(config).unwrap();
+
+        let info = storage.backup_to_path(&backup_path).unwrap();
+        assert_eq!(info.source_path, db_path);
+        assert_eq!(info.backup_path, backup_path);
+        assert!(info.size_bytes > 0);
+        assert_eq!(info.memory_count, 0);
+        assert!(!info.schema_version.is_empty());
+        assert!(Path::new(&backup_path).exists());
+
+        cleanup(&db_path);
+        cleanup_backup(&backup_path);
+    }
+
+    #[test]
+    fn test_backup_metadata_with_data() {
+        let db_path = temp_db_path();
+        let backup_path = temp_backup_path();
+        let config = MemoryConfig::new(&db_path, 384);
+        let storage = Storage::open(config).unwrap();
+
+        // Insert some data
+        let emb: Vec<f32> = (0..384).map(|i| (i as f32 * 0.01).sin()).collect();
+        storage
+            .insert_memory(
+                "id1",
+                "hello world",
+                &emb,
+                "user1",
+                "h1",
+                &crate::storage::InsertMemoryParams::default(),
+            )
+            .unwrap();
+
+        let info = storage.backup_to_path(&backup_path).unwrap();
+        assert_eq!(info.memory_count, 1);
+
+        cleanup(&db_path);
+        cleanup_backup(&backup_path);
+    }
+
+    #[test]
+    fn test_backup_memory_db_returns_error() {
+        let config = MemoryConfig::new(":memory:", 384);
+        let storage = Storage::open(config).unwrap();
+
+        let result = storage.backup_to_path("/tmp/should_not_exist.duckdb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restore_from_backup() {
+        let db_path = temp_db_path();
+        let backup_path = temp_backup_path();
+        let config = MemoryConfig::new(&db_path, 384);
+        let storage = Storage::open(config).unwrap();
+
+        // Write data and backup
+        storage.set_config("backup_key", "backup_value").unwrap();
+        storage.backup_to_path(&backup_path).unwrap();
+
+        // Write more data after backup
+        storage
+            .set_config("after_backup", "should_disappear")
+            .unwrap();
+        drop(storage);
+
+        // Restore from backup
+        restore_from_backup(&backup_path, &db_path).unwrap();
+
+        // Verify restored state matches backup (not the later write)
+        let config2 = MemoryConfig::new(&db_path, 384);
+        let storage2 = Storage::open(config2).unwrap();
+        let val = storage2.get_config("backup_key").unwrap();
+        assert_eq!(val.as_deref(), Some("backup_value"));
+        let gone = storage2.get_config("after_backup").unwrap();
+        assert!(gone.is_none());
+
+        cleanup(&db_path);
+        cleanup_backup(&backup_path);
+    }
+
+    #[test]
+    fn test_restore_nonexistent_backup() {
+        let id = uuid::Uuid::new_v4();
+        let path = format!("/tmp/memme_nonexistent_{id}.duckdb");
+        let result = restore_from_backup(&path, "/tmp/target.duckdb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restore_invalid_backup() {
+        let invalid_path = temp_backup_path();
+        fs::write(&invalid_path, b"not a duckdb file").unwrap();
+
+        let result = restore_from_backup(&invalid_path, "/tmp/target.duckdb");
+        assert!(result.is_err());
+
+        cleanup_backup(&invalid_path);
+    }
+
+    #[test]
+    fn test_restore_to_memory_db_returns_error() {
+        let result = restore_from_backup("/tmp/some_backup.duckdb", ":memory:");
+        assert!(result.is_err());
     }
 }

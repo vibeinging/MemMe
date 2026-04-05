@@ -5,44 +5,6 @@ use crate::types::*;
 use super::helpers::{compute_retention, filter_fields, recover_lock, row_to_result};
 
 impl super::MemoryStore {
-    /// Batch-embed facts and search for similar memories.
-    /// Uses embed_batch to minimize API calls (respects config.embed_batch_size).
-    pub(crate) fn batch_search_facts(
-        &self,
-        facts: &[String],
-        user_id: &str,
-        limit: usize,
-    ) -> Result<Vec<Vec<MemoryResult>>> {
-        let batch_size = self.config.embed_batch_size.max(1);
-        let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(facts.len());
-
-        for chunk in facts.chunks(batch_size) {
-            let refs: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
-            let batch = self
-                .embedder
-                .embed_batch(&refs)
-                .map_err(crate::error::MemoryError::Embedding)?;
-            all_embeddings.extend(batch);
-        }
-
-        let mut results = Vec::with_capacity(facts.len());
-        for embedding in &all_embeddings {
-            let rows = self
-                .storage
-                .vector_search(embedding, user_id, None, None, None, None, limit)?;
-            // Exclude narrative-resolution memories (episode summaries from compact)
-            // so reconciliation only sees atomic granular memories.
-            results.push(
-                rows.into_iter()
-                    .map(super::helpers::row_to_result)
-                    .filter(|r| r.resolution != Resolution::Narrative)
-                    .collect(),
-            );
-        }
-
-        Ok(results)
-    }
-
     /// **Internal** — Used by entity-centric search channel.
     ///
     /// Build the entity index for a user from the entities table.
@@ -56,10 +18,11 @@ impl super::MemoryStore {
     /// Entity-centric retrieval channel:
     /// 1. Extract entity names from query (Aho-Corasick, <1ms)
     /// 2. Spread activation: find related entities (1-hop graph traversal)
-    /// 3. Collect ALL memories linked to these entities
+    /// 3. Collect memories linked to these entities, ranked by cosine distance to query
     fn entity_channel_search(
         &self,
         query: &str,
+        query_embedding: &[f32],
         user_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryResult>> {
@@ -78,11 +41,16 @@ impl super::MemoryStore {
             .storage
             .spread_entity_names(&seed_refs, user_id, depth)?;
 
-        // Step 3: Collect all memories linked to these entities
+        // Step 3: Collect memories linked to these entities, ranked by semantic relevance.
+        // Cosine distance ranking naturally prioritizes memories relevant to the query,
+        // even when hub nodes expand to many entities.
         let entity_refs: Vec<&str> = expanded_entities.iter().map(|s| s.as_str()).collect();
-        let rows = self
-            .storage
-            .entity_associated_memories(&entity_refs, user_id, limit)?;
+        let rows = self.storage.entity_associated_memories(
+            &entity_refs,
+            user_id,
+            Some(query_embedding),
+            limit,
+        )?;
 
         Ok(rows.into_iter().map(row_to_result).collect())
     }
@@ -217,7 +185,12 @@ impl super::MemoryStore {
 
             // Channel 3: Entity-centric retrieval (via Aho-Corasick + graph spreading)
             let entity_results: Vec<MemoryResult> = if self.config.enable_graph {
-                match self.entity_channel_search(query, &options.user_id, candidate_limit) {
+                match self.entity_channel_search(
+                    query,
+                    &embedding,
+                    &options.user_id,
+                    candidate_limit,
+                ) {
                     Ok(r) => r,
                     Err(e) => {
                         tracing::warn!("Entity channel search failed: {e}");
@@ -244,21 +217,38 @@ impl super::MemoryStore {
                 Vec::new()
             };
 
-            // Build ranked lists with weights
-            let mut ranked_lists: Vec<(&[MemoryResult], f64)> = Vec::new();
+            // Build ranked lists with weights (optionally adaptive)
+            let alpha = self.config.adaptive_rrf_alpha as f64;
+            let adapt = |base_weight: f64, confidence: f64| -> f64 {
+                base_weight * (1.0 - alpha + alpha * confidence)
+            };
+            let confidence_k = 5; // top-k results used for confidence estimation
 
-            if !vector_results.is_empty() {
-                ranked_lists.push((&vector_results, self.config.rrf_vector_weight));
-            }
-            if !fts_results.is_empty() {
-                ranked_lists.push((&fts_results, self.config.rrf_fts_weight));
-            }
-            if !entity_results.is_empty() {
-                ranked_lists.push((&entity_results, self.config.rrf_entity_weight));
-            }
-            if !temporal_results.is_empty() {
-                ranked_lists.push((&temporal_results, self.config.rrf_temporal_weight));
-            }
+            // (results, base_weight, is_distance_score)
+            let channels: [(&[MemoryResult], f64, bool); 4] = [
+                (&vector_results, self.config.rrf_vector_weight, true),
+                (&fts_results, self.config.rrf_fts_weight, false),
+                (&entity_results, self.config.rrf_entity_weight, true),
+                (&temporal_results, self.config.rrf_temporal_weight, false),
+            ];
+
+            let ranked_lists: Vec<(&[MemoryResult], f64)> = channels
+                .into_iter()
+                .filter(|(results, _, _)| !results.is_empty())
+                .map(|(results, base_weight, is_distance)| {
+                    let w = if alpha > 0.0 {
+                        let c = crate::search::compute_channel_confidence(
+                            results,
+                            is_distance,
+                            confidence_k,
+                        );
+                        adapt(base_weight, c)
+                    } else {
+                        base_weight
+                    };
+                    (results, w)
+                })
+                .collect();
 
             if ranked_lists.is_empty() {
                 Vec::new()
@@ -369,6 +359,29 @@ impl super::MemoryStore {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
+
+        // Apply resolution-based score adjustment independently of forgetting curve.
+        // Penalizes coarser-grain memories (narrative summaries, identity traits) to
+        // bias toward precise atomic facts.
+        let mut results = results
+            .into_iter()
+            .map(|mut r| {
+                if let Some(score) = r.score {
+                    let res_mult = match r.resolution {
+                        Resolution::Granular => self.config.resolution_weight_granular,
+                        Resolution::Narrative => self.config.resolution_weight_narrative,
+                        Resolution::Identity => self.config.resolution_weight_identity,
+                    };
+                    r.score = Some(score * res_mult);
+                }
+                r
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Defer access tracking writes to avoid blocking reads with write locks.
         // Auto-flush when queue exceeds cap or flush interval has elapsed.

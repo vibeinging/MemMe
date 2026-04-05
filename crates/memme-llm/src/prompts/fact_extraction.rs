@@ -41,11 +41,13 @@ RULES:
 - Include SPECIFIC details: "read 'Becoming Nicole'" not "read a book"
 - Include quantities: "has 3 children" not "has children"
 - Preserve exact names: colors, brands, platforms, titles — never generalize
-- Extract nicknames: if someone is called by a short name, record the nickname
+- Extract nicknames and address forms: if someone calls another by a short name, pet name, or nickname, record it (e.g., "Nate calls Joanna 'Jo'")
 - For cross-entity facts, mention all people: "Alice and Bob both enjoy hiking"
 - Do NOT generalize — extract the specific instance
 - Each fact MUST be atomic — one piece of information per fact
 - Detect the input language and record facts in the same language
+- INFER well-known associations: when a place, product, or institution is mentioned, also extract its commonly-known parent category as a separate fact. Examples: city → state/country ("Tampa is in Florida"), game → platform ("Xenoblade Chronicles is a Nintendo Switch game"), university → location. Only infer what is encyclopedic certainty — never speculate.
+- DEDUPLICATE: if the same fact appears in slightly different wording within the text, extract only the most specific version once
 
 OUTPUT FORMAT:
 Return a JSON object: {"facts": [{"text": "...", "happened_at": "YYYY-MM-DD"}, ...]}
@@ -77,6 +79,9 @@ Output: {"facts": [{"text": "Has 3 children", "happened_at": null}, {"text": "Is
 
 Input: (Conversation date: 2022-11-07) 7 people came to my gaming party last weekend. We played Catan on my Nintendo Switch.
 Output: {"facts": [{"text": "7 people attended the gaming party", "happened_at": "2022-11-05"}, {"text": "Played Catan at the gaming party", "happened_at": "2022-11-05"}, {"text": "Owns a Nintendo Switch", "happened_at": null}]}
+
+Input: (Conversation date: 2022-11-10) Nate: I took my turtles to the beach in Tampa yesterday! Jo: That's awesome! I'm filming my own movie from the road-trip script here in Fort Wayne.
+Output: {"facts": [{"text": "Nate took his turtles to the beach in Tampa", "happened_at": "2022-11-09"}, {"text": "Tampa is a city in Florida", "happened_at": null}, {"text": "Nate calls Joanna 'Jo'", "happened_at": null}, {"text": "Joanna is filming her own movie from a road-trip script", "happened_at": "2022-11-10"}, {"text": "Joanna is in Fort Wayne for filming", "happened_at": "2022-11-10"}, {"text": "Fort Wayne is a city in Indiana", "happened_at": null}]}
 
 Do not return anything from the examples above. Extract from the user conversation only."#
 }
@@ -168,9 +173,9 @@ pub fn parse_fact_retrieval_response(raw: &str) -> Result<FactRetrievalResponse,
         "Failed to parse fact retrieval response: missing 'facts' key".to_string()
     })?;
 
-    let arr = facts_value
-        .as_array()
-        .ok_or_else(|| "Failed to parse fact retrieval response: 'facts' is not an array".to_string())?;
+    let arr = facts_value.as_array().ok_or_else(|| {
+        "Failed to parse fact retrieval response: 'facts' is not an array".to_string()
+    })?;
 
     let mut facts = Vec::new();
     for item in arr {
@@ -310,5 +315,4 @@ mod tests {
         assert!(prompt.contains("nickname"));
         assert!(prompt.contains("Preserve exact names"));
     }
-
 }
