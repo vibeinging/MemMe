@@ -176,74 +176,6 @@ Question: {question}
 Answer:"""
 
 
-# ── Multi-Query Expansion (no LLM, local rules) ──
-
-def _generate_query_variants(question: str) -> list:
-    """Generate generic query variants for better recall — no answer leakage."""
-    variants = [question]
-    stop_words = {'what', 'when', 'where', 'who', 'how', 'why', 'which', 'does',
-                  'did', 'has', 'have', 'is', 'are', 'was', 'were', 'do', 'the',
-                  'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
-                  'would', 'could', 'should', 'will', 'can', 'may', 'might',
-                  'still', 'also', 'been', 'being', 'about', 'after', 'before',
-                  'during', 'some', 'many', 'much', 'more', 'most', 'than',
-                  'that', 'this', 'with', 'from', 'into', 'not', 'if', 'she',
-                  'he', 'her', 'his', 'they', 'their', 'it', 'its'}
-    words = question.rstrip('?').split()
-    names = [w for w in words if len(w) > 1 and w[0].isupper() and w.lower() not in stop_words]
-    key_terms = [w for w in words if w.lower() not in stop_words and not w[0].isupper() and len(w) > 2]
-
-    # Variant 1: person + key terms
-    if names and key_terms:
-        variants.append(f"{' '.join(names)} {' '.join(key_terms[:4])}")
-
-    # Variant 2: category-aware rephrasing (generic, no answer terms)
-    q_lower = question.lower()
-    if names:
-        name = names[0]
-        if 'activities' in q_lower or 'partake' in q_lower or 'hobbies' in q_lower:
-            variants.append(f"{name} hobbies activities interests enjoys does")
-        elif 'destress' in q_lower or 'relax' in q_lower:
-            variants.append(f"{name} relax calm peace self-care hobby")
-        elif 'book' in q_lower or 'read' in q_lower:
-            variants.append(f"{name} book read title novel story")
-        elif 'event' in q_lower or 'participated' in q_lower or 'attended' in q_lower:
-            variants.append(f"{name} event attended participated joined organized")
-        elif 'pet' in q_lower or 'animal' in q_lower:
-            variants.append(f"{name} pet animal cat dog name")
-        elif 'symbol' in q_lower:
-            variants.append(f"{name} symbol meaning important special significant")
-        elif 'paint' in q_lower or 'art' in q_lower:
-            variants.append(f"{name} painted art artwork created made")
-        elif 'pottery' in q_lower:
-            variants.append(f"{name} pottery made created workshop clay")
-        elif 'bought' in q_lower or 'item' in q_lower or 'purchase' in q_lower:
-            variants.append(f"{name} bought purchased item gift acquired")
-        elif 'move' in q_lower or 'from' in q_lower and 'where' in q_lower:
-            variants.append(f"{name} moved from country origin hometown home")
-        elif 'music' in q_lower or 'artist' in q_lower or 'band' in q_lower:
-            variants.append(f"{name} music concert band artist seen heard")
-        elif 'identity' in q_lower:
-            variants.append(f"{name} identity who gender")
-        elif 'career' in q_lower:
-            variants.append(f"{name} career job work aspiration goal profession")
-        elif 'family' in q_lower:
-            variants.append(f"{name} family together kids children activity")
-        elif 'support' in q_lower:
-            variants.append(f"{name} support help encourage mentor friend")
-        elif 'change' in q_lower or 'transition' in q_lower:
-            variants.append(f"{name} change transition journey experience challenge")
-        elif 'children' in q_lower or 'many' in q_lower:
-            variants.append(f"{name} children kids family son daughter")
-        elif 'relationship' in q_lower:
-            variants.append(f"{name} relationship status partner")
-        else:
-            if key_terms:
-                variants.append(f"{name} {' '.join(key_terms[:5])}")
-
-    return variants[:3]
-
-
 # ── Benchmark Data Structures ──
 
 CATEGORY_NAMES = {1: "single-hop", 2: "multi-hop", 3: "temporal", 4: "open-domain", 5: "adversarial"}
@@ -467,6 +399,15 @@ Just return the label CORRECT or WRONG in a json format with the key as "label".
     )
 
 
+def _format_memory(r: dict) -> str:
+    """Format a search result with event_time prefix when available."""
+    et = r.get("event_time")
+    content = r["content"]
+    if et:
+        return f"[{et}] {content}"
+    return content
+
+
 # ── Benchmark Runner ──
 
 async def run_benchmark(config: BenchConfig):
@@ -531,12 +472,12 @@ async def run_benchmark(config: BenchConfig):
                 q = qa["question"]
                 try:
                     results_a = store.search(q, user_id=uid_a, limit=config.top_k)
-                    pre_searched[(uid_a, q)] = [r["content"] for r in results_a]
+                    pre_searched[(uid_a, q)] = [_format_memory(r) for r in results_a]
                 except Exception:
                     pre_searched[(uid_a, q)] = []
                 try:
                     results_b = store.search(q, user_id=uid_b, limit=config.top_k)
-                    pre_searched[(uid_b, q)] = [r["content"] for r in results_b]
+                    pre_searched[(uid_b, q)] = [_format_memory(r) for r in results_b]
                 except Exception:
                     pre_searched[(uid_b, q)] = []
             search_time = time.time() - t_search
@@ -613,9 +554,6 @@ def generate_summary(results):
             "zep":   {"single-hop": 61.70, "multi-hop": 41.35, "temporal": 49.31, "open-domain": 76.60},
             "mem0g": {"single-hop": 65.71, "multi-hop": 47.19, "temporal": 58.13, "open-domain": 75.71},
         },
-        "v2_scores": {
-            "single-hop": 15.62, "multi-hop": 70.27, "temporal": 15.38, "open-domain": 50.00,
-        },
     }
 
     all_f1, all_b1, all_j = [], [], []
@@ -654,8 +592,7 @@ def print_summary(summary):
         print(f"    Judge: {o['judge_mean']:.2f}")
 
     baselines = summary.get("baselines", {})
-    v2 = summary.get("v2_scores", {})
-    print(f"\n  {'Category':<15} {'N':>5} {'F1':>8} {'B1':>8} {'Judge':>8} | {'v2':>8} {'Mem0':>8} {'Zep':>8} {'Mem0g':>8}")
+    print(f"\n  {'Category':<15} {'N':>5} {'F1':>8} {'B1':>8} {'Judge':>8} | {'Mem0':>8} {'Zep':>8} {'Mem0g':>8}")
     print("  " + "-" * 85)
 
     for cat in ['single-hop', 'multi-hop', 'temporal', 'open-domain']:
@@ -664,9 +601,8 @@ def print_summary(summary):
         m0 = baselines.get("mem0", {}).get(cat, 0)
         zp = baselines.get("zep", {}).get(cat, 0)
         mg = baselines.get("mem0g", {}).get(cat, 0)
-        v2s = v2.get(cat, 0)
         j = scores["judge_mean"]
-        print(f"  {cat:<15} {scores['count']:>5} {scores['f1_mean']:>8.2f} {scores['bleu1_mean']:>8.2f} {j:>8.2f} | {v2s:>8.2f} {m0:>8.2f} {zp:>8.2f} {mg:>8.2f}")
+        print(f"  {cat:<15} {scores['count']:>5} {scores['f1_mean']:>8.2f} {scores['bleu1_mean']:>8.2f} {j:>8.2f} | {m0:>8.2f} {zp:>8.2f} {mg:>8.2f}")
 
     print("=" * 90)
 

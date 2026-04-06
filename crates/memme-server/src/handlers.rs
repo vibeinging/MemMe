@@ -388,8 +388,6 @@ pub struct HybridSearchRequest {
     pub app_id: Option<String>,
     pub run_id: Option<String>,
     pub limit: Option<usize>,
-    pub vector_weight: Option<f64>,
-    pub fts_weight: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -450,16 +448,6 @@ pub async fn hybrid_search(
     }
 }
 
-// ── Episode Handlers (removed: episodes merged into traces) ──
-// Episode operations are now internal (pub(crate)) and handled by compact().
-// Use search() with resolution filter to find narrative traces instead.
-
-#[derive(Deserialize)]
-pub struct PaginationQuery {
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-}
-
 // ── Analytics Handlers ──
 
 pub async fn user_stats(
@@ -504,9 +492,6 @@ pub struct RecallRequest {
     pub query: String,
     pub user_id: String,
     pub limit: Option<usize>,
-    pub include_episodes: Option<bool>,
-    pub include_identity: Option<bool>,
-    pub include_graph: Option<bool>,
 }
 
 pub async fn recall(
@@ -527,18 +512,4 @@ pub async fn recall(
         .into_response(),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
-}
-
-#[derive(Deserialize)]
-pub struct RecallFeedbackRequest {
-    pub feedback: String,
-}
-
-pub async fn recall_feedback(
-    State(_state): State<Arc<AppState>>,
-    Path(_recall_id): Path<String>,
-    Json(_req): Json<RecallFeedbackRequest>,
-) -> impl IntoResponse {
-    // Recall feedback is no longer supported; return a no-op success
-    ok_json(serde_json::json!({"updated": true, "deprecated": true}))
 }

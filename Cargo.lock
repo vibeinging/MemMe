@@ -2172,7 +2172,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "memme-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2192,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "memme-embeddings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "fastembed",
@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "memme-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "memme-core",
  "memme-embeddings",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "memme-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "memme-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "memme-core",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "memme-node"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "memme-core",
  "memme-embeddings",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "memme-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "memme-core",
  "memme-embeddings",
@@ -2276,7 +2276,7 @@ dependencies = [
 
 [[package]]
 name = "memme-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "memme-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "memme-core",
  "memme-embeddings",

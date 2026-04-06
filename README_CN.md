@@ -1,5 +1,3 @@
-[English](README.md) | 中文
-
 <div align="center">
 
 # MemMe
@@ -8,9 +6,16 @@
 
 一个可嵌入的 AI 记忆引擎。一个文件。你的设备。你说了算。
 
+[![Website](https://img.shields.io/badge/Website-vibeinging.github.io/MemMe-8b7cf6?style=flat-square&logo=github)](https://vibeinging.github.io/MemMe/)
 [![CI](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
+
+**Rust 内核** · **DuckDB 单文件** · **<10ms 检索** · **6 语言绑定** · **LoCoMo 82.92%**
+
+[English](README.md) | 中文
+
+<img src="docs/images/hero.png" alt="MemMe Hero" width="720">
 
 </div>
 
@@ -53,7 +58,7 @@ memory.duckdb.replica      <- 自动备份副本，防丢失
 └── memme_config           运行时配置
 ```
 
-要备份？`sync_replica()` 自动双副本。要迁移？`full_export()` 导出全部数据为 JSON。要导入 ChatGPT 历史？一行代码搞定。要彻底删除？删除文件。
+要备份？`sync_replica()` 自动双副本，`backup_to_path()` 生成云备份快照。要迁移？`full_export()` 导出全部数据为 JSON。要导入 ChatGPT 历史？一行代码搞定。要彻底删除？删除文件。
 
 Rust 写的内核。接上 LLM 做智能提取，不接也能跑——纯向量模式延迟低于 10ms。Python、Node.js、Swift/Kotlin 原生绑定（UniFFI），嵌入式设备和机器人也能跑，不是 HTTP 套壳。
 
@@ -72,19 +77,21 @@ python demos/playground/server.py
 
 [LoCoMo 基准测试](https://github.com/snap-stanford/locomo)（1540 题，10 组对话，GPT-4o-mini 评判）：
 
-| 类别 | **MemMe** | mem0 | mem0-graph | Zep |
-|------|-----------|------|------------|-----|
-| 单跳 | **85.46** | 67.13 | 65.71 | 61.70 |
-| 多跳 | **57.32** | 51.15 | 47.19 | 41.35 |
-| 时序 | **66.67** | 55.51 | 58.13 | 49.31 |
-| 开放域 | **85.26** | 72.93 | 75.71 | 76.60 |
-| **总分** | **78.31** | — | — | — |
+<div align="center">
+<img src="docs/images/benchmark.png" alt="MemMe Benchmark" width="720">
+</div>
+
+**总分：82.92%** · *无 rerank 版本：80.91（仍全面超越所有基线）*
 
 流水线：append_events → compact → meditate（逐 episode 事实提取 + 向量去重）。四通道检索（向量 + BM25 + 实体扩散 + 时序）经 RRF 融合 + 交叉编码器重排。
 
 ## 它能做什么
 
 ### 四层记忆架构
+
+<div align="center">
+<img src="docs/images/pipeline.png" alt="MemMe Pipeline" width="720">
+</div>
 
 模拟人类从感知到认知的完整层次：
 
@@ -99,8 +106,9 @@ python demos/playground/server.py
 
 1. 衰减旧记忆（FSRS 遗忘曲线）
 2. 从情景中提炼事实
-3. 用 LLM 裁决每条事实：新增 / 更新 / 删除
+3. 向量去重：新事实与已有记忆自动比对，相似则跳过
 4. 构建知识图谱，关联实体与记忆
+5. 自动循环直到所有未冥想的情景处理完毕
 
 三个月前随口提的餐厅自然淡出，反复提及的偏好越来越牢固。冥想前自动备份副本，失败不会丢数据。
 
@@ -112,14 +120,16 @@ python demos/playground/server.py
 
 ### 数据保护
 
-你的记忆绝对不能丢。MemMe 提供三层保护：
+你的记忆绝对不能丢。MemMe 提供四层保护：
 
 - **双副本** — 主文件 + `.replica` 备份，CHECKPOINT + 原子复制，冥想前自动同步
 - **自动恢复** — 主文件损坏时，启动时自动从副本恢复
+- **云备份** — `backup_to_path()` 生成可移植快照（含记忆条数、schema 版本、文件大小等元数据），宿主应用负责上传到 iCloud/S3/云盘；`restore_from_backup()` 验证并恢复
 - **完整导出** — 8 层数据（记忆、会话、事件、情景、实体、关系、身份、来源）一键导出为 JSON，可完整导入
 
 ```rust
 store.sync_replica()?;                         // 同步副本
+let info = store.backup_to_path("/path/to/backup.duckdb")?;  // 云备份
 store.full_export(Some("alice"))?;             // 导出全部数据
 store.full_import(&data)?;                     // 导入全部数据
 ```
@@ -147,7 +157,11 @@ store.import_conversations(&convs, "alice")?;
 
 ### 四通道混合检索
 
-向量语义搜索 + BM25 全文搜索 + 实体图谱导航 + 时间维度，四路并行，RRF 融合后经 cross-encoder 重排序。
+<div align="center">
+<img src="docs/images/search.png" alt="MemMe Search" width="720">
+</div>
+
+向量语义搜索 + BM25 全文搜索 + 实体图谱导航 + 时间维度，四路并行，RRF 融合后经 cross-encoder 重排序。支持自适应 RRF 权重缩放和分辨率加权评分（Granular/Narrative/Identity 三级粒度）。
 
 ### 知识图谱
 
@@ -156,6 +170,12 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 ### 隐私控制
 
 每条记忆独立设置隐私级别——仅本地、可同步、加密同步。医疗记录锁在手机里，咖啡偏好同步到所有设备。完整审计日志，每次读写都有记录。
+
+### 语言绑定
+
+<div align="center">
+<img src="docs/images/bindings.png" alt="MemMe Bindings" width="720">
+</div>
 
 ### 全端原生
 
@@ -176,7 +196,7 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 |------|------|------|
 | **Claude Desktop / Cursor** | 已完成 | MCP 协议接入，作为 AI 的长期记忆 |
 | **REST API** | 已完成 | axum 服务，23 个端点，Bearer 认证 |
-| **[YiYi](https://github.com/vibeinging/YiYi)** | 已集成 | 桌面 AI 个人助手——能操作电脑、执行任务、管理文件，记忆系统由 MemMe 驱动 |
+| **[YiYi](https://github.com/vibeinging/YiYi)** | 已集成 | 桌面 AI 个人助手——能操作电脑、执行任务、管理文件，记忆系统由 MemMe 驱动（以作者女儿名字命名的产品，MemMe 的最佳实践项目之一，持续更新中） |
 | **OpenClaw** | 初步搭建 | 开源 Agent 框架的记忆插件 |
 | **Dora-rs** | 初步搭建 | Rust 机器人框架的记忆节点 |
 | **LeRobot** | 初步搭建 | Hugging Face 机器人框架的记忆封装 |
@@ -195,7 +215,7 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 | 知识图谱 | 内置 | 外挂 Neo4j | 无 |
 | 混合检索 | 四通道 + RRF | 无 | 部分 |
 | 遗忘曲线 | 内置 | 无 | 无 |
-| 数据保护 | 双副本 + 完整导出 | 无 | SOC2/HIPAA（云） |
+| 数据保护 | 双副本 + 云备份 + 完整导出 | 无 | SOC2/HIPAA（云） |
 | 聊天导入 | ChatGPT / Claude / Gemini | 无 | 无 |
 
 ## 谁应该用 MemMe
@@ -360,7 +380,7 @@ cargo test   # 340+ 测试
 
 ## 参与贡献
 
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。[路线图](docs/ROADMAP.md)。
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。[路线图](docs/ROADMAP_CN.md)。
 
 ## 许可证
 

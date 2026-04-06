@@ -246,10 +246,6 @@ async fn main() -> Result<()> {
         .route("/v1/graph/search", post(handlers::graph_search))
         // Recall (multi-layer unified retrieval)
         .route("/v1/recall", post(handlers::recall))
-        .route(
-            "/v1/recall/{recall_id}/feedback",
-            post(handlers::recall_feedback),
-        )
         // Config
         .route("/v1/config", get(handlers::get_config))
         .route("/v1/config/llm", post(handlers::set_llm_config))

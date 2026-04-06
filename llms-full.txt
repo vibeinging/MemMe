@@ -1,29 +1,31 @@
 # MemMe
 
-> The first embeddable AI memory engine for mobile and edge devices. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first.
+> Edge-first AI memory engine. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
 
 ## Core Concepts
 
 - **Single-file DuckDB storage**: One `.duckdb` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
-- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction and smart operations.
-- **Session/Episode architecture**: Raw events are ingested into Sessions, compacted into Episodes (with LLM purification), then distilled into atomic memory traces.
-- **4-channel RRF retrieval**: Vector similarity + BM25 full-text search + Entity spreading activation + Temporal search, fused via weighted Reciprocal Rank Fusion.
-- **FSRS forgetting curve**: Ebbinghaus-inspired memory decay with stability reinforcement on access. Memories that are never recalled gradually lose relevance.
+- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
+- **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
+- **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.
+- **FSRS forgetting curve**: Power-law memory decay `R(t,S) = (1 + t/(c·S))^(-p)` with stability reinforcement on access. Memories that are never recalled gradually lose relevance.
+- **Meditation**: 4-phase memory consolidation — decay, per-episode fact extraction, vector dedup (cosine similarity, no LLM needed), graph + entity linking via Aho-Corasick.
 
 ## Workspace Crates (9)
 
-- `memme-core` — Core memory engine: CRUD, search, graph, dedup, Session/Episode, analytics
+- `memme-core` — Core engine: CRUD, search, graph, dedup, meditation, forgetting curve, backup, export/import, analytics
 - `memme-embeddings` — Embedding trait + ONNX/OpenAI/Ollama backends
 - `memme-llm` — LLM trait + Ollama/OpenAI/Anthropic/Gemini backends for fact extraction
 - `memme-python` — Python bindings via PyO3 + maturin
 - `memme-ffi` — Swift/Kotlin/C bindings via UniFFI
 - `memme-node` — Node.js bindings via NAPI-RS
 - `memme-wasm` — WASM bindings via wasm-bindgen
-- `memme-server` — REST API server (axum)
+- `memme-server` — REST API server (axum) with Bearer auth, CORS
 - `memme-mcp` — MCP stdio server for Claude Desktop / Cursor
 
 ## Links
 
+- Website: https://vibeinging.github.io/MemMe/
 - GitHub: https://github.com/vibeinging/MemMe
 - Crates.io: https://crates.io/crates/memme-core
 - License: Apache-2.0
@@ -182,14 +184,42 @@ pub fn delete_episode(&self, episode_id: &str) -> Result<()>
 pub fn meditate(&self, options: MeditateOptions) -> Result<MeditationRecord>
 ```
 
-### Smart Operations (LLM-driven)
+### Reflection & Diagnostics
 
 ```rust
-// LLM-driven fact extraction and memory management
-pub fn add_smart(&self, text: &str, user_id: &str, agent_id: Option<&str>, run_id: Option<&str>, metadata: Option<serde_json::Value>, llm: Arc<dyn memme_llm::LlmProvider>, extract_agent_memory: bool) -> Result<SmartAddResult>
+// LLM-powered analysis of recent memories — identifies themes, patterns, focus areas
+pub fn reflect(&self, user_id: &str) -> Result<ReflectionResult>
 
-// Add graph entries using internally configured LLM
-pub fn add_graph_auto(&self, text: &str, user_id: &str) -> Result<GraphSearchResult>
+// Extract behavioral principles from user corrections, stored as high-importance memories + identity traits
+pub fn learn_from_feedback(&self, user_id: &str, feedback: &str) -> Result<FeedbackResult>
+
+// Health checks for storage, embedder, LLM with per-check latency
+pub fn diagnose(&self) -> Result<DiagnoseResult>
+```
+
+### Backup & Sync
+
+```rust
+// CHECKPOINT + atomic file copy to path (returns metadata: memory count, schema version, size)
+pub fn backup_to_path(&self, path: &str) -> Result<BackupInfo>
+
+// Validate backup file and restore (atomic swap)
+pub fn restore_from_backup(path: &str, config: &MemoryConfig) -> Result<()>
+
+// Sync primary → replica (CHECKPOINT + atomic copy)
+pub fn sync_replica(&self) -> Result<()>
+
+// Full export: all data layers as JSON
+pub fn full_export(&self, user_id: Option<&str>) -> Result<FullExport>
+
+// Full import: restore from JSON export
+pub fn full_import(&self, data: &FullExport) -> Result<()>
+
+// Incremental export based on version numbers
+pub fn export_changes_since(&self, since_version: u64, device_id: &str) -> Result<SyncDelta>
+
+// Import ChatGPT/Claude/Gemini conversation history
+pub fn import_conversations(&self, convs: &[ImportedConversation], user_id: &str) -> Result<u64>
 ```
 
 ### Knowledge Graph
@@ -628,12 +658,11 @@ When called on a session:
 
 ### 3. meditate() — Extract and consolidate
 
-A higher-level orchestration that:
-1. **Applies decay** to existing memories (forgetting curve, always runs even without LLM).
-2. **Extracts semantic memories** from Episodes using LLM fact extraction.
-3. **Builds entity graph** from extracted memories (if `enable_graph` is true).
-4. **Updates identity traits** from accumulated evidence.
-5. **Generates a meditation journal** summarizing what was processed.
+A 4-phase orchestration that loops until all unmeditated episodes are processed:
+1. **Decay** — Apply forgetting curve to existing memories (always runs, no LLM needed).
+2. **Per-Episode Fact Extraction** — LLM reads each episode independently and extracts atomic, self-contained facts with timestamps.
+3. **Store + Vector Dedup** — Extracted facts stored via `add()`. Cosine similarity against existing memories handles dedup automatically (threshold < 0.15 = duplicate). No LLM reconciliation needed — deterministic, no hallucination risk.
+4. **Graph + Entity Linking** — Single LLM call extracts entities and relationships. Aho-Corasick automaton links memories ↔ entities for spreading activation.
 
 ### 4. get_session_context() — Retrieve for RAG
 
@@ -831,3 +860,30 @@ let config = MemoryConfig {
     ..Default::default()
 };
 ```
+
+---
+
+## Security
+
+- **Memory Immutability** — Mark memories as immutable; storage layer prevents modification/deletion
+- **Privacy Levels** — `LocalOnly` (never leaves device), `Syncable`, `EncryptedSync` per-memory; enforced on export
+- **Data Expiration (TTL)** — Per-memory TTL with automatic cleanup during meditation
+- **Audit Trail** — Every create/update/delete logged in `history` table with timestamp and before/after snapshot
+- **Bearer Token Auth** — Optional API key authentication on REST server
+- **CORS Protection** — Configurable cross-origin policy on REST server
+- **Exclusion Prompts** — Configure LLM to skip extracting sensitive content categories
+- **SQL Injection Prevention** — All queries use parameterized `$N` placeholders; collection names validated against alphanumeric whitelist
+- **Content Hashing** — Hash-based deduplication and integrity checking
+- **Webhook Notifications** — Subscribe to memory lifecycle events (feature-gated)
+
+## Benchmark
+
+LoCoMo long-context memory benchmark (1540 questions, 10 conversations, GPT-4o-mini judge):
+
+| Category | **MemMe** | mem0 | mem0-graph | Zep |
+|---|---|---|---|---|
+| Single-hop | **85.82** | 67.13 | 65.71 | 61.70 |
+| Multi-hop | **71.96** | 51.15 | 47.19 | 41.35 |
+| Temporal | **65.62** | 55.51 | 58.13 | 49.31 |
+| Open-domain | **88.11** | 72.93 | 75.71 | 76.60 |
+| **Overall** | **82.92** | — | — | — |

@@ -48,10 +48,11 @@ RULES:
 - Detect the input language and record facts in the same language
 - INFER well-known associations: when a place, product, or institution is mentioned, also extract its commonly-known parent category as a separate fact. Examples: city → state/country ("Tampa is in Florida"), game → platform ("Xenoblade Chronicles is a Nintendo Switch game"), university → location. Only infer what is encyclopedic certainty — never speculate.
 - DEDUPLICATE: if the same fact appears in slightly different wording within the text, extract only the most specific version once
+- ALWAYS embed resolved dates in the fact text itself — the text must be self-contained and understandable without the happened_at field. Replace "yesterday", "last week", etc. with the actual date (e.g., "on 2023-05-07")
 
 OUTPUT FORMAT:
 Return a JSON object: {"facts": [{"text": "...", "happened_at": "YYYY-MM-DD"}, ...]}
-- "text": the atomic fact as a self-contained sentence
+- "text": the atomic fact as a self-contained sentence WITH resolved dates embedded in the text
 - "happened_at": ISO 8601 date when this fact/event occurred, or null if no temporal info
 
 TEMPORAL RULES (when a conversation date is provided):
@@ -72,16 +73,16 @@ Input: (Conversation date: 2023-05-08) Yesterday, I had a meeting with John at 3
 Output: {"facts": [{"text": "Had a meeting with John at 3pm on 2023-05-07", "happened_at": "2023-05-07"}]}
 
 Input: (Conversation date: 2022-04-15) Alice: Hey Jo, guess what? I dyed my hair last week! Bob: What color? Alice: Purple! Bright and bold.
-Output: {"facts": [{"text": "Alice dyed her hair purple", "happened_at": "2022-04-08"}, {"text": "Alice uses the nickname 'Jo' for Bob", "happened_at": null}, {"text": "Alice chose purple because it is bright and bold", "happened_at": null}]}
+Output: {"facts": [{"text": "Alice dyed her hair purple on 2022-04-08", "happened_at": "2022-04-08"}, {"text": "Alice uses the nickname 'Jo' for Bob", "happened_at": null}, {"text": "Alice chose purple because it is bright and bold", "happened_at": null}]}
 
 Input: I have 3 kids. My wife Sarah and I moved to Portland in 2020.
 Output: {"facts": [{"text": "Has 3 children", "happened_at": null}, {"text": "Is married", "happened_at": null}, {"text": "Wife's name is Sarah", "happened_at": null}, {"text": "Moved to Portland in 2020", "happened_at": "2020"}, {"text": "Lives in Portland", "happened_at": null}]}
 
 Input: (Conversation date: 2022-11-07) 7 people came to my gaming party last weekend. We played Catan on my Nintendo Switch.
-Output: {"facts": [{"text": "7 people attended the gaming party", "happened_at": "2022-11-05"}, {"text": "Played Catan at the gaming party", "happened_at": "2022-11-05"}, {"text": "Owns a Nintendo Switch", "happened_at": null}]}
+Output: {"facts": [{"text": "7 people attended the gaming party on 2022-11-05", "happened_at": "2022-11-05"}, {"text": "Played Catan at the gaming party on 2022-11-05", "happened_at": "2022-11-05"}, {"text": "Owns a Nintendo Switch", "happened_at": null}]}
 
 Input: (Conversation date: 2022-11-10) Nate: I took my turtles to the beach in Tampa yesterday! Jo: That's awesome! I'm filming my own movie from the road-trip script here in Fort Wayne.
-Output: {"facts": [{"text": "Nate took his turtles to the beach in Tampa", "happened_at": "2022-11-09"}, {"text": "Tampa is a city in Florida", "happened_at": null}, {"text": "Nate calls Joanna 'Jo'", "happened_at": null}, {"text": "Joanna is filming her own movie from a road-trip script", "happened_at": "2022-11-10"}, {"text": "Joanna is in Fort Wayne for filming", "happened_at": "2022-11-10"}, {"text": "Fort Wayne is a city in Indiana", "happened_at": null}]}
+Output: {"facts": [{"text": "Nate took his turtles to the beach in Tampa on 2022-11-09", "happened_at": "2022-11-09"}, {"text": "Tampa is a city in Florida", "happened_at": null}, {"text": "Nate calls Joanna 'Jo'", "happened_at": null}, {"text": "Joanna is filming her own movie from a road-trip script on 2022-11-10", "happened_at": "2022-11-10"}, {"text": "Joanna is in Fort Wayne for filming on 2022-11-10", "happened_at": "2022-11-10"}, {"text": "Fort Wayne is a city in Indiana", "happened_at": null}]}
 
 Do not return anything from the examples above. Extract from the user conversation only."#
 }

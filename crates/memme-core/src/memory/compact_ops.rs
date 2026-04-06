@@ -376,7 +376,8 @@ Summarize the entire conversation as a title, summary, and significance score.
 
 **Rules**:
 - "purified" must have exactly {count} items, one per input message
-- Resolve pronouns to actual names, "yesterday" to actual date, "there" to actual place
+- Resolve pronouns to actual names, "there" to actual place
+- CRITICAL: Replace ALL relative time expressions in the purified text with absolute dates based on the conversation date above. E.g. "yesterday" → "on YYYY-MM-DD", "last week" → "on YYYY-MM-DD". The purified text must be self-contained — readable without knowing the conversation date.
 - If no purification needed, use original content
 - "significance": 0.0 (trivial) to 1.0 (life-changing)
 - Respond ONLY with JSON, no other text."#,

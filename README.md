@@ -1,5 +1,3 @@
-English | [中文](README_CN.md)
-
 <div align="center">
 
 # MemMe
@@ -8,17 +6,63 @@ English | [中文](README_CN.md)
 
 An embeddable AI memory engine. One file. Your device. Your rules.
 
+[![Website](https://img.shields.io/badge/Website-vibeinging.github.io/MemMe-8b7cf6?style=flat-square&logo=github)](https://vibeinging.github.io/MemMe/)
 [![CI](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
+
+**Rust Core** · **DuckDB Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 82.92%**
+
+English | [中文](README_CN.md)
+
+<img src="docs/images/hero.png" alt="MemMe Hero" width="720">
 
 </div>
 
 ---
 
-MemMe gives AI agents and apps long-term memory — stored in a single `.duckdb` file on your device, not in the cloud. Built in Rust with native bindings for Python, Node.js, and Swift/Kotlin (via UniFFI).
+You've been chatting with your AI assistant for three months. It knows your work, your tastes, how you think.
 
-Vectors, knowledge graph, full-text search, and change history — all in one file. No Qdrant, no Neo4j, no infrastructure. Plug in any LLM for smart extraction, or run pure vector mode at sub-10ms latency without one.
+Then one day the platform changes its privacy policy. Or you want to switch models. Or the service shuts down.
+
+Three months of memory — gone.
+
+Not because the tech isn't there. Because **those memories were never yours.**
+
+MemMe wants to change that.
+
+## Why your memory lives on someone else's server
+
+Your photos, your contacts, your notes — they live on your device. You can back them up, migrate them, delete them.
+
+But your AI conversation memory? It sits on OpenAI's servers. On Claude's cloud. You don't know who can access it, what it's been used to train, or whether it'll still be there tomorrow.
+
+AI memory is more sensitive than regular data. It's not just what you said — it's **who you are**: your thinking patterns, decision habits, emotional states, relationships. This is the most personal profile there is.
+
+**That data belongs on your device.**
+
+## One file. All your memories.
+
+```
+memory.duckdb              <- your entire memory, one file
+memory.duckdb.replica      <- automatic backup copy
+|
+├── memories               content + vectors + metadata
+├── entities / relationships   knowledge graph (people, places, events)
+├── sessions / events      raw conversation stream
+├── episodes               episodic memory (compacted dialogue stories)
+├── identity               identity traits (who you are)
+├── procedures             procedural memory (skills, habits)
+├── meditations            meditation log (memory consolidation records)
+├── history                change audit (every read/write logged)
+└── memme_config           runtime config
+```
+
+To back up: `sync_replica()` for dual-copy, `backup_to_path()` for portable snapshots. To migrate: `full_export()` dumps everything as JSON. To import ChatGPT history: one line of code. To delete everything: delete the file.
+
+Built in Rust with native bindings for Python, Node.js, and Swift/Kotlin (via UniFFI). Plug in any LLM for smart extraction, or run pure vector mode at sub-10ms latency without one. Not an HTTP wrapper — native integration down to embedded devices and robots.
+
+When the app dies, memories survive. When the model changes, memories survive. When the platform disappears, memories survive.
 
 ## Try It Now
 
@@ -33,13 +77,11 @@ A local web app opens in your browser. Store memories, search by meaning, chat w
 
 MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, 10 conversations, GPT-4o-mini judge):
 
-| Category | **MemMe** | mem0 | mem0-graph | Zep |
-|---|---|---|---|---|
-| Single-hop | **85.46** | 67.13 | 65.71 | 61.70 |
-| Multi-hop | **57.32** | 51.15 | 47.19 | 41.35 |
-| Temporal | **66.67** | 55.51 | 58.13 | 49.31 |
-| Open-domain | **85.26** | 72.93 | 75.71 | 76.60 |
-| **Overall** | **78.31** | — | — | — |
+<div align="center">
+<img src="docs/images/benchmark.png" alt="MemMe Benchmark" width="720">
+</div>
+
+**Overall: 82.92%** · *Without reranking: 80.91 (still outperforms all baselines)*
 
 Pipeline: append_events → compact → meditate (per-episode fact extraction + vector dedup). 4-channel retrieval (vector + BM25 + entity spreading + temporal) with RRF fusion and cross-encoder reranking.
 
@@ -56,7 +98,7 @@ Pipeline: append_events → compact → meditate (per-episode fact extraction + 
 | Hybrid search | Vector + BM25 + RRF | No | Partial |
 | Reranking | Built-in (API / ONNX) | Optional | No |
 | Forgetting curve | Built-in | No | No |
-| Data protection | Dual-replica + full export | No | SOC2/HIPAA (cloud) |
+| Data protection | Dual-replica + cloud backup + full export | No | SOC2/HIPAA (cloud) |
 | Chat import | ChatGPT / Claude / Gemini | No | No |
 
 ## Quick Start
@@ -143,8 +185,12 @@ let results = try store.search("preferences", userId: "alice")
 
 ### Memory Pipeline
 
+<div align="center">
+<img src="docs/images/pipeline.png" alt="MemMe Pipeline" width="720">
+</div>
+
 - **Session/Episode architecture** — Stream -> Session -> Episode -> Memory four-layer data model
-- **Meditation** — memory consolidation: decay + fact extraction + LLM reconciliation (ADD/UPDATE/DELETE) + graph building + entity-memory linking
+- **Meditation** — memory consolidation: decay + per-episode fact extraction + vector dedup + graph building + entity-memory linking. Loops until all unmeditated episodes are processed
 - **Forgetting curve** — FSRS-based memory decay with stability reinforcement on access
 - **Knowledge graph** — entity/relationship extraction with spreading activation traversal
 - **Reflection** — LLM-powered analysis of recent memories, identifying themes, patterns, and focus areas
@@ -152,16 +198,29 @@ let results = try store.search("preferences", userId: "alice")
 
 ### Search
 
+<div align="center">
+<img src="docs/images/search.png" alt="MemMe Search Pipeline" width="720">
+</div>
+
 - **Four-channel hybrid search** — vector + BM25 + entity graph + temporal, fused via RRF
+- **Adaptive RRF** — optional per-channel confidence scaling for dynamic weight adjustment
+- **Resolution-weighted scoring** — Granular/Narrative/Identity memories scored with configurable multipliers to reduce noise from broad summaries
 - **Reranking** — API reranker (Jina/Cohere) or local ONNX cross-encoder
 
 ### Data Safety
 
 - **Single-file deployment** — one `.duckdb` file holds vectors, graph, FTS index, and history
 - **Dual-replica protection** — CHECKPOINT + atomic file copy before meditation; auto-recovery from replica on corruption
+- **Cloud backup** — `backup_to_path()` creates portable snapshots (with metadata: memory count, schema version, file size); `restore_from_backup()` validates and restores. Host app handles upload to iCloud/S3/cloud drive
 - **Full export/import** — export all 8 data layers (memories, sessions, events, episodes, entities, relations, identity, sources) as JSON; import back losslessly
 - **External chat import** — import conversations from ChatGPT, Claude, and Gemini exports into the memory pipeline
 - **Privacy controls** — `LocalOnly`, `Syncable`, `EncryptedSync` per-memory
+
+### Bindings & API
+
+<div align="center">
+<img src="docs/images/bindings.png" alt="MemMe Bindings" width="720">
+</div>
 
 ### Platform
 
@@ -199,9 +258,13 @@ MemMe maintains a dual-replica system to ensure your memories are never lost:
 // Sync primary → replica (CHECKPOINT + atomic file copy)
 store.sync_replica()?;
 
-// Check status of both copies
-let status = store.replica_status()?;
-println!("Primary: {} bytes, Replica: {:?} bytes", status.primary_size_bytes, status.replica_size_bytes);
+// Cloud backup: portable snapshot with metadata
+let info = store.backup_to_path("/path/to/backup.duckdb")?;
+println!("Backed up {} memories ({} bytes)", info.memory_count, info.size_bytes);
+// Host app uploads the file to iCloud / S3 / cloud drive
+
+// Restore from backup (caller must re-open MemoryStore after)
+MemoryStore::restore_from_backup("/path/to/backup.duckdb", &config)?;
 
 // Full export: all 8 data layers as a single JSON
 let export = store.full_export(Some("alice"))?;
@@ -336,6 +399,19 @@ cd crates/memme-python && maturin develop --release
 - **Digital Twins** — memory-powered digital representation of a person
 - **Embodied AI** — sub-10ms on-device memory for robots, drones, and IoT; single-file deployment with no network dependency; native Rust integrations with Dora-rs, LeRobot, and Copper-rs
 - **Chat Migration** — import your ChatGPT/Claude/Gemini history, own your data
+
+## Ecosystem
+
+| Integration | Status | Description |
+|---|---|---|
+| **Claude Desktop / Cursor** | Done | MCP protocol — long-term memory for AI assistants |
+| **REST API** | Done | axum server, 23 endpoints, Bearer auth |
+| **[YiYi](https://github.com/vibeinging/YiYi)** | Integrated | Desktop AI assistant — operates computer, executes tasks, manages files; memory powered by MemMe (named after the author's daughter; MemMe's reference app, actively maintained) |
+| **OpenClaw** | WIP | Memory plugin for open-source Agent framework |
+| **Dora-rs** | WIP | Memory node for Rust robotics framework |
+| **LeRobot** | WIP | Memory wrapper for Hugging Face robotics framework |
+| **Copper-rs** | WIP | CuTask integration for real-time robotics framework |
+| **LangChain / LlamaIndex** | Planned | Adapters for mainstream LLM frameworks |
 
 ## Contributing
 

@@ -14,7 +14,7 @@
 
 use crate::error::LlmError;
 use crate::{GenerateOptions, LlmProvider, Message, MessageRole, ResponseFormat};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// Protocol adapter for custom LLM chat completions API formats.
 ///
@@ -254,7 +254,7 @@ impl LlmProvider for OpenAIProvider {
                 std::thread::sleep(wait);
             }
 
-            match self.do_request(&url, &body) {
+            match self.do_request(url, &body) {
                 Ok(resp_body) => match self.parse_response(&resp_body) {
                     Ok(content) => return Ok(content),
                     Err(e) => {
@@ -280,12 +280,6 @@ impl LlmProvider for OpenAIProvider {
 }
 
 // ── OpenAI API types ──
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenAIChatMessage {
-    role: String,
-    content: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct OpenAIChatCompletionResponse {
