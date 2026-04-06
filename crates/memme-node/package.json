@@ -1,6 +1,6 @@
 {
   "name": "memme",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Edge-first AI memory engine powered by DuckDB — vector search, knowledge graph, BM25, and forgetting curve in a single file",
   "keywords": ["ai", "memory", "embedding", "duckdb", "edge", "offline", "vector-database", "knowledge-graph", "rag", "llm"],
   "license": "Apache-2.0",
@@ -34,11 +34,11 @@
     "package.json"
   ],
   "optionalDependencies": {
-    "memme-darwin-arm64": "0.1.0",
-    "memme-darwin-x64": "0.1.0",
-    "memme-linux-arm64-gnu": "0.1.0",
-    "memme-linux-x64-gnu": "0.1.0",
-    "memme-win32-x64-msvc": "0.1.0"
+    "memme-darwin-arm64": "0.1.1",
+    "memme-darwin-x64": "0.1.1",
+    "memme-linux-arm64-gnu": "0.1.1",
+    "memme-linux-x64-gnu": "0.1.1",
+    "memme-win32-x64-msvc": "0.1.1"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0",
