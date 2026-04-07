@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memme-lerobot"
+version = "0.1.0"
+description = "Long-term memory for LeRobot — give your robot persistent, searchable experience"
+license = {text = "Apache-2.0"}
+authors = [{name = "MemMe Contributors"}]
+requires-python = ">=3.10"
+readme = "README.md"
+keywords = ["ai", "memory", "robotics", "lerobot", "embodied-ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Robotics",
+]
+dependencies = [
+    "memme>=0.1.0",
+]
+
+[project.optional-dependencies]
+lerobot = ["lerobot>=0.1.0"]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/vibeinging/MemMe"
+Repository = "https://github.com/vibeinging/MemMe"
+
+[tool.setuptools.packages.find]
+where = ["src"]

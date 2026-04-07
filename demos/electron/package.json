@@ -1,0 +1,16 @@
+{
+  "name": "memme-electron-demo",
+  "version": "0.1.0",
+  "description": "MemMe Desktop Demo - Local & Remote modes",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "ELECTRON_ENABLE_LOGGING=1 electron ."
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^25.0.0"
+  }
+}

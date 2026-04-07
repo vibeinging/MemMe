@@ -1,0 +1,21 @@
+{
+  "name": "memme-darwin-arm64",
+  "version": "0.1.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "memme.darwin-arm64.node",
+  "files": [
+    "memme.darwin-arm64.node"
+  ],
+  "description": "Edge-first AI memory engine powered by DuckDB",
+  "author": "MemMe Contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vibeinging/MemMe.git"
+  }
+}

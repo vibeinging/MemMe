@@ -1,0 +1,175 @@
+name: Build Mobile Libraries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # NOTE: iOS builds on macOS runners consume 10x CI minutes.
+  # Consider building locally for development and reserving CI for releases.
+  ios:
+    name: "iOS - ${{ matrix.target }}"
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            artifact_name: ios-device-arm64
+          - target: aarch64-apple-ios-sim
+            artifact_name: ios-sim-arm64
+          - target: x86_64-apple-ios
+            artifact_name: ios-sim-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ios-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build memme-ffi
+        run: cargo build -p memme-ffi --release --target ${{ matrix.target }}
+
+      - name: Generate Swift bindings via UniFFI
+        run: |
+          cargo install uniffi-bindgen-cli --version 0.29 || true
+          uniffi-bindgen generate \
+            --library target/${{ matrix.target }}/release/libmemme_ffi.a \
+            --language swift \
+            --out-dir bindings/swift
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            target/${{ matrix.target }}/release/libmemme_ffi.a
+            bindings/swift/
+          if-no-files-found: error
+
+  android:
+    name: "Android - ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            abi: arm64-v8a
+          - target: armv7-linux-androideabi
+            abi: armeabi-v7a
+          - target: x86_64-linux-android
+            abi: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Configure NDK toolchain
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          # Set up cargo config for Android cross-compilation
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'TOML'
+          [target.aarch64-linux-android]
+          linker = "aarch64-linux-android21-clang"
+
+          [target.armv7-linux-androideabi]
+          linker = "armv7a-linux-androideabi21-clang"
+
+          [target.x86_64-linux-android]
+          linker = "x86_64-linux-android21-clang"
+          TOML
+
+          # Add NDK toolchain to PATH
+          echo "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Build memme-ffi
+        run: cargo build -p memme-ffi --release --target ${{ matrix.target }}
+
+      - name: Package .so
+        run: |
+          mkdir -p dist/jniLibs/${{ matrix.abi }}
+          cp target/${{ matrix.target }}/release/libmemme_ffi.so dist/jniLibs/${{ matrix.abi }}/
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ matrix.abi }}
+          path: dist/jniLibs/
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ios, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all iOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ios-*
+          merge-multiple: false
+
+      - name: Download all Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: android-*
+          merge-multiple: false
+
+      - name: Package release archives
+        run: |
+          cd artifacts
+
+          # Package each iOS target
+          for dir in ios-*/; do
+            name="${dir%/}"
+            tar czf "/tmp/memme-ffi-${name}.tar.gz" -C "$dir" .
+          done
+
+          # Package Android (combine all ABIs into one archive)
+          mkdir -p android-combined/jniLibs
+          for dir in android-*/; do
+            cp -r "$dir"/jniLibs/* android-combined/jniLibs/ 2>/dev/null || true
+          done
+          tar czf /tmp/memme-ffi-android.tar.gz -C android-combined .
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/memme-ffi-*.tar.gz
+          generate_release_notes: true

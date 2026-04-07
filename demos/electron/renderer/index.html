@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemMe Desktop</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  --bg-darkest: #0a0a0f;
+  --bg-panel: #12121a;
+  --bg-card: #1a1a2e;
+  --bg-input: #16162a;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+  --accent: #6C5CE7;
+  --accent-light: #a29bfe;
+  --success: #00b894;
+  --error: #e17055;
+  --warning: #fdcb6e;
+  --info: #74b9ff;
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg-darkest);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-app-region: drag;
+}
+button, input, textarea, select { -webkit-app-region: no-drag; }
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid rgba(108,92,231,0.2);
+  gap: 16px;
+  -webkit-app-region: drag;
+}
+.logo { font-size: 20px; font-weight: 700; color: var(--accent-light); }
+.logo span { font-size: 14px; color: var(--text-secondary); margin-left: 8px; }
+
+/* Mode Toggle */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  padding: 4px;
+  border-radius: 20px;
+  -webkit-app-region: no-drag;
+}
+.mode-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.mode-btn.active {
+  color: white;
+}
+.mode-btn.active.local { background: var(--success); }
+.mode-btn.active.remote { background: var(--accent); }
+
+.mode-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.mode-badge.local { background: rgba(0,184,148,0.2); color: var(--success); }
+.mode-badge.remote { background: rgba(108,92,231,0.2); color: var(--accent-light); }
+
+.spacer { flex: 1; }
+
+.header-input {
+  background: var(--bg-card);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 130px;
+  -webkit-app-region: no-drag;
+}
+.header-label { font-size: 12px; color: var(--text-secondary); }
+.settings-btn {
+  background: var(--bg-card);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s;
+  -webkit-app-region: no-drag;
+}
+.settings-btn:hover { color: var(--accent-light); border-color: var(--accent); }
+
+/* Main Layout */
+.main {
+  display: flex;
+  height: calc(100vh - 52px);
+}
+
+/* Left Panel - Chat */
+.chat-panel {
+  width: 380px;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  background: var(--bg-panel);
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.msg {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 95%;
+  animation: fadeIn 0.3s;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.msg.user { background: var(--accent); color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.system { background: var(--bg-card); color: var(--text-primary); align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg.error { background: rgba(225,112,85,0.2); color: var(--error); }
+.msg .label { font-size: 11px; color: rgba(255,255,255,0.6); margin-bottom: 4px; }
+
+.chat-input {
+  padding: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.chat-input textarea {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  resize: none;
+  height: 80px;
+  font-family: inherit;
+}
+.chat-input textarea:focus { outline: none; border-color: var(--accent); }
+.chat-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 1;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent-light); }
+.btn-smart { background: linear-gradient(135deg, var(--accent), #a29bfe); color: white; }
+.btn-smart:hover { opacity: 0.9; }
+.btn-secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid rgba(255,255,255,0.1); }
+.btn-seed { font-size: 11px; padding: 4px 10px; flex: 0; }
+
+/* Right Panel */
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-darkest);
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: var(--bg-panel);
+}
+.tab {
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.tab:hover { color: var(--text-primary); }
+.tab.active { color: var(--accent-light); border-bottom-color: var(--accent); }
+
+.tab-content { flex: 1; overflow-y: auto; padding: 16px; }
+.tab-page { display: none; height: 100%; }
+.tab-page.active { display: flex; flex-direction: column; gap: 16px; }
+
+/* Search Bar */
+.search-bar {
+  display: flex;
+  gap: 8px;
+}
+.search-bar input {
+  flex: 1;
+  background: var(--bg-panel);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.search-bar input:focus { outline: none; border-color: var(--accent); }
+
+/* Memory Cards */
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  flex: 1;
+}
+.memory-card {
+  background: var(--bg-panel);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius);
+  padding: 14px;
+  transition: all 0.2s;
+  animation: fadeIn 0.3s;
+  position: relative;
+}
+.memory-card:hover { border-color: rgba(108,92,231,0.3); transform: translateY(-2px); }
+.memory-card .content { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.memory-card .meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.score-badge {
+  background: rgba(108,92,231,0.2);
+  color: var(--accent-light);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.memory-card:hover .delete-btn { opacity: 1; }
+.delete-btn:hover { color: var(--error); }
+
+/* Graph */
+.graph-container { flex: 1; min-height: 400px; background: var(--bg-panel); border-radius: var(--radius); position: relative; }
+.graph-container svg { width: 100%; height: 100%; }
+.graph-search { margin-bottom: 12px; }
+
+/* Stats */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.stat-card {
+  background: var(--bg-panel);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.stat-card .value { font-size: 28px; font-weight: 700; color: var(--accent-light); }
+.stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+.entity-list { display: flex; flex-direction: column; gap: 8px; }
+.entity-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.entity-name { font-weight: 600; font-size: 13px; }
+.entity-type {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(108,92,231,0.2);
+  color: var(--accent-light);
+}
+.entity-count { font-size: 12px; color: var(--text-secondary); }
+
+/* Loading */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent-light);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Toast */
+.toast-container {
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.toast {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  animation: slideIn 0.3s;
+  max-width: 300px;
+}
+@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } }
+.toast.success { background: rgba(0,184,148,0.9); color: white; }
+.toast.error { background: rgba(225,112,85,0.9); color: white; }
+.toast.info { background: rgba(108,92,231,0.9); color: white; }
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.empty-state .icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">MemMe <span>Desktop</span></div>
+  <div class="mode-toggle">
+    <button class="mode-btn local active" onclick="setMode('local')">Local</button>
+    <button class="mode-btn remote" onclick="setMode('remote')">Remote</button>
+  </div>
+  <span id="modeBadge" class="mode-badge local">Local Mode</span>
+  <div class="spacer"></div>
+  <span class="header-label">Server:</span>
+  <input id="serverUrl" class="header-input" value="http://localhost:8080" placeholder="Server URL">
+  <span class="header-label">User:</span>
+  <input id="userId" class="header-input" value="demo_user" placeholder="User ID" style="width:100px">
+  <button class="settings-btn" onclick="testConnection()" title="Test Connection">&#x2713;</button>
+</div>
+
+<div class="main">
+  <div class="chat-panel">
+    <div id="chatMessages" class="chat-messages">
+      <div class="msg system">
+        <div class="label">MemMe</div>
+        Welcome to MemMe Desktop! Type text below and use <strong>Smart Add</strong> to extract memories with AI, or <strong>Add Memory</strong> for raw storage.
+      </div>
+    </div>
+    <div class="chat-input">
+      <textarea id="inputText" placeholder="Type or paste text here... Conversations, notes, journal entries..."></textarea>
+      <div class="chat-buttons">
+        <button class="btn btn-primary" onclick="addMemory()">Add Memory</button>
+        <button class="btn btn-smart" onclick="smartAdd()">Smart Add</button>
+        <button class="btn btn-secondary btn-seed" onclick="loadSeedData()">Seed</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="right-panel">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('memories')">Memories</div>
+      <div class="tab" onclick="switchTab('graph')">Graph</div>
+      <div class="tab" onclick="switchTab('stats')">Stats</div>
+    </div>
+    <div class="tab-content">
+      <!-- Memories Tab -->
+      <div id="tab-memories" class="tab-page active">
+        <div class="search-bar">
+          <input id="searchInput" placeholder="Search memories..." onkeydown="if(event.key==='Enter')searchMemories()">
+          <button class="btn btn-primary" style="flex:0;padding:8px 20px" onclick="searchMemories()">Search</button>
+          <button class="btn btn-secondary" style="flex:0;padding:8px 14px" onclick="listMemories()">All</button>
+        </div>
+        <div id="memoryGrid" class="memory-grid">
+          <div class="empty-state">
+            <div class="icon">&#x1f9e0;</div>
+            No memories yet. Add some text to get started!
+          </div>
+        </div>
+      </div>
+
+      <!-- Graph Tab -->
+      <div id="tab-graph" class="tab-page">
+        <div class="search-bar graph-search">
+          <input id="graphSearchInput" placeholder="Search graph entities..." onkeydown="if(event.key==='Enter')searchGraph()">
+          <button class="btn btn-primary" style="flex:0;padding:8px 20px" onclick="searchGraph()">Search</button>
+        </div>
+        <div id="graphContainer" class="graph-container"></div>
+      </div>
+
+      <!-- Stats Tab -->
+      <div id="tab-stats" class="tab-page">
+        <div id="statsCards" class="stats-cards">
+          <div class="stat-card"><div class="value" id="statMemories">-</div><div class="label">Memories</div></div>
+          <div class="stat-card"><div class="value" id="statEntities">-</div><div class="label">Entities</div></div>
+          <div class="stat-card"><div class="value" id="statRelations">-</div><div class="label">Relationships</div></div>
+        </div>
+        <h3 style="color:var(--text-secondary);font-size:14px;margin-top:8px">Top Entities</h3>
+        <div id="entityList" class="entity-list">
+          <div class="empty-state"><div class="icon">&#x1f4ca;</div>No stats yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+// ── State ──
+let currentMode = 'local'; // 'local' or 'remote'
+let hasLocalMode = false;
+let localInitialized = false;
+
+const ENTITY_COLORS = {
+  person: '#6C5CE7', location: '#00b894', organization: '#fdcb6e',
+  event: '#e17055', concept: '#74b9ff', default: '#a29bfe'
+};
+
+const SEED_DATA = [
+  "Hi, I'm Alex Chen. I'm a software engineer at TechCorp in San Francisco. I've been working there for 3 years now.",
+  "My best friend Sarah and I went hiking at Yosemite last weekend. She's a photographer and took amazing shots of Half Dome.",
+  "I just started learning piano. My teacher Mrs. Johnson says I'm making good progress. We meet every Tuesday at the community center.",
+  "My dog Max is a golden retriever. He's 4 years old and loves swimming at Baker Beach.",
+  "I'm planning a trip to Tokyo next month with my girlfriend Lisa. We want to visit Akihabara and try authentic ramen at Ichiran.",
+  "I graduated from Stanford in 2020 with a CS degree. My thesis was on distributed systems.",
+  "My mom lives in Seattle and she's a doctor at Harborview Medical Center. Dad retired last year from Boeing.",
+  "I've been reading 'Thinking Fast and Slow' by Daniel Kahneman. It's changing how I think about decision-making.",
+  "Our team at TechCorp just launched Project Orion — a real-time analytics platform. My manager David is really excited about the metrics.",
+  "I ran my first marathon last October in Chicago. Finished in 4 hours 12 minutes. Training with the Bay Area Runners Club helped a lot."
+];
+
+// ── Init ──
+async function init() {
+  if (window.memme) {
+    hasLocalMode = await window.memme.hasLocal();
+  }
+  if (!hasLocalMode) {
+    setMode('remote');
+    document.querySelector('.mode-btn.local').disabled = true;
+    document.querySelector('.mode-btn.local').style.opacity = '0.4';
+  } else {
+    await initLocalStore();
+  }
+}
+
+async function initLocalStore() {
+  if (window.memme && hasLocalMode && !localInitialized) {
+    const result = await window.memme.initLocal();
+    localInitialized = result === true;
+  }
+}
+
+// ── Mode Toggle ──
+function setMode(mode) {
+  if (mode === 'local' && !hasLocalMode) {
+    showToast('memme-node not available. Build with: cargo build -p memme-node', 'error');
+    return;
+  }
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.mode-btn.${mode}`).classList.add('active');
+  const badge = document.getElementById('modeBadge');
+  badge.className = `mode-badge ${mode}`;
+  badge.textContent = mode === 'local' ? 'Local Mode' : 'Remote Mode';
+  addSystemMsg(mode === 'local'
+    ? 'Switched to <strong>Local Mode</strong> — using embedded memme-node, no server needed.'
+    : 'Switched to <strong>Remote Mode</strong> — using REST API server.');
+}
+
+// ── API Layer ──
+function getBaseUrl() { return document.getElementById('serverUrl').value.replace(/\/$/, ''); }
+function getUserId() { return document.getElementById('userId').value || 'demo_user'; }
+
+async function apiCall(method, path, body) {
+  if (currentMode === 'local') throw new Error('Use local methods for local mode');
+  const url = getBaseUrl() + path;
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error || 'API error');
+  return json.data;
+}
+
+// ── Chat Messages ──
+function addUserMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.textContent = text.length > 200 ? text.slice(0, 200) + '...' : text;
+  document.getElementById('chatMessages').appendChild(el);
+  scrollChat();
+}
+
+function addSystemMsg(html) {
+  const el = document.createElement('div');
+  el.className = 'msg system';
+  el.innerHTML = `<div class="label">MemMe</div>${html}`;
+  document.getElementById('chatMessages').appendChild(el);
+  scrollChat();
+}
+
+function addErrorMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg error';
+  el.textContent = text;
+  document.getElementById('chatMessages').appendChild(el);
+  scrollChat();
+}
+
+function scrollChat() {
+  const c = document.getElementById('chatMessages');
+  c.scrollTop = c.scrollHeight;
+}
+
+// ── Actions ──
+async function addMemory() {
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) return;
+  addUserMsg(text);
+  document.getElementById('inputText').value = '';
+
+  try {
+    let result;
+    if (currentMode === 'local') {
+      result = await window.memme.localAdd(text, getUserId());
+    } else {
+      result = await apiCall('POST', '/v1/memories', { content: text, user_id: getUserId() });
+    }
+    addSystemMsg(`Memory added: <em>"${result.content?.slice(0, 80)}..."</em>`);
+    showToast('Memory added', 'success');
+    listMemories();
+  } catch (e) {
+    addErrorMsg('Error: ' + e.message);
+    showToast(e.message, 'error');
+  }
+}
+
+async function smartAdd() {
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) return;
+  addUserMsg(text);
+  document.getElementById('inputText').value = '';
+
+  if (currentMode === 'local') {
+    addSystemMsg('Smart Add requires <strong>Remote Mode</strong> (LLM needed). Switching...');
+    setMode('remote');
+  }
+
+  try {
+    addSystemMsg('<span class="spinner"></span> Extracting facts with AI...');
+    const result = await apiCall('POST', '/v1/memories/smart', { text, user_id: getUserId() });
+    const count = result.memories?.length || 0;
+    const graphInfo = result.graph ? ` | ${result.graph.entities?.length || 0} entities, ${result.graph.relations?.length || 0} relations` : '';
+    addSystemMsg(`Extracted <strong>${count} memories</strong>${graphInfo}`);
+    showToast(`${count} memories extracted`, 'success');
+    listMemories();
+    if (result.graph) renderGraph(result.graph);
+  } catch (e) {
+    addErrorMsg('Smart Add error: ' + e.message);
+    showToast(e.message, 'error');
+  }
+}
+
+async function searchMemories() {
+  const query = document.getElementById('searchInput').value.trim();
+  if (!query) return;
+
+  try {
+    let results;
+    if (currentMode === 'local') {
+      results = await window.memme.localSearch(query, getUserId(), null, null, 20);
+    } else {
+      results = await apiCall('POST', '/v1/memories/hybrid-search', { query, user_id: getUserId(), top_k: 20 });
+    }
+    renderMemories(results || []);
+    showToast(`${(results || []).length} results found`, 'info');
+  } catch (e) {
+    showToast('Search error: ' + e.message, 'error');
+  }
+}
+
+async function listMemories() {
+  try {
+    let results;
+    if (currentMode === 'local') {
+      results = await window.memme.localList(getUserId(), null, null, 50);
+    } else {
+      results = await apiCall('POST', '/v1/memories/list', { user_id: getUserId(), limit: 50 });
+    }
+    renderMemories(results || []);
+  } catch (e) {
+    showToast('List error: ' + e.message, 'error');
+  }
+}
+
+async function deleteMemory(id) {
+  try {
+    if (currentMode === 'local') {
+      await window.memme.localDelete(id);
+    } else {
+      await apiCall('DELETE', `/v1/memories/${id}`);
+    }
+    showToast('Memory deleted', 'success');
+    listMemories();
+  } catch (e) {
+    showToast('Delete error: ' + e.message, 'error');
+  }
+}
+
+async function searchGraph() {
+  const query = document.getElementById('graphSearchInput').value.trim() || 'all';
+  if (currentMode === 'local') {
+    showToast('Graph search requires Remote Mode', 'info');
+    return;
+  }
+  try {
+    const result = await apiCall('POST', '/v1/graph/search', { query, user_id: getUserId(), depth: 3 });
+    renderGraph(result);
+  } catch (e) {
+    showToast('Graph error: ' + e.message, 'error');
+  }
+}
+
+async function loadStats() {
+  if (currentMode === 'local') {
+    document.getElementById('statMemories').textContent = '-';
+    document.getElementById('statEntities').textContent = '-';
+    document.getElementById('statRelations').textContent = '-';
+    document.getElementById('entityList').innerHTML = '<div class="empty-state"><div class="icon">&#x1f4ca;</div>Stats require Remote Mode</div>';
+    return;
+  }
+  try {
+    const stats = await apiCall('GET', `/v1/users/${getUserId()}/stats`);
+    document.getElementById('statMemories').textContent = stats.total_memories || 0;
+    document.getElementById('statEntities').textContent = stats.total_entities || 0;
+    document.getElementById('statRelations').textContent = stats.total_relationships || 0;
+
+    const entities = await apiCall('GET', `/v1/users/${getUserId()}/top-entities?limit=10`);
+    renderEntityList(entities || []);
+  } catch (e) {
+    showToast('Stats error: ' + e.message, 'error');
+  }
+}
+
+async function loadSeedData() {
+  if (currentMode === 'local') {
+    addSystemMsg('Seed data uses Smart Add — switching to Remote Mode...');
+    setMode('remote');
+  }
+  addSystemMsg('<span class="spinner"></span> Loading seed data (10 entries)...');
+  let count = 0;
+  for (const text of SEED_DATA) {
+    try {
+      await apiCall('POST', '/v1/memories/smart', { text, user_id: getUserId() });
+      count++;
+    } catch (e) {
+      console.error('Seed error:', e);
+    }
+  }
+  addSystemMsg(`Loaded <strong>${count}</strong> seed entries with Smart Add.`);
+  showToast(`${count} seed entries loaded`, 'success');
+  listMemories();
+  searchGraph();
+  loadStats();
+}
+
+async function testConnection() {
+  try {
+    if (currentMode === 'local') {
+      if (hasLocalMode && localInitialized) {
+        showToast('Local mode: connected', 'success');
+      } else {
+        showToast('Local mode: not initialized', 'error');
+      }
+      return;
+    }
+    await fetch(getBaseUrl() + '/health');
+    showToast('Connected to server', 'success');
+  } catch (e) {
+    showToast('Connection failed: ' + e.message, 'error');
+  }
+}
+
+// ── Renderers ──
+function renderMemories(memories) {
+  const grid = document.getElementById('memoryGrid');
+  if (!memories.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">&#x1f9e0;</div>No memories found</div>';
+    return;
+  }
+  grid.innerHTML = memories.map(m => `
+    <div class="memory-card">
+      <button class="delete-btn" onclick="deleteMemory('${m.id}')">&times;</button>
+      <div class="content">${escapeHtml(m.content)}</div>
+      <div class="meta">
+        <span>${timeAgo(m.created_at)}</span>
+        ${m.score != null ? `<span class="score-badge">${(m.score * 100).toFixed(0)}%</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderEntityList(entities) {
+  const list = document.getElementById('entityList');
+  if (!entities.length) {
+    list.innerHTML = '<div class="empty-state"><div class="icon">&#x1f4ca;</div>No entities yet</div>';
+    return;
+  }
+  list.innerHTML = entities.map(e => `
+    <div class="entity-item">
+      <div>
+        <span class="entity-name">${escapeHtml(e.name)}</span>
+        ${e.entity_type ? `<span class="entity-type">${e.entity_type}</span>` : ''}
+      </div>
+      <span class="entity-count">${e.relationship_count} links</span>
+    </div>
+  `).join('');
+}
+
+function renderGraph(data) {
+  const container = document.getElementById('graphContainer');
+  container.innerHTML = '';
+  if (!data || (!data.entities?.length && !data.relations?.length)) {
+    container.innerHTML = '<div class="empty-state" style="height:100%"><div class="icon">&#x1f578;&#xfe0f;</div>No graph data</div>';
+    return;
+  }
+
+  const width = container.clientWidth;
+  const height = container.clientHeight || 400;
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', width).attr('height', height);
+
+  const g = svg.append('g');
+  svg.call(d3.zoom().on('zoom', (e) => g.attr('transform', e.transform)));
+
+  const nodes = data.entities.map(e => ({ id: e.name, type: (e.entity_type || 'default').toLowerCase(), ...e }));
+  const nodeMap = new Map(nodes.map(n => [n.name, n]));
+
+  const links = (data.relations || [])
+    .filter(r => nodeMap.has(r.source) && nodeMap.has(r.target))
+    .map(r => ({ source: r.source, target: r.target, type: r.relation_type }));
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(120))
+    .force('charge', d3.forceManyBody().strength(-300))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(30));
+
+  const link = g.append('g').selectAll('line')
+    .data(links).enter().append('line')
+    .attr('stroke', 'rgba(255,255,255,0.15)').attr('stroke-width', 1.5);
+
+  const linkLabel = g.append('g').selectAll('text')
+    .data(links).enter().append('text')
+    .text(d => d.type)
+    .attr('fill', 'rgba(255,255,255,0.3)')
+    .attr('font-size', '9px').attr('text-anchor', 'middle');
+
+  const node = g.append('g').selectAll('circle')
+    .data(nodes).enter().append('circle')
+    .attr('r', 12)
+    .attr('fill', d => ENTITY_COLORS[d.type] || ENTITY_COLORS.default)
+    .attr('stroke', 'rgba(255,255,255,0.2)').attr('stroke-width', 1.5)
+    .style('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+    );
+
+  const label = g.append('g').selectAll('text')
+    .data(nodes).enter().append('text')
+    .text(d => d.name)
+    .attr('fill', 'var(--text-primary)')
+    .attr('font-size', '11px').attr('text-anchor', 'middle')
+    .attr('dy', -18);
+
+  sim.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    linkLabel.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2);
+    node.attr('cx', d => d.x).attr('cy', d => d.y);
+    label.attr('x', d => d.x).attr('y', d => d.y);
+  });
+}
+
+// ── Tab Switching ──
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+
+  if (name === 'graph') searchGraph();
+  if (name === 'stats') loadStats();
+}
+
+// ── Utilities ──
+function escapeHtml(text) {
+  const el = document.createElement('span');
+  el.textContent = text || '';
+  return el.innerHTML;
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return d.toLocaleDateString();
+}
+
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ── Boot ──
+init();
+</script>
+</body>
+</html>

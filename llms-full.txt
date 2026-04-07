@@ -1,0 +1,889 @@
+# MemMe
+
+> Edge-first AI memory engine. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
+
+## Core Concepts
+
+- **Single-file DuckDB storage**: One `.duckdb` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
+- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
+- **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
+- **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.
+- **FSRS forgetting curve**: Power-law memory decay `R(t,S) = (1 + t/(c·S))^(-p)` with stability reinforcement on access. Memories that are never recalled gradually lose relevance.
+- **Meditation**: 4-phase memory consolidation — decay, per-episode fact extraction, vector dedup (cosine similarity, no LLM needed), graph + entity linking via Aho-Corasick.
+
+## Workspace Crates (9)
+
+- `memme-core` — Core engine: CRUD, search, graph, dedup, meditation, forgetting curve, backup, export/import, analytics
+- `memme-embeddings` — Embedding trait + ONNX/OpenAI/Ollama backends
+- `memme-llm` — LLM trait + Ollama/OpenAI/Anthropic/Gemini backends for fact extraction
+- `memme-python` — Python bindings via PyO3 + maturin
+- `memme-ffi` — Swift/Kotlin/C bindings via UniFFI
+- `memme-node` — Node.js bindings via NAPI-RS
+- `memme-wasm` — WASM bindings via wasm-bindgen
+- `memme-server` — REST API server (axum) with Bearer auth, CORS
+- `memme-mcp` — MCP stdio server for Claude Desktop / Cursor
+
+## Links
+
+- Website: https://vibeinging.github.io/MemMe/
+- GitHub: https://github.com/vibeinging/MemMe
+- Crates.io: https://crates.io/crates/memme-core
+- License: Apache-2.0
+
+---
+
+## Complete API Signatures
+
+### Construction & Configuration
+
+```rust
+// Create a new MemoryStore
+pub fn new(config: MemoryConfig, embedder: Arc<dyn Embedder>) -> Result<Self>
+
+// Set LLM provider (builder pattern)
+pub fn with_llm(self, llm: Arc<dyn memme_llm::LlmProvider>) -> Self
+
+// Replace LLM provider at runtime
+pub fn set_llm_provider(&self, llm: Arc<dyn memme_llm::LlmProvider>)
+
+// Set reranker (builder pattern)
+pub fn with_reranker(mut self, reranker: Arc<dyn crate::rerank::Reranker>) -> Self
+
+// Replace reranker at runtime
+pub fn set_reranker(&mut self, reranker: Arc<dyn crate::rerank::Reranker>)
+
+// Check whether an LLM provider is configured
+pub fn has_llm(&self) -> bool
+
+// Return the embedding dimensions
+pub fn embedding_dims(&self) -> usize
+
+// Persist LLM config to DB (for auto-restore on next open)
+pub fn save_llm_config(&self, api_key: &str, model: &str, base_url: &str) -> Result<()>
+
+// Read persisted LLM config from DB / env vars
+pub fn load_llm_config(&self) -> Option<(String, String, String)>
+```
+
+### Core CRUD
+
+```rust
+// Add a memory with automatic dedup
+pub fn add(&self, content: &str, options: AddOptions) -> Result<MemoryResult>
+
+// Get a single trace by ID (increments access count)
+pub fn get_trace(&self, id: &str) -> Result<Option<MemoryResult>>
+
+// Update a trace's content (re-embeds and re-hashes)
+pub fn update_trace(&self, id: &str, content: &str, options: Option<UpdateOptions>) -> Result<MemoryResult>
+
+// Update importance score without changing content
+pub fn update_importance(&self, id: &str, importance: f32) -> Result<()>
+
+// Delete a trace by ID
+pub fn delete_trace(&self, id: &str) -> Result<()>
+
+// Delete all traces matching filters
+pub fn delete_all_traces(&self, user_id: &str, agent_id: Option<&str>, run_id: Option<&str>, app_id: Option<&str>) -> Result<u64>
+
+// List traces with optional filters
+pub fn list_traces(&self, options: ListOptions) -> Result<Vec<MemoryResult>>
+
+// Get count of traces for a user
+pub fn count_traces(&self, user_id: &str) -> Result<usize>
+
+// Get change history for a specific trace
+pub fn trace_history(&self, memory_id: &str) -> Result<Vec<HistoryRecord>>
+
+// Batch update multiple traces (skips immutable)
+pub fn batch_update_traces(&self, updates: &[(String, String)]) -> Result<Vec<MemoryResult>>
+
+// Batch delete multiple traces (skips immutable)
+pub fn batch_delete_traces(&self, ids: &[String]) -> Result<u64>
+```
+
+### Search
+
+```rust
+// Multi-channel search: vector + BM25 + entity spreading + temporal, fused via RRF
+pub fn search(&self, query: &str, options: SearchOptions) -> Result<Vec<MemoryResult>>
+
+// Search with explicit reranker
+pub fn search_reranked(&self, query: &str, options: SearchOptions, reranker: &dyn crate::rerank::Reranker, candidate_multiplier: usize) -> Result<Vec<MemoryResult>>
+
+// Rebuild FTS index (call after batch insertions)
+pub fn rebuild_fts_index(&self) -> Result<()>
+```
+
+### Stream / Event Ingestion
+
+```rust
+// Ingest a raw event into the stream layer
+pub fn ingest_event(&self, content: &str, options: IngestEventOptions) -> Result<Event>
+
+// List events with filters
+pub fn list_events(&self, options: ListEventsOptions) -> Result<Vec<Event>>
+
+// Get a single event
+pub fn get_event(&self, event_id: &str) -> Result<Option<Event>>
+```
+
+### Session / Episode / Compact
+
+```rust
+// Primary ingestion: send chat messages to a Session
+pub fn append_events(&self, session_id: &str, messages: &[ChatMessage], user_id: &str, metadata: Option<serde_json::Value>) -> Result<AppendEventsResult>
+
+// Compact: purify events, generate Episode summary, mark events processed
+pub fn compact(&self, session_id: &str) -> Result<CompactResult>
+
+// Re-extract all traces from raw sessions (after model upgrade)
+pub fn re_traces(&self, user_id: &str) -> Result<Vec<CompactResult>>
+
+// Get a session by ID
+pub fn get_session(&self, session_id: &str) -> Result<Option<Session>>
+
+// List sessions for a user
+pub fn list_sessions(&self, options: ListSessionsOptions) -> Result<Vec<Session>>
+
+// Delete a session
+pub fn delete_session(&self, session_id: &str) -> Result<()>
+
+// Get events for a session with pagination
+pub fn get_session_events(&self, session_id: &str, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<Event>>
+
+// Get session context within a token budget
+pub fn get_session_context(&self, session_id: &str, options: GetSessionContextOptions) -> Result<SessionContext>
+
+// Create an episode manually
+pub fn create_episode(&self, options: CreateEpisodeOptions) -> Result<Episode>
+
+// Search episodes (vector + FTS + entity with RRF fusion)
+pub fn search_episodes(&self, query: &str, options: SearchEpisodesOptions) -> Result<Vec<Episode>>
+
+// Get a single episode (reinforces recall strength)
+pub fn get_episode(&self, episode_id: &str) -> Result<Option<Episode>>
+
+// List episodes with pagination
+pub fn list_episodes(&self, options: ListEpisodesOptions) -> Result<Vec<Episode>>
+
+// Get messages (events) associated with an episode
+pub fn get_episode_messages(&self, episode_id: &str, options: EpisodeMessagesOptions) -> Result<Vec<Event>>
+
+// Search episode messages by semantic similarity
+pub fn search_episode_messages(&self, episode_id: &str, query: &str, limit: usize) -> Result<Vec<Event>>
+
+// Delete an episode
+pub fn delete_episode(&self, episode_id: &str) -> Result<()>
+```
+
+### Meditation (Consolidation)
+
+```rust
+// Start a meditation: extract memories from Episodes, build graph, update identity, apply decay
+pub fn meditate(&self, options: MeditateOptions) -> Result<MeditationRecord>
+```
+
+### Reflection & Diagnostics
+
+```rust
+// LLM-powered analysis of recent memories — identifies themes, patterns, focus areas
+pub fn reflect(&self, user_id: &str) -> Result<ReflectionResult>
+
+// Extract behavioral principles from user corrections, stored as high-importance memories + identity traits
+pub fn learn_from_feedback(&self, user_id: &str, feedback: &str) -> Result<FeedbackResult>
+
+// Health checks for storage, embedder, LLM with per-check latency
+pub fn diagnose(&self) -> Result<DiagnoseResult>
+```
+
+### Backup & Sync
+
+```rust
+// CHECKPOINT + atomic file copy to path (returns metadata: memory count, schema version, size)
+pub fn backup_to_path(&self, path: &str) -> Result<BackupInfo>
+
+// Validate backup file and restore (atomic swap)
+pub fn restore_from_backup(path: &str, config: &MemoryConfig) -> Result<()>
+
+// Sync primary → replica (CHECKPOINT + atomic copy)
+pub fn sync_replica(&self) -> Result<()>
+
+// Full export: all data layers as JSON
+pub fn full_export(&self, user_id: Option<&str>) -> Result<FullExport>
+
+// Full import: restore from JSON export
+pub fn full_import(&self, data: &FullExport) -> Result<()>
+
+// Incremental export based on version numbers
+pub fn export_changes_since(&self, since_version: u64, device_id: &str) -> Result<SyncDelta>
+
+// Import ChatGPT/Claude/Gemini conversation history
+pub fn import_conversations(&self, convs: &[ImportedConversation], user_id: &str) -> Result<u64>
+```
+
+### Knowledge Graph
+
+```rust
+// Extract entities/relationships from text using LLM
+pub fn add_graph(&self, text: &str, user_id: &str, llm: Arc<dyn memme_llm::LlmProvider>) -> Result<GraphSearchResult>
+
+// Search the knowledge graph (pure SQL, no LLM needed)
+pub fn search_graph(&self, query: &str, user_id: &str, depth: usize) -> Result<GraphSearchResult>
+```
+
+### Identity
+
+```rust
+// Add or update an identity trait
+pub fn add_identity_trait(&self, options: AddIdentityTraitOptions) -> Result<IdentityTrait>
+
+// List all identity traits for a user
+pub fn list_identity_traits(&self, user_id: &str) -> Result<Vec<IdentityTrait>>
+```
+
+### Lifecycle & Pruning
+
+```rust
+// Apply decay, prune expired/low-retention memories
+pub fn consolidate(&self, user_id: &str, decay_rate: f32, min_importance: f32, delete_below: bool) -> Result<ConsolidateResult>
+
+// Clean up expired memories
+pub fn cleanup_expired(&self) -> Result<u64>
+
+// Manually prune memories for a user
+pub fn prune(&self, user_id: &str, count: usize) -> Result<u64>
+
+// Reset the entire store
+pub fn reset(&self) -> Result<()>
+
+// Flush deferred write operations
+pub fn flush_deferred_writes(&self)
+```
+
+### Procedural Memory
+
+```rust
+// Add a procedure (skill/habit/workflow)
+pub fn add_procedure(&self, name: &str, description: &str, steps: Vec<ProcedureStep>, user_id: &str) -> Result<Procedure>
+
+// Get a procedure by ID
+pub fn get_procedure(&self, id: &str) -> Result<Option<Procedure>>
+
+// List all procedures for a user
+pub fn list_procedures(&self, user_id: &str) -> Result<Vec<Procedure>>
+
+// Delete a procedure
+pub fn delete_procedure(&self, id: &str) -> Result<()>
+```
+
+### Export / Import / Sync
+
+```rust
+// Export memories with optional user_id filter
+pub fn export(&self, user_id: Option<&str>) -> Result<Vec<MemoryExport>>
+
+// Import memories from an export
+pub fn import_memories(&self, memories: &[MemoryExport]) -> Result<u64>
+
+// Export with privacy control (include/exclude local_only)
+pub fn export_with_privacy(&self, user_id: Option<&str>, include_local: bool) -> Result<Vec<MemoryExport>>
+
+// Export changes since a sync version
+pub fn export_changes_since(&self, since_version: u64, device_id: &str) -> Result<SyncDelta>
+
+// Get current sync version
+pub fn current_sync_version(&self) -> Result<u64>
+
+// Get storage statistics
+pub fn storage_stats(&self) -> Result<StorageStats>
+
+// Get approximate database size in bytes
+pub fn db_size_bytes(&self) -> Result<u64>
+```
+
+### Analytics
+
+```rust
+// Get summary statistics for a user
+pub fn user_stats(&self, user_id: &str) -> Result<UserStats>
+
+// Get memory creation frequency by time period ("day", "week", "month")
+pub fn memory_frequency(&self, user_id: &str, granularity: &str, limit: usize) -> Result<Vec<TimeBucket>>
+
+// Get top entities by relationship count
+pub fn top_entities(&self, user_id: &str, limit: usize) -> Result<Vec<EntityStat>>
+```
+
+---
+
+## MemoryConfig — All Fields & Defaults
+
+```rust
+pub struct MemoryConfig {
+    pub db_path: String,                          // default: "memory.duckdb"
+    pub collection_name: String,                  // default: "default"
+    pub embedding_dims: usize,                    // default: 384
+    pub dedup_threshold: f32,                     // default: 0.15
+    pub default_limit: usize,                     // default: 10
+    pub custom_fact_extraction_prompt: Option<String>,  // default: None
+    pub custom_update_memory_prompt: Option<String>,    // default: None
+    pub enable_graph: bool,                       // default: true
+    pub graph_spreading_depth: usize,             // default: 2
+    pub inclusion_prompt: Option<String>,          // default: None
+    pub exclusion_prompt: Option<String>,          // default: None
+    pub custom_categories: Option<Vec<(String, String)>>,  // default: None
+    pub enable_forgetting_curve: bool,            // default: true
+    pub retention_weight: f32,                    // default: 0.7
+    pub stability_growth_factor: f32,             // default: 2.5
+    pub prune_retention_threshold: f32,           // default: 0.05
+    pub max_memories_per_user: Option<usize>,     // default: None
+    pub max_db_size_mb: Option<usize>,            // default: None
+    pub pruning_strategy: PruningStrategy,        // default: LRU
+    pub auto_prune: bool,                         // default: false
+    pub power_config: Option<PowerConfig>,         // default: None
+    pub extraction_depth: ExtractionDepth,        // default: Standard
+    pub embed_batch_size: usize,                  // default: 10
+    pub compact_threshold: usize,                 // default: 20
+    pub rrf_vector_weight: f64,                   // default: 0.5
+    pub rrf_fts_weight: f64,                      // default: 0.3
+    pub rrf_entity_weight: f64,                   // default: 0.2
+    pub rrf_k: usize,                             // default: 30
+    pub rrf_candidate_multiplier: usize,          // default: 3
+    pub rrf_temporal_weight: f64,                 // default: 0.15
+    pub enable_rerank: bool,                      // default: false
+    pub rerank_candidate_multiplier: usize,       // default: 3
+}
+```
+
+### PowerConfig
+
+```rust
+pub struct PowerConfig {
+    pub full_power_threshold: f32,    // default: 0.5
+    pub power_save_threshold: f32,    // default: 0.2
+    pub defer_when_critical: bool,    // defer operations when battery is critical
+}
+```
+
+### ExtractionDepth
+
+```rust
+pub enum ExtractionDepth {
+    Standard,   // Single-pass extraction (fast, default)
+    Thorough,   // Sliding window + detail pass (slower, more complete)
+}
+```
+
+### PruningStrategy
+
+```rust
+pub enum PruningStrategy {
+    LRU,         // Least recently accessed (default)
+    Importance,  // Lowest importance first
+    Decay,       // Lowest importance after decay
+}
+```
+
+---
+
+## Core Types
+
+### AddOptions
+
+```rust
+pub struct AddOptions {
+    pub user_id: String,
+    pub agent_id: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub importance: Option<f32>,
+    pub actor_id: Option<String>,
+    pub immutable: bool,                    // default: false
+    pub expiration_date: Option<String>,    // ISO 8601
+    pub categories: Option<Vec<String>>,
+    pub memory_type: Option<String>,        // "session", "long_term", "shared"
+    pub privacy: Privacy,                   // default: Syncable
+    pub event_time: Option<String>,         // ISO 8601
+    pub episode_id: Option<String>,
+    pub session_id: Option<String>,
+}
+```
+
+### SearchOptions
+
+```rust
+pub struct SearchOptions {
+    pub user_id: String,
+    pub agent_id: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+    pub limit: Option<usize>,
+    pub threshold: Option<f32>,
+    pub filter: Option<FilterExpression>,
+    pub keyword_search: bool,               // default: false (enables BM25+RRF)
+    pub fields: Option<Vec<String>>,        // field projection
+}
+```
+
+### UpdateOptions
+
+```rust
+pub struct UpdateOptions {
+    pub timestamp: Option<String>,          // ISO 8601
+    pub metadata: Option<serde_json::Value>,
+}
+```
+
+### ListOptions
+
+```rust
+pub struct ListOptions {
+    pub user_id: String,
+    pub agent_id: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+    pub limit: Option<usize>,
+    pub filter: Option<FilterExpression>,
+}
+```
+
+### MemoryResult
+
+```rust
+pub struct MemoryResult {
+    pub id: String,
+    pub content: String,
+    pub user_id: String,
+    pub agent_id: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+    pub score: Option<f32>,                 // cosine distance or RRF/rerank score
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: Option<serde_json::Value>,
+    pub importance: Option<f32>,
+    pub access_count: Option<u32>,
+    pub immutable: bool,
+    pub expiration_date: Option<String>,
+    pub categories: Option<Vec<String>>,
+    pub memory_type: Option<String>,
+    pub retention: Option<f32>,             // 0.0-1.0, forgetting curve
+    pub stability: Option<f32>,             // days, higher = slower decay
+    pub privacy: String,
+    pub event_time: Option<String>,
+    pub episode_id: Option<String>,
+    pub session_id: Option<String>,
+    pub resolution: Resolution,             // Granular | Narrative | Identity
+}
+```
+
+### ChatMessage
+
+```rust
+pub struct ChatMessage {
+    pub role: String,                       // "user", "assistant", "tool", "system"
+    pub content: String,
+    pub image_url: Option<String>,
+    pub image_type: Option<String>,         // "url" or "base64"
+    pub timestamp: Option<String>,          // ISO 8601
+}
+```
+
+### Privacy
+
+```rust
+pub enum Privacy {
+    LocalOnly,       // Never leaves device
+    Syncable,        // Can be synced to cloud (default)
+    EncryptedSync,   // Marker: should be encrypted before sync
+}
+```
+
+### Resolution
+
+```rust
+pub enum Resolution {
+    Granular,   // Extracted fact (default)
+    Narrative,  // Episode summary
+    Identity,   // Personality trait
+}
+```
+
+### Session
+
+```rust
+pub struct Session {
+    pub session_id: String,
+    pub user_id: String,
+    pub source_id: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: String,
+    pub event_count: u32,
+}
+```
+
+### Episode
+
+```rust
+pub struct Episode {
+    pub episode_id: String,
+    pub title: String,
+    pub summary: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub significance: f32,              // 0.0-1.0
+    pub outcome: Option<String>,        // "success", "failure", "partial", "ongoing"
+    pub source_id: Option<String>,
+    pub event_ids: Vec<String>,
+    pub session_ids: Vec<String>,
+    pub user_id: String,
+    pub created_at: String,
+    pub last_recalled: Option<String>,
+    pub recall_count: u32,
+    pub storage_strength: f32,          // Bjork: only increases
+    pub retrieval_strength: f32,        // Bjork: decays over time
+    pub score: Option<f32>,             // populated during search
+}
+```
+
+### Event
+
+```rust
+pub struct Event {
+    pub event_id: String,
+    pub source_id: Option<String>,
+    pub session_id: Option<String>,
+    pub timestamp: String,
+    pub event_type: EventType,          // UserMessage | AiResponse | ToolCall | ToolResult | Error | System
+    pub content: String,
+    pub parent_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub user_id: String,
+    pub processed: bool,
+    pub processed_at: Option<String>,
+    pub purified_content: Option<String>,
+    pub purified: bool,
+    pub event_time: Option<String>,     // extracted temporal reference
+    pub location: Option<String>,       // extracted spatial reference
+}
+```
+
+### MeditateOptions
+
+```rust
+pub struct MeditateOptions {
+    pub user_id: String,
+    pub triggered_by: String,           // source_id
+    pub since: Option<String>,          // ISO 8601, default: last 24h
+}
+```
+
+### MeditationRecord
+
+```rust
+pub struct MeditationRecord {
+    pub meditation_id: String,
+    pub triggered_by: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: MeditationStatus,       // Running | Completed | Failed | Interrupted
+    pub user_id: String,
+    pub events_processed: u32,
+    pub episodes_created: u32,
+    pub memories_created: u32,
+    pub memories_updated: u32,
+    pub memories_decayed: u32,
+    pub entities_created: u32,
+    pub relations_created: u32,
+    pub conflicts_found: u32,
+    pub journal: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+```
+
+### IdentityTrait
+
+```rust
+pub struct IdentityTrait {
+    pub trait_id: String,
+    pub trait_type: TraitType,          // Role | Belief | Value | Style | Goal
+    pub content: String,
+    pub confidence: f32,                // 0.0-1.0
+    pub evidence_ids: Vec<String>,      // memory_ids supporting this trait
+    pub user_id: String,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+```
+
+### LlmProvider Trait
+
+```rust
+pub trait LlmProvider: Send + Sync {
+    fn generate(&self, messages: &[Message], options: &GenerateOptions) -> Result<String, LlmError>;
+    fn name(&self) -> &str;
+}
+```
+
+---
+
+## Session / Episode / Compact / Meditate Flow
+
+The data pipeline follows five layers of increasing abstraction:
+
+```
+Stream (raw events)
+  -> Session (grouped events within a time window)
+    -> Episode (compacted summary with purified events)
+      -> Trace (atomic facts extracted from episodes)
+        -> Identity (high-level personality traits)
+```
+
+### 1. append_events() — Ingest raw data
+
+Send chat messages (or any events) to a Session. Events are stored as-is in the stream layer. Returns `AppendEventsResult` with a `compact_needed` flag when unprocessed events exceed `compact_threshold` (default: 20).
+
+### 2. compact() — Purify and summarize
+
+When called on a session:
+1. **Purifies events** via LLM: resolves coreferences ("he" -> "Alex"), grounds temporal references ("yesterday" -> "2026-03-29"), extracts locations.
+2. **Embeds purified content** for vector search on events.
+3. **Generates Episode summary**: title, summary, significance score (0.0-1.0).
+4. **Creates a Narrative trace** (Resolution::Narrative) in the memories table.
+5. **Marks events as processed**.
+
+### 3. meditate() — Extract and consolidate
+
+A 4-phase orchestration that loops until all unmeditated episodes are processed:
+1. **Decay** — Apply forgetting curve to existing memories (always runs, no LLM needed).
+2. **Per-Episode Fact Extraction** — LLM reads each episode independently and extracts atomic, self-contained facts with timestamps.
+3. **Store + Vector Dedup** — Extracted facts stored via `add()`. Cosine similarity against existing memories handles dedup automatically (threshold < 0.15 = duplicate). No LLM reconciliation needed — deterministic, no hallucination risk.
+4. **Graph + Entity Linking** — Single LLM call extracts entities and relationships. Aho-Corasick automaton links memories ↔ entities for spreading activation.
+
+### 4. get_session_context() — Retrieve for RAG
+
+Returns purified events from a session within a token budget. Useful for providing conversation context to an LLM during retrieval. Prefers purified content when available, falls back to raw content for unprocessed events.
+
+---
+
+## Search Pipeline
+
+```
+Query
+  |
+  +-- Channel 1: Vector Search (cosine similarity on embeddings)
+  |     weight: 0.5 (rrf_vector_weight)
+  |
+  +-- Channel 2: BM25 Full-Text Search (DuckDB FTS extension)
+  |     weight: 0.3 (rrf_fts_weight)
+  |     activated when: SearchOptions.keyword_search = true
+  |
+  +-- Channel 3: Entity Spreading Activation
+  |     weight: 0.2 (rrf_entity_weight)
+  |     activated when: config.enable_graph = true
+  |     process: Aho-Corasick entity extraction (<1ms)
+  |              -> graph spreading (configurable depth, default 2 hops)
+  |              -> collect all memories linked to expanded entities
+  |
+  +-- Channel 4: Temporal Search
+  |     weight: 0.15 (rrf_temporal_weight)
+  |     activated when: query has temporal intent (date references, "when", "ago", etc.)
+  |
+  v
+  RRF Fusion (Reciprocal Rank Fusion, k=30)
+  |
+  v
+  Cross-Encoder Reranking (optional, API or ONNX)
+  |
+  v
+  Forgetting Curve Scoring
+  |   final_score = similarity * (retention_weight * retention + (1 - retention_weight) * importance)
+  |
+  v
+  Results (sorted by final score, limited to requested count)
+```
+
+---
+
+## Knowledge Graph
+
+### Entity/Relationship Extraction
+
+When `enable_graph` is true and an LLM is available, `add_smart()` and `meditate()` extract entities and relationships:
+
+- **Entities**: Named things (people, places, organizations, concepts) with type labels
+- **Relationships**: Directed edges between entities (e.g., Alice --works_at--> Google)
+- **Memory-Entity Links**: Automatic Aho-Corasick matching links memories to entities they mention
+
+### Graph Search
+
+`search_graph(query, user_id, depth)` performs:
+1. SQL LIKE search for matching entity names
+2. Neighborhood traversal (BFS) up to `depth` hops
+3. Returns all discovered entities and relationships
+
+### Entity Spreading Activation (Search Channel)
+
+During search, the entity channel:
+1. Extracts entity names from the query using Aho-Corasick (<1ms)
+2. Expands via graph traversal (configurable depth, default 2 hops)
+3. Collects all memories linked to expanded entities
+4. Results are fused with other channels via RRF
+
+---
+
+## Quick Start Examples
+
+### Rust
+
+```rust
+use std::sync::Arc;
+use memme_core::{MemoryConfig, MemoryStore, AddOptions, SearchOptions, ChatMessage};
+use memme_embeddings::onnx::OnnxEmbedder;
+
+fn main() -> memme_core::Result<()> {
+    // 1. Create store
+    let config = MemoryConfig::new("memory.duckdb", 384);
+    let embedder = Arc::new(OnnxEmbedder::new()?);
+    let store = MemoryStore::new(config, embedder)?;
+
+    // 2. Add memories
+    store.add("User prefers dark mode", AddOptions::new("alice"))?;
+    store.add("User drinks coffee every morning", AddOptions::new("alice"))?;
+
+    // 3. Search
+    let results = store.search("morning routine", SearchOptions::new("alice").limit(5))?;
+    for r in &results {
+        println!("{} (score: {:.4})", r.content, r.score.unwrap_or(0.0));
+    }
+
+    // 4. Session/Episode flow (requires LLM)
+    // store.set_llm_provider(llm);
+    // let result = store.append_events("session-1", &messages, "alice", None)?;
+    // if result.compact_needed { store.compact("session-1")?; }
+    // store.meditate(MeditateOptions::new("alice", "app"))?;
+
+    Ok(())
+}
+```
+
+### Python
+
+```python
+from memme import MemoryStore
+
+# Create store (uses local ONNX embeddings by default)
+store = MemoryStore("memory.duckdb")
+
+# Add memories
+store.add("User prefers dark mode", user_id="alice")
+store.add("User drinks coffee every morning", user_id="alice")
+
+# Search
+results = store.search("morning routine", user_id="alice", limit=5)
+for r in results:
+    print(r["content"], r["score"])
+
+# Session/Episode flow
+messages = [
+    ("user", "I just moved to Tokyo for a new job."),
+    ("assistant", "Welcome to Tokyo! What kind of job?"),
+    ("user", "AI startup, building memory systems."),
+]
+store.add_smart_messages(messages, user_id="alice", run_id="session-001")
+
+# Hybrid search (vector + BM25)
+store.rebuild_fts_index()
+results = store.hybrid_search("Tokyo startup", user_id="alice", limit=5)
+```
+
+### Node.js
+
+```javascript
+const { MemoryStore } = require("memme");
+
+const store = new MemoryStore("memory.duckdb");
+await store.add("User prefers dark mode", { userId: "alice" });
+const results = await store.search("preferences", { userId: "alice" });
+console.log(results);
+```
+
+---
+
+## Configuration Example
+
+```rust
+use memme_core::{MemoryConfig, PowerConfig};
+use memme_core::types::PruningStrategy;
+use memme_core::config::ExtractionDepth;
+
+let config = MemoryConfig {
+    db_path: "memory.duckdb".into(),
+    collection_name: "default".into(),
+    embedding_dims: 384,
+    dedup_threshold: 0.15,
+    default_limit: 10,
+    enable_graph: true,
+    graph_spreading_depth: 2,
+    enable_forgetting_curve: true,
+    retention_weight: 0.7,
+    stability_growth_factor: 2.5,
+    prune_retention_threshold: 0.05,
+    max_memories_per_user: Some(1000),
+    pruning_strategy: PruningStrategy::LRU,
+    auto_prune: true,
+    compact_threshold: 20,
+    extraction_depth: ExtractionDepth::Standard,
+    // RRF weights
+    rrf_vector_weight: 0.5,
+    rrf_fts_weight: 0.3,
+    rrf_entity_weight: 0.2,
+    rrf_temporal_weight: 0.15,
+    rrf_k: 30,
+    rrf_candidate_multiplier: 3,
+    // Reranking
+    enable_rerank: false,
+    rerank_candidate_multiplier: 3,
+    // Prompts
+    inclusion_prompt: Some("Extract work-related tasks and deadlines".into()),
+    exclusion_prompt: Some("Ignore passwords and secrets".into()),
+    // Mobile battery awareness
+    power_config: Some(PowerConfig {
+        full_power_threshold: 0.5,
+        power_save_threshold: 0.2,
+        defer_when_critical: true,
+    }),
+    ..Default::default()
+};
+```
+
+---
+
+## Security
+
+- **Memory Immutability** — Mark memories as immutable; storage layer prevents modification/deletion
+- **Privacy Levels** — `LocalOnly` (never leaves device), `Syncable`, `EncryptedSync` per-memory; enforced on export
+- **Data Expiration (TTL)** — Per-memory TTL with automatic cleanup during meditation
+- **Audit Trail** — Every create/update/delete logged in `history` table with timestamp and before/after snapshot
+- **Bearer Token Auth** — Optional API key authentication on REST server
+- **CORS Protection** — Configurable cross-origin policy on REST server
+- **Exclusion Prompts** — Configure LLM to skip extracting sensitive content categories
+- **SQL Injection Prevention** — All queries use parameterized `$N` placeholders; collection names validated against alphanumeric whitelist
+- **Content Hashing** — Hash-based deduplication and integrity checking
+- **Webhook Notifications** — Subscribe to memory lifecycle events (feature-gated)
+
+## Benchmark
+
+LoCoMo long-context memory benchmark (1540 questions, 10 conversations, GPT-4o-mini judge):
+
+| Category | **MemMe** | mem0 | mem0-graph | Zep |
+|---|---|---|---|---|
+| Single-hop | **85.82** | 67.13 | 65.71 | 61.70 |
+| Multi-hop | **71.96** | 51.15 | 47.19 | 41.35 |
+| Temporal | **65.62** | 55.51 | 58.13 | 49.31 |
+| Open-domain | **88.11** | 72.93 | 75.71 | 76.60 |
+| **Overall** | **82.92** | — | — | — |

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: clippy-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo clippy -p memme-core -p memme-embeddings -p memme-llm -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Unit tests
+        run: cargo test -p memme-core
+      - name: Embeddings tests
+        run: cargo test -p memme-embeddings
+      - name: LLM tests
+        run: cargo test -p memme-llm
+      - name: Integration tests
+        run: cargo test -p memme-core --test integration
+      - name: Edge case tests
+        run: cargo test -p memme-core --test edge_cases
+      - name: Mobile scenario tests
+        run: cargo test -p memme-core --test mobile_scenarios
+      - name: Stress tests
+        run: cargo test -p memme-core --test stress
+        timeout-minutes: 10
+
+  build-bindings:
+    name: Build bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # memme-db/duckdb submodule not needed — bundled feature compiles DuckDB from source
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bindings-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build -p memme-ffi -p memme-node -p memme-wasm -p memme-server -p memme-mcp

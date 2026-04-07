@@ -1,0 +1,30 @@
+[package]
+name = "memme-embeddings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedding providers for MemMe — ONNX local inference, OpenAI, and Ollama"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["onnx"]
+onnx = ["fastembed"]
+openai = ["reqwest", "tokio"]
+ollama = ["reqwest", "tokio"]
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, optional = true }
+
+# ONNX local inference
+fastembed = { version = "4", optional = true }
+
+# Remote API
+reqwest = { version = "0.12", features = ["json"], optional = true }

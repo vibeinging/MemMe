@@ -1,0 +1,107 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Internal docs (not for public)
+docs/papers/
+docs/research/
+docs/analysis/
+docs/plans/
+docs/articles/
+docs/design/
+
+# memme-db build artifacts (DuckDB source auto-downloaded at build time)
+memme-db/duckdb/
+memme-db/duckpgq/
+memme-db/build/
+
+# Benchmark results and cache
+benchmarks/locomo/results*
+benchmarks/locomo/*_results.json
+benchmarks/locomo/cache*/
+benchmarks/locomo/*.log
+benchmarks/locomo/*.duckdb
+# Only keep: run_benchmark_engine.py, run_parallel.sh, locomo10.json
+benchmarks/locomo/run_benchmark_v*.py
+benchmarks/locomo/run_meditation.py
+benchmarks/locomo/run_benchmark_lite.py
+benchmarks/locomo/run_benchmark.py
+benchmarks/locomo/quick_test.py
+benchmarks/locomo/run_3conv.sh
+benchmarks/locomo/run_full_benchmark.sh
+benchmarks/locomo/run_benchmark_*.sh
+benchmarks/locomo/run_v*.sh
+benchmarks/locomo/run_two_phase.sh
+benchmarks/lite_latency_bench.py
+benchmarks/token_consumption_bench.py
+benchmarks/statistical_analysis.py
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Build
+/memme-db/build/
+dist/
+*.o
+*.a
+*.dylib
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.egg-info/
+*.egg
+.venv/
+venv/
+*.pyc
+*.pyo
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+*.node
+
+# WASM
+pkg/
+
+# Environment
+.env*
+!.env.example
+
+# Benchmark artifacts
+benchmarks/**/cache*/
+benchmarks/**/*.log
+benchmarks/**/results*/
+*.pkl
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# DuckDB files in subdirectories
+**/*.duckdb
+**/*.duckdb.wal
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Python cache
+*.pyc
+.fastembed_cache/
+
+# Misc
+nohup.out
