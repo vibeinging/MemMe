@@ -138,14 +138,14 @@ jobs:
       contents: write
     steps:
       - name: Download all iOS artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: ios-*
           merge-multiple: false
 
       - name: Download all Android artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: android-*
