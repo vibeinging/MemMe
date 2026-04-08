@@ -33,7 +33,7 @@ rust-version = "1.77"
 #
 # Version note: the duckdb-rs crate version must be ABI-compatible with
 # the DuckDB version built by memme-db (currently v1.5.0).
-duckdb = { version = "1.4" }
+duckdb = { version = "1.10501" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
