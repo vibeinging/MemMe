@@ -27,7 +27,7 @@ uuid.workspace = true
 tracing.workspace = true
 memme-embeddings = { workspace = true, default-features = false }
 memme-llm = { workspace = true }
-fastembed = { version = "4", optional = true }
+fastembed = { version = "5", optional = true }
 rusqlite = { version = "0.32", features = ["bundled", "vtab", "functions"] }
 sqlite-vec = "0.1"
 tokio = { workspace = true, optional = true }
