@@ -1,8 +1,7 @@
-use duckdb::params;
-
 use crate::error::Result;
-use crate::types::{ListSessionsOptions, Session};
+use crate::types::{ListSessionsOptions, Session, SqlParam};
 
+use super::backend::RowAccess;
 use super::util::opt_text;
 use super::Storage;
 
@@ -18,56 +17,57 @@ impl Storage {
     ) -> Result<()> {
         let source_val = opt_text(source_id);
         let meta_val = opt_text(metadata);
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             r#"INSERT INTO sessions (session_id, user_id, source_id, started_at, metadata)
-               VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP), $5)
+               VALUES ($1, $2, $3, $4, $5)
                ON CONFLICT DO NOTHING"#,
-            params![session_id, user_id, source_val, started_at, meta_val],
+            &[
+                SqlParam::Text(session_id.to_string()),
+                SqlParam::Text(user_id.to_string()),
+                source_val,
+                SqlParam::Text(started_at.to_string()),
+                meta_val,
+            ],
         )?;
         Ok(())
     }
 
     /// Get a session by ID, with event_count computed from the events table.
     pub(crate) fn get_session(&self, session_id: &str) -> Result<Option<Session>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
+        self.backend.query_one(
             r#"SELECT s.session_id, s.user_id, s.source_id,
-                      CAST(s.started_at AS VARCHAR), CAST(s.ended_at AS VARCHAR),
-                      s.metadata, CAST(s.created_at AS VARCHAR),
+                      s.started_at, s.ended_at,
+                      s.metadata, s.created_at,
                       (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
                       s.structured_notes
                FROM sessions s
                WHERE s.session_id = $1"#,
-        )?;
-        let mut rows = stmt.query_map(params![session_id], map_session_row)?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+            &[SqlParam::Text(session_id.to_string())],
+            |row| map_session_row(row),
+        )
     }
 
     /// List sessions with filters and pagination.
     pub(crate) fn list_sessions(&self, options: &ListSessionsOptions) -> Result<Vec<Session>> {
         let mut conditions = vec!["s.user_id = $1".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> =
+            vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref source_id) = options.source_id {
             param_idx += 1;
             conditions.push(format!("s.source_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(source_id.clone()));
+            dynamic_params.push(SqlParam::Text(source_id.clone()));
         }
         if let Some(ref since) = options.since {
             param_idx += 1;
-            conditions.push(format!("s.started_at >= CAST(${param_idx} AS TIMESTAMP)"));
-            dynamic_params.push(duckdb::types::Value::Text(since.clone()));
+            conditions.push(format!("s.started_at >= ${param_idx}"));
+            dynamic_params.push(SqlParam::Text(since.clone()));
         }
         if let Some(ref until) = options.until {
             param_idx += 1;
-            conditions.push(format!("s.started_at <= CAST(${param_idx} AS TIMESTAMP)"));
-            dynamic_params.push(duckdb::types::Value::Text(until.clone()));
+            conditions.push(format!("s.started_at <= ${param_idx}"));
+            dynamic_params.push(SqlParam::Text(until.clone()));
         }
         let _ = param_idx;
 
@@ -76,8 +76,8 @@ impl Storage {
         let where_clause = conditions.join(" AND ");
         let sql = format!(
             r#"SELECT s.session_id, s.user_id, s.source_id,
-                      CAST(s.started_at AS VARCHAR), CAST(s.ended_at AS VARCHAR),
-                      s.metadata, CAST(s.created_at AS VARCHAR),
+                      s.started_at, s.ended_at,
+                      s.metadata, s.created_at,
                       (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
                       s.structured_notes
                FROM sessions s
@@ -86,35 +86,27 @@ impl Storage {
                LIMIT {limit} OFFSET {offset}"#
         );
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_session_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(&sql, &dynamic_params, |row| map_session_row(row))
     }
 
     /// Set ended_at on a session (close it).
     #[allow(dead_code)] // planned API: session lifecycle
     pub(crate) fn close_session(&self, session_id: &str, ended_at: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
-            "UPDATE sessions SET ended_at = CAST($1 AS TIMESTAMP) WHERE session_id = $2",
-            params![ended_at, session_id],
+        self.backend.execute(
+            "UPDATE sessions SET ended_at = $1 WHERE session_id = $2",
+            &[
+                SqlParam::Text(ended_at.to_string()),
+                SqlParam::Text(session_id.to_string()),
+            ],
         )?;
         Ok(())
     }
 
     /// Delete a session.
     pub(crate) fn delete_session(&self, session_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "DELETE FROM sessions WHERE session_id = $1",
-            params![session_id],
+            &[SqlParam::Text(session_id.to_string())],
         )?;
         Ok(())
     }
@@ -138,22 +130,39 @@ impl Storage {
     }
     /// Append a line to a session's structured notes, capped at 2000 chars.
     pub(crate) fn append_structured_note(&self, session_id: &str, note: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
-            r#"UPDATE sessions
-               SET structured_notes = LEFT(COALESCE(structured_notes, '') || $1, 2000)
-               WHERE session_id = $2"#,
-            params![note, session_id],
+        let left = self.dialect().left_expr("COALESCE(structured_notes, '') || $1", "2000");
+        self.backend.execute(
+            &format!(r#"UPDATE sessions
+               SET structured_notes = {left}
+               WHERE session_id = $2"#),
+            &[
+                SqlParam::Text(note.to_string()),
+                SqlParam::Text(session_id.to_string()),
+            ],
         )?;
         Ok(())
     }
 
     /// Clear structured notes for a session (after compact).
     pub(crate) fn clear_structured_notes(&self, session_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE sessions SET structured_notes = NULL WHERE session_id = $1",
-            params![session_id],
+            &[SqlParam::Text(session_id.to_string())],
+        )?;
+        Ok(())
+    }
+
+    /// Increment the queried_count for a session and update last_queried_at.
+    /// Used by feedback-driven consolidation to prioritize sessions that
+    /// have been hit by search queries during meditation.
+    pub(crate) fn mark_session_queried(&self, session_id: &str) -> Result<()> {
+        let now = self.dialect().current_timestamp_expr();
+        self.backend.execute(
+            &format!(
+                "UPDATE sessions SET queried_count = COALESCE(queried_count, 0) + 1, \
+                 last_queried_at = {now} WHERE session_id = $1"
+            ),
+            &[SqlParam::Text(session_id.to_string())],
         )?;
         Ok(())
     }
@@ -161,24 +170,26 @@ impl Storage {
     /// Delete all sessions for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_sessions(&self, user_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute("DELETE FROM sessions WHERE user_id = $1", params![user_id])?;
+        self.backend.execute(
+            "DELETE FROM sessions WHERE user_id = $1",
+            &[SqlParam::Text(user_id.to_string())],
+        )?;
         Ok(())
     }
 }
 
-fn map_session_row(row: &duckdb::Row<'_>) -> duckdb::Result<Session> {
+fn map_session_row(row: &dyn RowAccess) -> Result<Session> {
     Ok(Session {
-        session_id: row.get(0)?,
-        user_id: row.get(1)?,
-        source_id: row.get::<_, Option<String>>(2)?,
-        started_at: row.get::<_, String>(3)?,
-        ended_at: row.get::<_, Option<String>>(4)?,
+        session_id: row.get_string(0)?,
+        user_id: row.get_string(1)?,
+        source_id: row.get_opt_string(2)?,
+        started_at: row.get_string(3)?,
+        ended_at: row.get_opt_string(4)?,
         metadata: row
-            .get::<_, Option<String>>(5)?
+            .get_opt_string(5)?
             .and_then(|s| serde_json::from_str(&s).ok()),
-        created_at: row.get::<_, String>(6)?,
-        event_count: row.get::<_, Option<i64>>(7)?.unwrap_or(0) as u32,
-        structured_notes: row.get::<_, Option<String>>(8)?,
+        created_at: row.get_string(6)?,
+        event_count: row.get_opt_i64(7)?.unwrap_or(0) as u32,
+        structured_notes: row.get_opt_string(8)?,
     })
 }

@@ -1,8 +1,8 @@
 {
   "name": "memme",
   "version": "0.1.1",
-  "description": "Edge-first AI memory engine powered by DuckDB — vector search, knowledge graph, BM25, and forgetting curve in a single file",
-  "keywords": ["ai", "memory", "embedding", "duckdb", "edge", "offline", "vector-database", "knowledge-graph", "rag", "llm"],
+  "description": "Edge-first AI memory engine powered by SQLite — vector search, knowledge graph, BM25, and forgetting curve in a single file",
+  "keywords": ["ai", "memory", "embedding", "sqlite", "edge", "offline", "vector-database", "knowledge-graph", "rag", "llm"],
   "license": "Apache-2.0",
   "author": "MemMe Contributors",
   "homepage": "https://github.com/vibeinging/MemMe",

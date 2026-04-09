@@ -7,7 +7,7 @@ Usage:
     python demos/playground/server.py
 
 Opens a browser with an interactive memory playground.
-All data stays on your device in a local .duckdb file.
+All data stays on your device in a local .db file.
 """
 
 import http.server
@@ -29,7 +29,7 @@ except ImportError:
 
 PORT = int(os.environ.get("MEMME_PORT", 7860))
 STATIC_DIR = Path(__file__).parent
-DB_PATH = os.environ.get("MEMME_DB", str(STATIC_DIR / "playground.duckdb"))
+DB_PATH = os.environ.get("MEMME_DB", str(STATIC_DIR / "playground.db"))
 
 # Global store — initialized lazily after user configures models.
 store = None

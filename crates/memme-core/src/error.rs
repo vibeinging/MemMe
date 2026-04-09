@@ -6,9 +6,9 @@ use thiserror::Error;
 /// on the error kind and decide how to recover.
 #[derive(Error, Debug)]
 pub enum MemoryError {
-    /// Low-level DuckDB storage error (connection, query, constraint violation).
-    #[error("DuckDB error: {0}")]
-    DuckDb(#[from] duckdb::Error),
+    /// Low-level storage engine error (connection, query, constraint violation).
+    #[error("Storage error: {0}")]
+    Storage(String),
 
     /// Embedding provider failed (network timeout, model not found, dimension mismatch).
     #[error("Embedding error: {0}")]

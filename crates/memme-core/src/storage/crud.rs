@@ -1,7 +1,5 @@
-use duckdb::params;
-
 use crate::error::{MemoryError, Result};
-use crate::types::{Resolution, UpdateOptions};
+use crate::types::{Resolution, SqlParam, UpdateOptions};
 
 use super::util::opt_text;
 use super::{MemoryRow, Storage};
@@ -48,7 +46,7 @@ impl Storage {
                 embedding.len()
             )));
         }
-        let emb_literal = Self::format_embedding(embedding, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(embedding, self.config.embedding_dims)?;
         let agent_val = opt_text(params_.agent_id.as_deref());
         let run_val = opt_text(params_.run_id.as_deref());
         let app_val = opt_text(params_.app_id.as_deref());
@@ -56,11 +54,11 @@ impl Storage {
         let meta_val = opt_text(params_.metadata.as_deref());
         let imp_val = params_.importance.unwrap_or(0.5) as f64;
         let exp_val = opt_text(params_.expiration_date.as_deref());
-        let cats_literal = Self::format_categories(params_.categories.as_deref())?;
+        let cats_literal = self.format_categories(params_.categories.as_deref())?;
         let mtype_val = opt_text(params_.memory_type.as_deref());
         let stab_val = params_.stability.unwrap_or(1.0) as f64;
         let privacy_val = params_.privacy.as_deref().unwrap_or("syncable");
-        // Normalize partial dates for DuckDB TIMESTAMP compatibility:
+        // Normalize partial dates for TIMESTAMP compatibility:
         // "2020" → "2020-01-01", "2023-05" → "2023-05-01"
         let event_time_val = opt_text(params_.event_time.as_ref().map(|t| {
             if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
@@ -77,43 +75,54 @@ impl Storage {
 
         let sql = format!(
             r#"INSERT INTO memories (id, content, embedding, user_id, agent_id, run_id, app_id, actor_id, hash, metadata, importance, immutable, expiration_date, categories, memory_type, stability, privacy, event_time, episode_id, session_id, resolution)
-               VALUES ($1, $2, {emb_literal}, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12 IS NULL THEN NULL ELSE CAST($12 AS TIMESTAMP) END, {cats_literal}, $13, $14, $15, CASE WHEN $16 IS NULL THEN NULL ELSE CAST($16 AS TIMESTAMP) END, $17, $18, $19)"#
+               VALUES ($1, $2, {emb_literal}, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, {cats_literal}, $13, $14, $15, $16, $17, $18, $19)"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![
-                id,
-                content,
-                user_id,
+            &[
+                SqlParam::Text(id.to_string()),
+                SqlParam::Text(content.to_string()),
+                SqlParam::Text(user_id.to_string()),
                 agent_val,
                 run_val,
                 app_val,
                 actor_val,
-                hash,
+                SqlParam::Text(hash.to_string()),
                 meta_val,
-                imp_val,
-                params_.immutable,
+                SqlParam::Float(imp_val),
+                SqlParam::Bool(params_.immutable),
                 exp_val,
                 mtype_val,
-                stab_val,
-                privacy_val,
+                SqlParam::Float(stab_val),
+                SqlParam::Text(privacy_val.to_string()),
                 event_time_val,
                 episode_val,
                 session_val,
-                resolution_val
+                SqlParam::Text(resolution_val.to_string()),
             ],
         )?;
+        // Sync vec0 virtual table for vector search
+        if let Some(vec0_sql) = self.dialect().vec0_insert_sql("$1", &emb_literal) {
+            self.backend.execute(
+                &vec0_sql,
+                &[
+                    SqlParam::Text(id.to_string()),
+                    SqlParam::Text(user_id.to_string()),
+                ],
+            )?;
+        }
         Ok(())
     }
 
     /// Set the episode_id on a memory (for linking extracted memories to their source episode).
     #[allow(dead_code)] // planned API: memory-episode linking
     pub(crate) fn set_memory_episode_id(&self, memory_id: &str, episode_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE memories SET episode_id = $1 WHERE id = $2",
-            params![episode_id, memory_id],
+            &[
+                SqlParam::Text(episode_id.to_string()),
+                SqlParam::Text(memory_id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -121,10 +130,12 @@ impl Storage {
     /// Set the session_id on a memory (for linking extracted memories to their source session).
     #[allow(dead_code)] // planned API: memory-session linking
     pub(crate) fn set_memory_session_id(&self, memory_id: &str, session_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE memories SET session_id = $1 WHERE id = $2",
-            params![session_id, memory_id],
+            &[
+                SqlParam::Text(session_id.to_string()),
+                SqlParam::Text(memory_id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -147,17 +158,14 @@ impl Storage {
             "UPDATE memories SET session_id = $1, episode_id = $2 WHERE id IN ({})",
             placeholders.join(", ")
         );
-        let conn = self.write_conn();
-        let mut param_vals: Vec<duckdb::types::Value> = vec![
-            duckdb::types::Value::Text(session_id.to_string()),
-            duckdb::types::Value::Text(episode_id.to_string()),
+        let mut param_vals: Vec<SqlParam> = vec![
+            SqlParam::Text(session_id.to_string()),
+            SqlParam::Text(episode_id.to_string()),
         ];
         for id in memory_ids {
-            param_vals.push(duckdb::types::Value::Text(id.to_string()));
+            param_vals.push(SqlParam::Text(id.to_string()));
         }
-        let param_refs: Vec<&dyn duckdb::ToSql> =
-            param_vals.iter().map(|p| p as &dyn duckdb::ToSql).collect();
-        conn.execute(&sql, param_refs.as_slice())?;
+        self.backend.execute(&sql, &param_vals)?;
         Ok(())
     }
 
@@ -194,7 +202,7 @@ impl Storage {
                 embedding.len()
             )));
         }
-        let emb_literal = Self::format_embedding(embedding, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(embedding, self.config.embedding_dims)?;
 
         // Determine the effective metadata: options.metadata overrides the metadata param
         let effective_metadata = if let Some(opts) = options {
@@ -210,35 +218,50 @@ impl Storage {
         // Determine if we have a custom timestamp
         let custom_timestamp: Option<&str> = options.and_then(|opts| opts.timestamp.as_deref());
 
-        let conn = self.write_conn();
         match (&effective_metadata, custom_timestamp) {
             (Some(Some(val)), Some(ts)) => {
                 let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
-                let meta_val = duckdb::types::Value::Text(json_str);
                 let sql = format!(
                     r#"UPDATE memories
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = CAST($3 AS TIMESTAMP),
+                           updated_at = $3,
                            metadata = $4
                        WHERE id = $5"#
                 );
-                conn.execute(&sql, params![content, hash, ts, meta_val, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(ts.to_string()),
+                        SqlParam::Text(json_str),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
             }
             (Some(Some(val)), None) => {
                 let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
-                let meta_val = duckdb::types::Value::Text(json_str);
+                let now_ts = self.dialect().current_timestamp_expr();
                 let sql = format!(
                     r#"UPDATE memories
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = now()::TIMESTAMP,
+                           updated_at = {now_ts},
                            metadata = $3
                        WHERE id = $4"#
                 );
-                conn.execute(&sql, params![content, hash, meta_val, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(json_str),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
             }
             (Some(None), Some(ts)) => {
                 let sql = format!(
@@ -246,23 +269,39 @@ impl Storage {
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = CAST($3 AS TIMESTAMP),
+                           updated_at = $3,
                            metadata = NULL
                        WHERE id = $4"#
                 );
-                conn.execute(&sql, params![content, hash, ts, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(ts.to_string()),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
             }
             (Some(None), None) => {
+                let now_ts = self.dialect().current_timestamp_expr();
                 let sql = format!(
                     r#"UPDATE memories
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = now()::TIMESTAMP,
+                           updated_at = {now_ts},
                            metadata = NULL
                        WHERE id = $3"#
                 );
-                conn.execute(&sql, params![content, hash, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
             }
             (None, Some(ts)) => {
                 let sql = format!(
@@ -270,21 +309,73 @@ impl Storage {
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = CAST($3 AS TIMESTAMP)
+                           updated_at = $3
                        WHERE id = $4"#
                 );
-                conn.execute(&sql, params![content, hash, ts, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(ts.to_string()),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
             }
             (None, None) => {
+                let now_ts = self.dialect().current_timestamp_expr();
                 let sql = format!(
                     r#"UPDATE memories
                        SET content = $1,
                            embedding = {emb_literal},
                            hash = $2,
-                           updated_at = now()::TIMESTAMP
+                           updated_at = {now_ts}
                        WHERE id = $3"#
                 );
-                conn.execute(&sql, params![content, hash, id])?;
+                self.backend.execute(
+                    &sql,
+                    &[
+                        SqlParam::Text(content.to_string()),
+                        SqlParam::Text(hash.to_string()),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    // ── Update metadata only (dedup fast path) ──
+
+    /// Update only the metadata and updated_at timestamp of a memory,
+    /// without re-writing content or embedding. Used when content hash
+    /// matches exactly (no embedding recomputation needed).
+    pub(crate) fn update_metadata_on_dedup(
+        &self,
+        id: &str,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let now_ts = self.dialect().current_timestamp_expr();
+        match metadata {
+            Some(val) => {
+                let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
+                self.backend.execute(
+                    &format!(
+                        "UPDATE memories SET metadata = $1, updated_at = {now_ts} WHERE id = $2"
+                    ),
+                    &[
+                        SqlParam::Text(json_str),
+                        SqlParam::Text(id.to_string()),
+                    ],
+                )?;
+            }
+            None => {
+                self.backend.execute(
+                    &format!(
+                        "UPDATE memories SET updated_at = {now_ts} WHERE id = $1"
+                    ),
+                    &[SqlParam::Text(id.to_string())],
+                )?;
             }
         }
         Ok(())
@@ -294,10 +385,13 @@ impl Storage {
 
     /// Update a memory's importance score without changing content or embedding.
     pub(crate) fn update_importance(&self, id: &str, importance: f32) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
-            "UPDATE memories SET importance = $1, updated_at = now()::TIMESTAMP WHERE id = $2",
-            params![importance, id],
+        let now_ts = self.dialect().current_timestamp_expr();
+        self.backend.execute(
+            &format!("UPDATE memories SET importance = $1, updated_at = {now_ts} WHERE id = $2"),
+            &[
+                SqlParam::Float(importance as f64),
+                SqlParam::Text(id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -309,85 +403,33 @@ impl Storage {
         // Check immutable flag
         self.check_immutable(id)?;
 
-        let conn = self.write_conn();
-        conn.execute("DELETE FROM memories WHERE id = $1", params![id])?;
+        // Delete from vec0 first
+        if let Some(vec0_sql) = self.dialect().vec0_delete_sql() {
+            self.backend.execute(vec0_sql, &[SqlParam::Text(id.to_string())])?;
+        }
+        self.backend.execute(
+            "DELETE FROM memories WHERE id = $1",
+            &[SqlParam::Text(id.to_string())],
+        )?;
         Ok(())
     }
 
     // ── Get by ID ──
 
     pub(crate) fn get_memory(&self, id: &str) -> Result<Option<MemoryRow>> {
-        // Use write_conn for read-after-write consistency (file-backed DuckDB
-        // uses snapshot isolation, so read_conn may not see recent writes).
-        let conn = self.write_conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, content, user_id,
-                    CAST(created_at AS VARCHAR) AS created_at,
-                    CAST(updated_at AS VARCHAR) AS updated_at,
-                    CAST(metadata AS VARCHAR) AS metadata,
-                    importance,
-                    access_count,
-                    agent_id,
-                    app_id,
-                    run_id,
-                    immutable,
-                    CAST(expiration_date AS VARCHAR) AS expiration_date,
-                    CAST(categories AS VARCHAR) AS categories,
-                    memory_type,
-                    stability,
-                    privacy,
-                    CAST(event_time AS VARCHAR) AS event_time,
-                    episode_id,
-                    session_id,
-                    resolution
-             FROM memories WHERE id = $1",
-        )?;
-
-        let mut rows = stmt.query_map(params![id], |row| {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                user_id: row.get(2)?,
-                created_at: row.get::<_, String>(3)?,
-                updated_at: row.get::<_, String>(4)?,
-                metadata: row.get::<_, Option<String>>(5)?,
-                score: None,
-                importance: row.get::<_, Option<f64>>(6)?.map(|v| v as f32),
-                access_count: row.get::<_, Option<i32>>(7)?.map(|v| v as u32),
-                agent_id: row.get::<_, Option<String>>(8)?,
-                app_id: row.get::<_, Option<String>>(9)?,
-                run_id: row.get::<_, Option<String>>(10)?,
-                immutable: row.get::<_, Option<bool>>(11)?.unwrap_or(false),
-                expiration_date: row.get::<_, Option<String>>(12)?,
-                categories: row.get::<_, Option<String>>(13)?,
-                memory_type: row.get::<_, Option<String>>(14)?,
-                stability: row.get::<_, Option<f64>>(15)?.map(|v| v as f32),
-                privacy: row.get::<_, Option<String>>(16)?,
-                event_time: row.get::<_, Option<String>>(17)?,
-                episode_id: row.get::<_, Option<String>>(18)?,
-                session_id: row.get::<_, Option<String>>(19)?,
-                resolution: row.get::<_, Option<String>>(20)?,
-            })
-        })?;
-
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+        let cols = super::query::memory_select_cols(None, "");
+        let sql = format!("SELECT {cols} FROM memories WHERE id = $1");
+        self.backend.query_one(&sql, &[SqlParam::Text(id.to_string())], super::query::map_memory_row)
     }
 
     // ── Get content by ID (for history recording) ──
 
     pub(crate) fn get_content(&self, id: &str) -> Result<Option<(String, String)>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare("SELECT content, user_id FROM memories WHERE id = $1")?;
-        let mut rows = stmt.query_map(params![id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        match rows.next() {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        self.backend.query_one(
+            "SELECT content, user_id FROM memories WHERE id = $1",
+            &[SqlParam::Text(id.to_string())],
+            |row| Ok((row.get_string(0)?, row.get_string(1)?)),
+        )
     }
 }
 
@@ -479,7 +521,7 @@ mod tests {
         assert_eq!(row.run_id.as_deref(), Some("run1"));
         assert!(row.immutable);
         assert!(row.expiration_date.is_some());
-        // Categories are stored and returned as DuckDB list string
+        // Categories are stored and returned as JSON array string
         assert!(row.categories.is_some());
     }
 

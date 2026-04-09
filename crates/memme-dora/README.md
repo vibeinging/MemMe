@@ -10,7 +10,7 @@ A [dora-rs](https://dora-rs.ai/) custom node powered by [MemMe](https://github.c
 - **Session/Episode** — structured event ingestion and compaction
 - **Knowledge Graph** — automatic entity-relation extraction
 - **Forgetting Curve** — FSRS-based memory decay for natural recall
-- **Edge-first** — DuckDB single-file, no external services required
+- **Edge-first** — SQLite single-file, no external services required
 
 ## Quick Start
 
@@ -50,7 +50,7 @@ dora start examples/dataflow.yml
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | — | OpenAI API key for embeddings |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Custom API endpoint |
-| `MEMME_DB_PATH` | No | `robot_memory.duckdb` | DuckDB file path |
+| `MEMME_DB_PATH` | No | `robot_memory.db` | SQLite file path |
 | `MEMME_COLLECTION` | No | `default` | Collection name |
 | `MEMME_EMBEDDING_DIMS` | No | `1536` | Embedding dimensions |
 | `MEMME_LLM_MODEL` | No | `gpt-4.1-nano` | LLM model for fact extraction |
@@ -71,7 +71,7 @@ nodes:
         - results
         - error
       env:
-        MEMME_DB_PATH: ./robot_memory.duckdb
+        MEMME_DB_PATH: ./robot_memory.db
         OPENAI_API_KEY: env:OPENAI_API_KEY
 ```
 

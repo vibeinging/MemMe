@@ -84,14 +84,14 @@ fn main() {
     let messages_2 = vec![
         ChatMessage {
             role: "user".into(),
-            content: "What is DuckDB and why would I use it?".into(),
+            content: "What is SQLite and why would I use it?".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:00:00Z".into()),
         },
         ChatMessage {
             role: "assistant".into(),
-            content: "DuckDB is an in-process analytical database. It is great for embedded analytics, local-first apps, and edge computing because it runs as a single file with no server needed.".into(),
+            content: "SQLite is an in-process relational database. It is great for embedded apps, local-first storage, and edge computing because it runs as a single file with no server needed.".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:00:05Z".into()),
@@ -105,7 +105,7 @@ fn main() {
         },
         ChatMessage {
             role: "assistant".into(),
-            content: "Yes, there is a duckdb crate on crates.io that provides Rust bindings. You can use it just like rusqlite.".into(),
+            content: "Yes, the rusqlite crate on crates.io provides excellent Rust bindings for SQLite.".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:00:35Z".into()),
@@ -127,14 +127,14 @@ fn main() {
     let followup = vec![
         ChatMessage {
             role: "user".into(),
-            content: "What about vector search? Can DuckDB do that?".into(),
+            content: "What about vector search? Can SQLite do that?".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:01:00Z".into()),
         },
         ChatMessage {
             role: "assistant".into(),
-            content: "DuckDB supports vector similarity search through extensions like HNSW. MemMe uses this for embedding-based memory retrieval.".into(),
+            content: "SQLite supports vector similarity search through extensions like sqlite-vec. MemMe uses this for embedding-based memory retrieval.".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:01:05Z".into()),

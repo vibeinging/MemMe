@@ -1,6 +1,6 @@
 # MemMe — Python SDK
 
-**Edge-first AI memory engine for Python.** Store, search, and manage long-term memories for AI agents and applications. Powered by an embedded DuckDB database with built-in vector search, BM25 full-text search, knowledge graph, and forgetting curve — all in a single file, no external services required.
+**Edge-first AI memory engine for Python.** Store, search, and manage long-term memories for AI agents and applications. Powered by an embedded SQLite database with built-in vector search, BM25 full-text search, knowledge graph, and forgetting curve — all in a single file, no external services required.
 
 [![PyPI](https://img.shields.io/pypi/v/memme.svg)](https://pypi.org/project/memme/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/vibeinging/MemMe/blob/main/LICENSE)
@@ -19,7 +19,7 @@ pip install memme
 from memme import MemoryStore
 
 # Local ONNX embeddings (no API key needed)
-store = MemoryStore("memory.duckdb")
+store = MemoryStore("memory.db")
 
 # Add memories
 store.add("User prefers dark mode", user_id="alice")
@@ -35,7 +35,7 @@ for r in results:
 
 ```python
 store = MemoryStore(
-    "memory.duckdb",
+    "memory.db",
     embedder="openai",
     api_key="sk-xxx",
     base_url="https://api.openai.com/v1",
@@ -50,7 +50,7 @@ Automatically extract structured facts from natural language conversations:
 
 ```python
 store = MemoryStore(
-    "memory.duckdb",
+    "memory.db",
     embedder="openai",
     api_key="sk-xxx",
     llm_api_key="sk-xxx",
@@ -89,8 +89,8 @@ results = store.search("user preferences", user_id="alice")
 
 ## Features
 
-- **Edge-first** — Runs locally with embedded DuckDB, no external services required
-- **Single-file storage** — Vectors, knowledge graph, FTS index, and history in one `.duckdb` file
+- **Edge-first** — Runs locally with embedded SQLite, no external services required
+- **Single-file storage** — Vectors, knowledge graph, FTS index, and history in one `.db` file
 - **Multi-channel retrieval** — Vector + BM25 + Entity Graph + Temporal (RRF fusion)
 - **LLM-powered extraction** — Automatic fact extraction with temporal date resolution
 - **Forgetting curve** — Ebbinghaus-inspired memory decay with stability reinforcement

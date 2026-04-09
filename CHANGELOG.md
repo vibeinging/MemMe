@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SQLite migration**: Replaced DuckDB with SQLite as the sole storage backend. Single-file `.db` format, smaller binary, broader platform compatibility. All APIs remain unchanged.
+
 ### Added
 
 - **Session/Episode architecture**: Four-layer memory model (Stream → Episode → Semantic → Identity) with session history, compact purification, meditation extraction, and session context retrieval

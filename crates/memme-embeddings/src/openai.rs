@@ -135,6 +135,7 @@ impl OpenAiEmbedder {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .tcp_keepalive(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
             concurrency: ConcurrencyConfig::default(),

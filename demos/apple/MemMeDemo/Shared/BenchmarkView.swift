@@ -629,7 +629,7 @@ class BenchmarkRunner: ObservableObject {
         update("Warmup: initializing...", progress: 0)
         do {
             let warmupDbPath = FileManager.default.temporaryDirectory
-                .appendingPathComponent("memme_warmup_\(UUID().uuidString).duckdb").path
+                .appendingPathComponent("memme_warmup_\(UUID().uuidString).db").path
             defer { cleanupDbFiles(warmupDbPath) }
             let warmupStore = try MemoryStore.newWithHttpClient(
                 dbPath: warmupDbPath,
@@ -679,7 +679,7 @@ class BenchmarkRunner: ObservableObject {
                 var peakMem = memBefore
 
                 let dbPath = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("memme_bench_\(UUID().uuidString).duckdb").path
+                    .appendingPathComponent("memme_bench_\(UUID().uuidString).db").path
                 defer { cleanupDbFiles(dbPath) }
 
                 update("[\(scaleIdx+1)/\(totalScales)] \(scaleLabel)\(trialLabel): Creating store...", progress: trialBase)

@@ -20,11 +20,11 @@ use crate::messages::{MemMeRequest, MemMeResponse, MemoryHit};
 /// Copper task that provides persistent memory via MemMe.
 ///
 /// This task should run on the **background** path (not time-critical) because
-/// embedding inference and DuckDB I/O have variable latency.
+/// embedding inference and SQLite I/O have variable latency.
 ///
 /// ```ron
 /// (id: "memme", type: "cu_memme::MemMeTask", background: true, config: {
-///     "db_path": "robot_memory.duckdb",
+///     "db_path": "robot_memory.db",
 ///     "embedding_dims": "384",
 /// })
 /// ```
@@ -52,7 +52,7 @@ impl CuTask for MemMeTask {
         let (db_path, dims) = if let Some(cfg) = config {
             let p = cfg
                 .get::<String>("db_path")
-                .unwrap_or_else(|_| "robot_memory.duckdb".into());
+                .unwrap_or_else(|_| "robot_memory.db".into());
             let d: usize = cfg
                 .get::<String>("embedding_dims")
                 .unwrap_or_else(|_| "384".into())
@@ -60,7 +60,7 @@ impl CuTask for MemMeTask {
                 .unwrap_or(384);
             (p, d)
         } else {
-            ("robot_memory.duckdb".into(), 384)
+            ("robot_memory.db".into(), 384)
         };
 
         let mem_config = MemoryConfig {

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::sql_param::SqlParam;
+
 // ============================================================
 // Advanced Filter Expressions
 // ============================================================
@@ -166,8 +168,8 @@ impl FilterExpression {
     }
 
     /// Compile the filter expression into a SQL WHERE clause fragment and parameters.
-    /// Returns (sql_fragment, params) where params are boxed duckdb values.
-    pub fn to_sql(&self, param_offset: &mut usize) -> (String, Vec<duckdb::types::Value>) {
+    /// Returns (sql_fragment, params) where params are database-agnostic `SqlParam` values.
+    pub fn to_sql(&self, param_offset: &mut usize) -> (String, Vec<SqlParam>) {
         match self {
             FilterExpression::Condition { field, op, value } => {
                 // Validate field name to prevent SQL injection
@@ -239,7 +241,7 @@ fn sanitize_field_name(field: &str) -> String {
             // Return a safe expression that always evaluates to NULL
             return "NULL".to_string();
         }
-        format!("json_extract_string(metadata, '$.{}')", field)
+        format!("json_extract(metadata, '$.{}')", field)
     }
 }
 
@@ -248,37 +250,37 @@ fn condition_to_sql(
     op: &FilterOp,
     value: &serde_json::Value,
     offset: &mut usize,
-) -> (String, Vec<duckdb::types::Value>) {
+) -> (String, Vec<SqlParam>) {
     match op {
         FilterOp::Eq => {
             *offset += 1;
             let sql = format!("{} = ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::Ne => {
             *offset += 1;
             let sql = format!("{} != ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::Gt => {
             *offset += 1;
             let sql = format!("{} > ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::Gte => {
             *offset += 1;
             let sql = format!("{} >= ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::Lt => {
             *offset += 1;
             let sql = format!("{} < ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::Lte => {
             *offset += 1;
             let sql = format!("{} <= ${}", field, *offset);
-            (sql, vec![json_to_duckdb(value)])
+            (sql, vec![SqlParam::from_json(value)])
         }
         FilterOp::In => {
             if let serde_json::Value::Array(arr) = value {
@@ -290,56 +292,41 @@ fn condition_to_sql(
                     })
                     .collect();
                 let sql = format!("{} IN ({})", field, placeholders.join(", "));
-                let params: Vec<duckdb::types::Value> = arr.iter().map(json_to_duckdb).collect();
+                let params: Vec<SqlParam> = arr.iter().map(SqlParam::from_json).collect();
                 (sql, params)
             } else {
                 *offset += 1;
                 let sql = format!("{} = ${}", field, *offset);
-                (sql, vec![json_to_duckdb(value)])
+                (sql, vec![SqlParam::from_json(value)])
             }
         }
         FilterOp::Contains => {
             *offset += 1;
-            // For categories field, use list_contains; for strings, use LIKE
+            // For categories field (JSON array), use json_each; for strings, use LIKE
             if field == "categories" {
-                let sql = format!("list_contains({}, ${})", field, *offset);
-                (sql, vec![json_to_duckdb(value)])
+                let sql = format!(
+                    "EXISTS (SELECT 1 FROM json_each({}) WHERE value = ${})",
+                    field, *offset
+                );
+                (sql, vec![SqlParam::from_json(value)])
             } else {
                 let sql = format!("{} LIKE '%' || ${} || '%'", field, *offset);
-                (sql, vec![json_to_duckdb(value)])
+                (sql, vec![SqlParam::from_json(value)])
             }
         }
         FilterOp::IContains => {
             *offset += 1;
             if field == "categories" {
                 let sql = format!(
-                    "EXISTS (SELECT 1 FROM unnest({}) AS t(v) WHERE LOWER(v) LIKE '%' || LOWER(${}) || '%')",
+                    "EXISTS (SELECT 1 FROM json_each({}) WHERE LOWER(value) LIKE '%' || LOWER(${}) || '%')",
                     field, *offset
                 );
-                (sql, vec![json_to_duckdb(value)])
+                (sql, vec![SqlParam::from_json(value)])
             } else {
                 let sql = format!("LOWER({}) LIKE '%' || LOWER(${}) || '%'", field, *offset);
-                (sql, vec![json_to_duckdb(value)])
+                (sql, vec![SqlParam::from_json(value)])
             }
         }
-    }
-}
-
-fn json_to_duckdb(value: &serde_json::Value) -> duckdb::types::Value {
-    match value {
-        serde_json::Value::Null => duckdb::types::Value::Null,
-        serde_json::Value::Bool(b) => duckdb::types::Value::Boolean(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                duckdb::types::Value::BigInt(i)
-            } else if let Some(f) = n.as_f64() {
-                duckdb::types::Value::Double(f)
-            } else {
-                duckdb::types::Value::Text(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => duckdb::types::Value::Text(s.clone()),
-        _ => duckdb::types::Value::Text(value.to_string()),
     }
 }
 
@@ -394,7 +381,7 @@ mod tests {
         let f = FilterExpression::contains("categories", "finance");
         let mut offset = 0;
         let (sql, params) = f.to_sql(&mut offset);
-        assert_eq!(sql, "list_contains(categories, $1)");
+        assert_eq!(sql, "EXISTS (SELECT 1 FROM json_each(categories) WHERE value = $1)");
         assert_eq!(params.len(), 1);
     }
 
@@ -441,7 +428,7 @@ mod tests {
         let mut offset = 0;
         let (sql, _) = f.to_sql(&mut offset);
         // "source" is not in ALLOWED_FILTER_FIELDS, so it becomes json_extract_string
-        assert!(sql.contains("json_extract_string(metadata, '$.source')"));
+        assert!(sql.contains("json_extract(metadata, '$.source')"));
     }
 
     #[test]

@@ -61,8 +61,8 @@ def load_questions():
 
 
 def find_cached_db(sample_id):
-    """Find the cached DuckDB file for a sample."""
-    db_path = os.path.join(CACHE_DIR, f"{sample_id}.duckdb")
+    """Find the cached SQLite file for a sample."""
+    db_path = os.path.join(CACHE_DIR, f"{sample_id}.db")
     if os.path.exists(db_path):
         return db_path
     return None
@@ -190,9 +190,9 @@ def run_benchmark():
 
 def run_sql_latency_test(db_path, questions):
     """Fallback: test raw SQL query latency without embeddings."""
-    import duckdb
+    import sqlite3
 
-    conn = duckdb.connect(db_path, read_only=True)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 
     print(f"\nSQL-only latency test (no embedding, {RUNS} runs × 4 queries)...")
 
@@ -254,7 +254,7 @@ def run_sql_latency_test(db_path, questions):
     for _ in range(WARMUP):
         threads = []
         for _, (sql, params) in queries.items():
-            t = threading.Thread(target=lambda s, p: duckdb.connect(db_path, read_only=True).execute(s, p).fetchall(), args=(sql, params))
+            t = threading.Thread(target=lambda s, p: sqlite3.connect(f"file:{db_path}?mode=ro", uri=True).execute(s, p).fetchall(), args=(sql, params))
             threads.append(t)
         for t in threads:
             t.start()
@@ -265,7 +265,7 @@ def run_sql_latency_test(db_path, questions):
         start = time.perf_counter()
         threads = []
         for _, (sql, params) in queries.items():
-            t = threading.Thread(target=lambda s, p: duckdb.connect(db_path, read_only=True).execute(s, p).fetchall(), args=(sql, params))
+            t = threading.Thread(target=lambda s, p: sqlite3.connect(f"file:{db_path}?mode=ro", uri=True).execute(s, p).fetchall(), args=(sql, params))
             threads.append(t)
         for t in threads:
             t.start()

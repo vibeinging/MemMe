@@ -35,7 +35,7 @@ MemMe is designed as a **local-first, edge-deployed** memory engine. Its securit
 
 ### Data Storage
 
-- All data is stored in a local `.duckdb` file on the user's device.
+- All data is stored in a local `.db` file on the user's device.
 - No data is sent to external servers unless the application explicitly configures a remote embedding or LLM provider.
 - The `LocalOnly` privacy level ensures marked memories are never eligible for sync.
 

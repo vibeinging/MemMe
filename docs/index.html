@@ -49,7 +49,7 @@
         <span class="hero-title-line">Mem</span><span class="hero-title-accent">Me</span>
       </h1>
       <p class="hero-subtitle">
-        Rust core. DuckDB single-file storage. Sub-10ms retrieval.<br>
+        Rust core. SQLite single-file storage. Sub-10ms retrieval.<br>
         A complete memory architecture for AI agents &mdash; from raw events to knowledge graph.
       </p>
       <div class="hero-stats">
@@ -205,7 +205,7 @@
               <span class="channel-weight">weight: 0.3</span>
             </div>
           </div>
-          <p>Inverted index over purified content via DuckDB FTS. Exact keyword matching for names, dates, places.</p>
+          <p>Inverted index over purified content via SQLite FTS5. Exact keyword matching for names, dates, places.</p>
           <div class="channel-tag">Keyword precision</div>
         </div>
 
@@ -391,7 +391,7 @@
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Architecture</h2>
-      <p class="section-desc">Rust workspace. Single DuckDB file. No external infrastructure.</p>
+      <p class="section-desc">Rust workspace. Single SQLite file. No external infrastructure.</p>
 
       <div class="arch-legend">
         <span class="legend-item"><span class="legend-dot" style="--dot-color: var(--accent)"></span>Core Engine</span>
@@ -440,7 +440,7 @@
       </div>
 
       <div class="storage-schema">
-        <h3>DuckDB Schema</h3>
+        <h3>SQLite Schema</h3>
         <div class="schema-grid">
           <div class="schema-table primary"><strong>memories</strong><br>embeddings, content, importance, stability, access_count</div>
           <div class="schema-table"><strong>events</strong><br>raw content, purified, session_id, processed flag</div>
@@ -493,7 +493,7 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
             <pre><code><span class="tk-kw">let</span> store = <span class="tk-kw">try</span> <span class="tk-fn">MemoryStore</span>(
-    dbPath: <span class="tk-str">"memory.duckdb"</span>
+    dbPath: <span class="tk-str">"memory.db"</span>
 )</code></pre>
           </div>
         </div>
@@ -611,13 +611,13 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
       <div class="backup-grid">
         <div class="backup-card">
           <h4>Full Database Backup</h4>
-          <p>DuckDB <code>CHECKPOINT</code> followed by atomic file copy. Consistent snapshot guaranteed even under concurrent writes.</p>
+          <p>SQLite WAL checkpoint followed by atomic file copy. Consistent snapshot guaranteed even under concurrent writes.</p>
           <div class="backup-flow">
             <span class="flow-step">CHECKPOINT</span>
             <span class="flow-arrow">&rarr;</span>
             <span class="flow-step">atomic copy</span>
             <span class="flow-arrow">&rarr;</span>
-            <span class="flow-step">.duckdb backup</span>
+            <span class="flow-step">.db backup</span>
           </div>
         </div>
         <div class="backup-card">

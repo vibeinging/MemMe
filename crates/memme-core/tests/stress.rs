@@ -53,7 +53,7 @@ fn temp_db_path(test_name: &str) -> String {
     let tmp_dir = std::env::temp_dir();
     tmp_dir
         .join(format!(
-            "memme_stress_{}_{}_{}.duckdb",
+            "memme_stress_{}_{}_{}.db",
             test_name,
             std::process::id(),
             seq

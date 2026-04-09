@@ -29,7 +29,7 @@ What actually happened. Include error messages, logs, or panic output if availab
 - Rust version (`rustc --version`):
 - MemMe version / commit:
 - Language binding (if applicable): Python / Node.js / Swift / WASM / Rust
-- DuckDB storage mode: in-memory / file-backed
+- SQLite storage mode: in-memory / file-backed
 
 ## Additional Context
 

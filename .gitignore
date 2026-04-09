@@ -18,6 +18,11 @@ memme-db/build/
 # Benchmark results and cache
 benchmarks/locomo/results*
 benchmarks/locomo/*_results.json
+benchmarks/longmemeval/cache*/
+benchmarks/longmemeval/results*/
+benchmarks/longmemeval/*.log
+benchmarks/longmemeval/*.idx
+benchmarks/longmemeval/*.vecs
 benchmarks/locomo/cache*/
 benchmarks/locomo/*.log
 benchmarks/locomo/*.duckdb

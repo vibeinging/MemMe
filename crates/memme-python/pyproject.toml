@@ -5,12 +5,12 @@ build-backend = "maturin"
 [project]
 name = "memme"
 version = "0.1.1"
-description = "Edge-first AI memory engine powered by DuckDB"
+description = "Edge-first AI memory engine powered by SQLite"
 license = {text = "Apache-2.0"}
 authors = [{name = "MemMe Contributors"}]
 requires-python = ">=3.8"
 readme = "README.md"
-keywords = ["ai", "memory", "llm", "embedding", "duckdb"]
+keywords = ["ai", "memory", "llm", "embedding", "sqlite"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

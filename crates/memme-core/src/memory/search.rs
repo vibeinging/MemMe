@@ -2,7 +2,9 @@ use crate::entity_index::EntityIndex;
 use crate::error::Result;
 use crate::types::*;
 
-use super::helpers::{compute_retention, filter_fields, recover_lock, row_to_result};
+use super::helpers::{
+    compute_retention, filter_fields, interference_discount, recover_lock, row_to_result,
+};
 
 impl super::MemoryStore {
     /// **Internal** — Used by entity-centric search channel.
@@ -156,7 +158,19 @@ impl super::MemoryStore {
             let do_graph = self.config.enable_graph;
             let do_temporal = Self::has_temporal_intent(query);
 
-            let (vector_results, fts_results, entity_results, temporal_results) =
+            // Channel 5 (event) is adaptive: only enabled when the user has
+            // few memories, so raw events provide retrieval coverage.  Once the
+            // full pipeline has produced enough memories the event channel is
+            // skipped to avoid noise competing with the memory-based channels.
+            let do_event = {
+                let mem_count = self
+                    .storage
+                    .count_user_memories(&options.user_id)
+                    .unwrap_or(0);
+                mem_count < self.config.event_memory_threshold
+            };
+
+            let (vector_results, fts_results, entity_results, temporal_results, event_results) =
                 std::thread::scope(|s| {
                     // Channel 1: Vector search
                     let h_vector = s.spawn(|| {
@@ -232,11 +246,43 @@ impl super::MemoryStore {
                         }
                     });
 
+                    // Channel 5: Event-level vector search (raw conversation fragments)
+                    let h_event = s.spawn(|| {
+                        if !do_event {
+                            return Vec::new();
+                        }
+                        let rows = self.storage.search_events_by_vector_for_user(
+                            &embedding,
+                            &options.user_id,
+                            candidate_limit,
+                        );
+                        match rows {
+                            Ok(events) => events
+                                .into_iter()
+                                .map(|(e, distance)| {
+                                    let content = e.purified_content.unwrap_or(e.content);
+                                    MemoryResult {
+                                        id: e.event_id,
+                                        content,
+                                        score: Some(distance),
+                                        resolution: Resolution::Granular,
+                                        ..Default::default()
+                                    }
+                                })
+                                .collect::<Vec<_>>(),
+                            Err(e) => {
+                                tracing::warn!("Event channel search failed: {e}");
+                                Vec::new()
+                            }
+                        }
+                    });
+
                     (
                         h_vector.join().unwrap_or_default(),
                         h_fts.join().unwrap_or_default(),
                         h_entity.join().unwrap_or_default(),
                         h_temporal.join().unwrap_or_default(),
+                        h_event.join().unwrap_or_default(),
                     )
                 });
 
@@ -248,11 +294,12 @@ impl super::MemoryStore {
             let confidence_k = 5; // top-k results used for confidence estimation
 
             // (results, base_weight, is_distance_score)
-            let channels: [(&[MemoryResult], f64, bool); 4] = [
+            let channels: [(&[MemoryResult], f64, bool); 5] = [
                 (&vector_results, self.config.rrf_vector_weight, true),
                 (&fts_results, self.config.rrf_fts_weight, false),
                 (&entity_results, self.config.rrf_entity_weight, true),
                 (&temporal_results, self.config.rrf_temporal_weight, false),
+                (&event_results, self.config.rrf_event_weight, true),
             ];
 
             let ranked_lists: Vec<(&[MemoryResult], f64)> = channels
@@ -344,11 +391,21 @@ impl super::MemoryStore {
                 1.0 // not used in vector-only path
             };
 
+            // Interference discount: query memory count once for the whole batch.
+            // When a user has many memories, similar ones compete for retrieval,
+            // mildly reducing each memory's effective retention (cognitive crowding).
+            let mem_count = self
+                .storage
+                .count_user_memories(&options.user_id)
+                .unwrap_or(0);
+            let i_discount = interference_discount(mem_count);
+
             results
                 .into_iter()
                 .map(|mut r| {
                     let stability = r.stability.unwrap_or(1.0);
-                    let retention = compute_retention(&r.updated_at, stability);
+                    let retention =
+                        compute_retention(&r.updated_at, stability) * i_discount;
                     r.retention = Some(retention);
 
                     if let Some(raw_score) = r.score {
@@ -386,7 +443,7 @@ impl super::MemoryStore {
         // Apply resolution-based score adjustment independently of forgetting curve.
         // Penalizes coarser-grain memories (narrative summaries, identity traits) to
         // bias toward precise atomic facts.
-        let mut results = results
+        let results = results
             .into_iter()
             .map(|mut r| {
                 if let Some(score) = r.score {
@@ -400,6 +457,13 @@ impl super::MemoryStore {
                 r
             })
             .collect::<Vec<_>>();
+
+        // Memory-type weighting removed: keyword-based boosting of preference/decision
+        // memories caused regressions in LongMemEval (80.6% → 61.1%) by promoting
+        // false positives containing common words like "like", "love", "best".
+        // TODO: revisit with a more precise classification (e.g., LLM-tagged memory types).
+
+        let mut results = results;
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -419,6 +483,8 @@ impl super::MemoryStore {
                 }
             }
             let mut queue = recover_lock(&self.deferred_writes, "deferred_writes");
+            // Collect unique session_ids to mark as queried (feedback-driven consolidation).
+            let mut seen_sessions = std::collections::HashSet::new();
             for r in &results {
                 if self.config.enable_forgetting_curve {
                     queue.push(super::DeferredWrite::ReinforceStability(
@@ -427,6 +493,11 @@ impl super::MemoryStore {
                     ));
                 } else {
                     queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
+                }
+                if let Some(ref sid) = r.session_id {
+                    if seen_sessions.insert(sid.clone()) {
+                        queue.push(super::DeferredWrite::MarkSessionQueried(sid.clone()));
+                    }
                 }
             }
         }

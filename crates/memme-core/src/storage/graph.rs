@@ -1,7 +1,5 @@
-use duckdb::params;
-
 use crate::error::Result;
-use crate::types::GraphRelation;
+use crate::types::{GraphRelation, SqlParam};
 
 use super::util::opt_text;
 use super::Storage;
@@ -21,16 +19,24 @@ impl Storage {
         let type_val = opt_text(entity_type);
 
         // Try insert first; if conflict on id, update
+        let now_ts = self.dialect().current_timestamp_expr();
         let sql = format!(
             r#"INSERT INTO entities_{collection} (id, name, entity_type, user_id)
                VALUES ($1, $2, $3, $4)
                ON CONFLICT (id) DO UPDATE SET
                    name = EXCLUDED.name,
                    entity_type = EXCLUDED.entity_type,
-                   updated_at = now()::TIMESTAMP"#
+                   updated_at = {now_ts}"#
         );
-        let conn = self.write_conn();
-        conn.execute(&sql, params![id, name, type_val, user_id])?;
+        self.backend.execute(
+            &sql,
+            &[
+                SqlParam::Text(id.to_string()),
+                SqlParam::Text(name.to_string()),
+                type_val,
+                SqlParam::Text(user_id.to_string()),
+            ],
+        )?;
         Ok(())
     }
 
@@ -48,19 +54,20 @@ impl Storage {
                WHERE LOWER(name) = LOWER($1) AND user_id = $2
                LIMIT 1"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(params![name, user_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
-        match rows.next() {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        self.backend.query_one(
+            &sql,
+            &[
+                SqlParam::Text(name.to_string()),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |row| {
+                Ok((
+                    row.get_string(0)?,
+                    row.get_string(1)?,
+                    row.get_opt_string(2)?,
+                ))
+            },
+        )
     }
 
     /// List all entities for a given user.
@@ -76,34 +83,32 @@ impl Storage {
                WHERE user_id = $1
                ORDER BY created_at"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![user_id], |row| {
+        self.backend.query_read(
+            &sql,
+            &[SqlParam::Text(user_id.to_string())],
+            |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
+                    row.get_string(0)?,
+                    row.get_string(1)?,
+                    row.get_opt_string(2)?,
                 ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// Delete an entity by ID, also removing all its relationships atomically.
     #[allow(dead_code)]
     pub(crate) fn delete_entity(&self, id: &str) -> Result<()> {
         let collection = &self.config.collection_name;
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &format!(
                 "DELETE FROM relationships_{collection} WHERE source_id = $1 OR target_id = $1"
             ),
-            params![id],
+            &[SqlParam::Text(id.to_string())],
         )?;
-        conn.execute(
+        self.backend.execute(
             &format!("DELETE FROM entities_{collection} WHERE id = $1"),
-            params![id],
+            &[SqlParam::Text(id.to_string())],
         )?;
         Ok(())
     }
@@ -124,20 +129,21 @@ impl Storage {
         description: Option<&str>,
     ) -> Result<()> {
         let collection = &self.config.collection_name;
-        let conn = self.write_conn();
 
         // Check for existing duplicate
         let check_sql = format!(
             "SELECT 1 FROM relationships_{collection} WHERE source_id = $1 AND target_id = $2 AND relation_type = $3 AND user_id = $4 LIMIT 1"
         );
-        let mut stmt = conn.prepare(&check_sql)?;
-        let exists = stmt
-            .query_map(
-                params![source_id, target_id, relation_type, user_id],
-                |_| Ok(()),
-            )?
-            .next()
-            .is_some();
+        let exists = self.backend.query_one(
+            &check_sql,
+            &[
+                SqlParam::Text(source_id.to_string()),
+                SqlParam::Text(target_id.to_string()),
+                SqlParam::Text(relation_type.to_string()),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |_| Ok(()),
+        )?.is_some();
         if exists {
             return Ok(());
         }
@@ -148,9 +154,16 @@ impl Storage {
             r#"INSERT INTO relationships_{collection} (id, source_id, target_id, relation_type, user_id, description)
                VALUES ($1, $2, $3, $4, $5, $6)"#
         );
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![id, source_id, target_id, relation_type, user_id, desc_val],
+            &[
+                SqlParam::Text(id.to_string()),
+                SqlParam::Text(source_id.to_string()),
+                SqlParam::Text(target_id.to_string()),
+                SqlParam::Text(relation_type.to_string()),
+                SqlParam::Text(user_id.to_string()),
+                desc_val,
+            ],
         )?;
         Ok(())
     }
@@ -171,23 +184,25 @@ impl Storage {
                JOIN entities_{collection} t ON r.target_id = t.id
                WHERE (r.source_id = $1 OR r.target_id = $1) AND r.user_id = $2"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![entity_id, user_id], |row| {
+        self.backend.query_read(
+            &sql,
+            &[
+                SqlParam::Text(entity_id.to_string()),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |row| {
                 Ok(GraphRelation {
-                    id: row.get(0)?,
-                    source_id: row.get(1)?,
-                    target_id: row.get(2)?,
-                    relation_type: row.get(3)?,
-                    user_id: row.get(4)?,
-                    source: row.get(5)?,
-                    target: row.get(6)?,
-                    description: row.get::<_, Option<String>>(7)?,
+                    id: row.get_string(0)?,
+                    source_id: row.get_string(1)?,
+                    target_id: row.get_string(2)?,
+                    relation_type: row.get_string(3)?,
+                    user_id: row.get_string(4)?,
+                    source: row.get_string(5)?,
+                    target: row.get_string(6)?,
+                    description: row.get_opt_string(7)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// Delete all relationships involving an entity (as source or target).
@@ -197,8 +212,10 @@ impl Storage {
         let sql = format!(
             "DELETE FROM relationships_{collection} WHERE source_id = $1 OR target_id = $1"
         );
-        let conn = self.write_conn();
-        conn.execute(&sql, params![entity_id])?;
+        self.backend.execute(
+            &sql,
+            &[SqlParam::Text(entity_id.to_string())],
+        )?;
         Ok(())
     }
 
@@ -206,18 +223,18 @@ impl Storage {
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_entities(&self, user_id: &str) -> Result<()> {
         let collection = &self.config.collection_name;
-        let conn = self.write_conn();
-        conn.execute(
+        let user_param = &[SqlParam::Text(user_id.to_string())];
+        self.backend.execute(
             &format!("DELETE FROM relationships_{collection} WHERE user_id = $1"),
-            params![user_id],
+            user_param,
         )?;
-        conn.execute(
+        self.backend.execute(
             &format!("DELETE FROM entities_{collection} WHERE user_id = $1"),
-            params![user_id],
+            user_param,
         )?;
-        conn.execute(
+        self.backend.execute(
             "DELETE FROM memory_entities WHERE user_id = $1",
-            params![user_id],
+            user_param,
         )?;
         Ok(())
     }
@@ -240,18 +257,20 @@ impl Storage {
                WHERE LOWER(name) LIKE LOWER($1) ESCAPE '\' AND user_id = $2
                LIMIT {limit}"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![pattern, user_id], |row| {
+        self.backend.query_read(
+            &sql,
+            &[
+                SqlParam::Text(pattern),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
+                    row.get_string(0)?,
+                    row.get_string(1)?,
+                    row.get_opt_string(2)?,
                 ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// Get the neighborhood of an entity up to `depth` hops using a recursive CTE.
@@ -289,22 +308,24 @@ impl Storage {
             JOIN entities_{collection} t ON nb.target_id = t.id
             LIMIT 1000"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![entity_id, user_id], |row| {
+        self.backend.query_read(
+            &sql,
+            &[
+                SqlParam::Text(entity_id.to_string()),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |row| {
                 Ok(GraphRelation {
-                    id: row.get(0)?,
-                    source_id: row.get(1)?,
-                    target_id: row.get(2)?,
-                    relation_type: row.get(3)?,
-                    user_id: row.get(4)?,
-                    source: row.get(5)?,
-                    target: row.get(6)?,
-                    description: row.get::<_, Option<String>>(7)?,
+                    id: row.get_string(0)?,
+                    source_id: row.get_string(1)?,
+                    target_id: row.get_string(2)?,
+                    relation_type: row.get_string(3)?,
+                    user_id: row.get_string(4)?,
+                    source: row.get_string(5)?,
+                    target: row.get_string(6)?,
+                    description: row.get_opt_string(7)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 }

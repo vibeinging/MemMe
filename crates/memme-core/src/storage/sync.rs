@@ -1,6 +1,5 @@
-use duckdb::params;
-
 use crate::error::Result;
+use crate::types::SqlParam;
 
 use super::util::opt_text;
 use super::Storage;
@@ -8,12 +7,10 @@ use super::Storage;
 impl Storage {
     /// Get the maximum sync_version across all memories.
     pub(crate) fn get_max_sync_version(&self) -> Result<u64> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare("SELECT COALESCE(MAX(sync_version), 0) FROM memories")?;
-        let version: i64 = stmt
-            .query_map([], |row| row.get(0))?
-            .next()
-            .expect("aggregate always returns a row")?;
+        let version = self.backend.query_count(
+            "SELECT COALESCE(MAX(sync_version), 0) FROM memories",
+            &[],
+        )?;
         Ok(version as u64)
     }
 
@@ -27,9 +24,9 @@ impl Storage {
     ) -> Result<Vec<crate::sync::SyncChange>> {
         // 1. Query existing memories (CREATE/UPDATE) — exclude local_only
         let sql = r#"
-            SELECT m.id, m.content, CAST(m.updated_at AS VARCHAR),
+            SELECT m.id, m.content, m.updated_at,
                    m.sync_version, m.device_id,
-                   CAST(m.metadata AS VARCHAR),
+                   m.metadata,
                    COALESCE(
                        (SELECT h.event FROM history h
                         WHERE h.memory_id = m.id
@@ -42,29 +39,21 @@ impl Storage {
             ORDER BY m.sync_version ASC
         "#;
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt
-            .query_map(params![since_version as i64], |row| {
-                let id: String = row.get(0)?;
-                let content: String = row.get(1)?;
-                let timestamp: String = row.get(2)?;
-                let version: i64 = row.get(3)?;
-                let device_id: Option<String> = row.get(4)?;
-                let metadata_str: Option<String> = row.get(5)?;
-                let event: String = row.get(6)?;
-
+        let rows = self.backend.query_read(
+            sql,
+            &[SqlParam::Int(since_version as i64)],
+            |row| {
                 Ok((
-                    id,
-                    content,
-                    timestamp,
-                    version,
-                    device_id,
-                    metadata_str,
-                    event,
+                    row.get_string(0)?,
+                    row.get_string(1)?,
+                    row.get_string(2)?,
+                    row.get_i64(3)?,
+                    row.get_opt_string(4)?,
+                    row.get_opt_string(5)?,
+                    row.get_string(6)?,
                 ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            },
+        )?;
 
         let mut changes: Vec<crate::sync::SyncChange> = rows
             .into_iter()
@@ -94,27 +83,28 @@ impl Storage {
         // 2. Query history table for DELETE events whose memory no longer exists
         //    (tombstones). These won't appear in the memories table query above.
         let delete_sql = r#"
-            SELECT h.memory_id, h.old_memory, CAST(h.created_at AS VARCHAR)
+            SELECT h.memory_id, h.old_memory, h.created_at
             FROM history h
             WHERE h.event = 'DELETE'
               AND h.created_at > (
-                  SELECT COALESCE(MAX(m2.updated_at), '1970-01-01'::TIMESTAMP)
+                  SELECT COALESCE(MAX(m2.updated_at), '1970-01-01')
                   FROM memories m2
                   WHERE m2.sync_version = $1
               )
               AND NOT EXISTS (SELECT 1 FROM memories m3 WHERE m3.id = h.memory_id)
         "#;
 
-        let mut del_stmt = conn.prepare(delete_sql)?;
-        let del_rows = del_stmt
-            .query_map(params![since_version as i64], |row| {
+        let del_rows = self.backend.query_read(
+            delete_sql,
+            &[SqlParam::Int(since_version as i64)],
+            |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get_string(0)?,
+                    row.get_opt_string(1)?,
+                    row.get_string(2)?,
                 ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            },
+        )?;
 
         // Use the max sync_version + 1 for tombstone entries
         let max_version = changes
@@ -142,31 +132,15 @@ impl Storage {
     pub(crate) fn get_storage_stats(&self) -> Result<crate::sync::StorageStats> {
         let collection = &self.config.collection_name;
 
-        let conn = self.read_conn();
-        let mem_count: i64 = {
-            let mut stmt = conn.prepare("SELECT COUNT(*) FROM memories")?;
-            stmt.query_map([], |row| row.get(0))?
-                .next()
-                .expect("aggregate always returns a row")?
-        };
+        let mem_count = self.backend.query_count("SELECT COUNT(*) FROM memories", &[])?;
 
-        let entity_count: i64 = {
-            let sql = format!("SELECT COUNT(*) FROM entities_{collection}");
-            let mut stmt = conn.prepare(&sql)?;
-            stmt.query_map([], |row| row.get(0))?
-                .next()
-                .expect("aggregate always returns a row")?
-        };
+        let entity_sql = format!("SELECT COUNT(*) FROM entities_{collection}");
+        let entity_count = self.backend.query_count(&entity_sql, &[])?;
 
-        let rel_count: i64 = {
-            let sql = format!("SELECT COUNT(*) FROM relationships_{collection}");
-            let mut stmt = conn.prepare(&sql)?;
-            stmt.query_map([], |row| row.get(0))?
-                .next()
-                .expect("aggregate always returns a row")?
-        };
+        let rel_sql = format!("SELECT COUNT(*) FROM relationships_{collection}");
+        let rel_count = self.backend.query_count(&rel_sql, &[])?;
 
-        // Estimate size using the already-held connection to avoid Mutex re-entry deadlock.
+        // Estimate size
         let estimated_size = if self.config.db_path == ":memory:" {
             mem_count as u64 * 1024
         } else {
@@ -188,24 +162,26 @@ impl Storage {
     /// Assign the next sync_version to a memory by ID.
     /// Called after insert or update to track changes for sync.
     ///
-    /// Uses a single write_conn to read max version and update atomically,
-    /// avoiding TOCTOU race between read_conn and write_conn.
+    /// Reads max version and then executes update,
+    /// ensuring both operations go through the write path.
     pub(crate) fn bump_sync_version(
         &self,
         memory_id: &str,
         device_id: Option<&str>,
     ) -> Result<u64> {
-        let dev_val = opt_text(device_id);
-        let conn = self.write_conn();
-        let mut stmt = conn.prepare("SELECT COALESCE(MAX(sync_version), 0) FROM memories")?;
-        let max_version: i64 = stmt
-            .query_map([], |row| row.get(0))?
-            .next()
-            .expect("aggregate always returns a row")?;
+        let max_version = self.backend.query_count(
+            "SELECT COALESCE(MAX(sync_version), 0) FROM memories",
+            &[],
+        )?;
         let next_version = (max_version as u64) + 1;
-        conn.execute(
+        let dev_val = opt_text(device_id);
+        self.backend.execute(
             "UPDATE memories SET sync_version = $1, device_id = COALESCE($2, device_id), sync_status = 'pending' WHERE id = $3",
-            params![next_version as i64, dev_val, memory_id],
+            &[
+                SqlParam::Int(next_version as i64),
+                dev_val,
+                SqlParam::Text(memory_id.to_string()),
+            ],
         )?;
         Ok(next_version)
     }
@@ -215,6 +191,7 @@ impl Storage {
 mod tests {
     use crate::config::MemoryConfig;
     use crate::storage::InsertMemoryParams;
+    use crate::types::SqlParam;
 
     use super::Storage;
 
@@ -362,19 +339,17 @@ mod tests {
             )
             .unwrap();
 
-        let conn = storage.read_conn();
-        let mut stmt = conn
-            .prepare("SELECT sync_version, device_id, sync_status FROM memories WHERE id = 'id1'")
-            .unwrap();
-        let mut rows = stmt
-            .query_map([], |row| {
-                let version: i64 = row.get(0)?;
-                let device_id: Option<String> = row.get(1)?;
-                let status: String = row.get(2)?;
+        let rows = storage.backend.query_read(
+            "SELECT sync_version, device_id, sync_status FROM memories WHERE id = $1",
+            &[SqlParam::Text("id1".to_string())],
+            |row| {
+                let version = row.get_i64(0)?;
+                let device_id = row.get_opt_string(1)?;
+                let status = row.get_string(2)?;
                 Ok((version, device_id, status))
-            })
-            .unwrap();
-        let (version, device_id, status) = rows.next().unwrap().unwrap();
+            },
+        ).unwrap();
+        let (version, device_id, status) = rows.into_iter().next().unwrap();
         assert_eq!(version, 0);
         assert!(device_id.is_none());
         assert_eq!(status, "pending");

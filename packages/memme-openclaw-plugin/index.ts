@@ -19,7 +19,7 @@ import { createStoreTool } from "./tools/store";
 import { createForgetTool } from "./tools/forget";
 
 const DEFAULT_CONFIG: MemmePluginConfig = {
-  db_path: "~/.openclaw/memme.duckdb",
+  db_path: "~/.openclaw/memme.db",
   embedding_provider: "openai",
   embedding_api_key: "",
   embedding_model: "text-embedding-3-small",

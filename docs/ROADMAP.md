@@ -13,7 +13,7 @@ This roadmap outlines what's been built, what's coming next, and where we'd love
 MemMe 0.1 is a fully functional AI memory engine:
 
 - **Four-layer data model** — Stream → Session → Episode → Memory
-- **Knowledge graph** — LLM entity/relationship extraction, stored in DuckDB
+- **Knowledge graph** — LLM entity/relationship extraction, stored in SQLite
 - **Four-channel hybrid search** — Vector + BM25 + Entity + Temporal, RRF fusion, optional reranking
 - **Forgetting curve** — FSRS-based memory decay with stability reinforcement
 - **Meditation** — Memory consolidation: decay, extraction, graph building, identity distillation

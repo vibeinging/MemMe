@@ -56,8 +56,9 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(config: AnthropicConfig) -> Self {
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(90))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .tcp_keepalive(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(5)
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());

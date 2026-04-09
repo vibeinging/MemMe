@@ -22,7 +22,7 @@ class MemoryEnhancedRobot(MemoryMixin):
         robot = MemoryEnhancedRobot(
             robot=make_robot("so100"),
             user_id="robot-001",
-            db_path="robot_memory.duckdb",
+            db_path="robot_memory.db",
         )
 
         robot.connect()
@@ -37,7 +37,7 @@ class MemoryEnhancedRobot(MemoryMixin):
         robot: Any = None,
         *,
         user_id: str = "robot",
-        db_path: str = "robot_memory.duckdb",
+        db_path: str = "robot_memory.db",
         embedder: str = "onnx",
         api_key: str | None = None,
         llm_provider: str = "openai",

@@ -1,7 +1,5 @@
-use duckdb::params;
-
 use crate::error::Result;
-use crate::types::RecallRecord;
+use crate::types::{RecallRecord, SqlParam};
 
 use super::util::opt_text;
 use super::Storage;
@@ -18,7 +16,7 @@ impl Storage {
         user_id: &str,
         results: Option<&serde_json::Value>,
     ) -> Result<()> {
-        let emb_literal = Self::format_embedding(query_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
         let source_val = opt_text(source_id);
         let results_val = opt_text(results.map(|r| serde_json::to_string(r).unwrap_or_default()));
 
@@ -26,10 +24,15 @@ impl Storage {
             r#"INSERT INTO recalls (recall_id, query, query_vec, source_id, user_id, results)
                VALUES ($1, $2, {emb_literal}, $3, $4, $5)"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![recall_id, query, source_val, user_id, results_val],
+            &[
+                SqlParam::Text(recall_id.to_string()),
+                SqlParam::Text(query.to_string()),
+                source_val,
+                SqlParam::Text(user_id.to_string()),
+                results_val,
+            ],
         )?;
         Ok(())
     }
@@ -37,10 +40,12 @@ impl Storage {
     /// Update recall feedback.
     #[allow(dead_code)] // planned API: recall feedback
     pub(crate) fn update_recall_feedback(&self, recall_id: &str, feedback: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE recalls SET feedback = $1 WHERE recall_id = $2",
-            params![feedback, recall_id],
+            &[
+                SqlParam::Text(feedback.to_string()),
+                SqlParam::Text(recall_id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -49,28 +54,26 @@ impl Storage {
     #[allow(dead_code)] // planned API: recall history
     pub(crate) fn list_recalls(&self, user_id: &str, limit: usize) -> Result<Vec<RecallRecord>> {
         let sql = format!(
-            r#"SELECT recall_id, query, CAST(timestamp AS VARCHAR), source_id, user_id, results, feedback
+            r#"SELECT recall_id, query, timestamp, source_id, user_id, results, feedback
                FROM recalls WHERE user_id = $1
                ORDER BY timestamp DESC
                LIMIT {limit}"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![user_id], |row| {
+        self.backend.query_read(
+            &sql,
+            &[SqlParam::Text(user_id.to_string())],
+            |row| {
+                let results_str = row.get_opt_string(5)?;
                 Ok(RecallRecord {
-                    recall_id: row.get(0)?,
-                    query: row.get(1)?,
-                    timestamp: row.get::<_, String>(2)?,
-                    source_id: row.get::<_, Option<String>>(3)?,
-                    user_id: row.get(4)?,
-                    results: row
-                        .get::<_, Option<String>>(5)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    feedback: row.get::<_, Option<String>>(6)?,
+                    recall_id: row.get_string(0)?,
+                    query: row.get_string(1)?,
+                    timestamp: row.get_string(2)?,
+                    source_id: row.get_opt_string(3)?,
+                    user_id: row.get_string(4)?,
+                    results: results_str.and_then(|s| serde_json::from_str(&s).ok()),
+                    feedback: row.get_opt_string(6)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 }

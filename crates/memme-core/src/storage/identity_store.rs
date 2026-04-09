@@ -1,8 +1,7 @@
-use duckdb::params;
-
 use crate::error::Result;
-use crate::types::{IdentityTrait, TraitType};
+use crate::types::{IdentityTrait, SqlParam, TraitType};
 
+use super::backend::RowAccess;
 use super::Storage;
 
 impl Storage {
@@ -18,23 +17,22 @@ impl Storage {
         evidence_ids: &[String],
         user_id: &str,
     ) -> Result<()> {
-        let emb_literal = Self::format_embedding(content_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(content_vec, self.config.embedding_dims)?;
         let evidence_str = serde_json::to_string(evidence_ids).unwrap_or_default();
 
         let sql = format!(
             r#"INSERT INTO identity (trait_id, trait_type, content, content_vec, confidence, evidence_ids, user_id)
                VALUES ($1, $2, $3, {emb_literal}, $4, $5, $6)"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![
-                trait_id,
-                trait_type,
-                content,
-                confidence as f64,
-                evidence_str,
-                user_id
+            &[
+                SqlParam::Text(trait_id.to_string()),
+                SqlParam::Text(trait_type.to_string()),
+                SqlParam::Text(content.to_string()),
+                SqlParam::Float(confidence as f64),
+                SqlParam::Text(evidence_str),
+                SqlParam::Text(user_id.to_string()),
             ],
         )?;
         Ok(())
@@ -42,31 +40,24 @@ impl Storage {
 
     /// Get an identity trait by ID.
     pub(crate) fn get_identity_trait(&self, trait_id: &str) -> Result<Option<IdentityTrait>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
+        self.backend.query_one(
             r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
-                      CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR)
+                      created_at, updated_at
                FROM identity WHERE trait_id = $1"#,
-        )?;
-        let mut rows = stmt.query_map(params![trait_id], map_identity_row)?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+            &[SqlParam::Text(trait_id.to_string())],
+            map_identity_row,
+        )
     }
 
     /// List all identity traits for a user.
     pub(crate) fn list_identity_traits(&self, user_id: &str) -> Result<Vec<IdentityTrait>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
+        self.backend.query_read(
             r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
-                      CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR)
+                      created_at, updated_at
                FROM identity WHERE user_id = $1 ORDER BY confidence DESC"#,
-        )?;
-        let rows = stmt
-            .query_map(params![user_id], map_identity_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            &[SqlParam::Text(user_id.to_string())],
+            map_identity_row,
+        )
     }
 
     /// Update an identity trait.
@@ -79,7 +70,7 @@ impl Storage {
         confidence: f32,
         evidence_ids: &[String],
     ) -> Result<()> {
-        let emb_literal = Self::format_embedding(content_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(content_vec, self.config.embedding_dims)?;
         let evidence_str = serde_json::to_string(evidence_ids).unwrap_or_default();
 
         let sql = format!(
@@ -91,10 +82,14 @@ impl Storage {
                    updated_at = current_timestamp
                WHERE trait_id = $4"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![content, confidence as f64, evidence_str, trait_id],
+            &[
+                SqlParam::Text(content.to_string()),
+                SqlParam::Float(confidence as f64),
+                SqlParam::Text(evidence_str),
+                SqlParam::Text(trait_id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -102,10 +97,9 @@ impl Storage {
     /// Delete an identity trait.
     #[allow(dead_code)] // planned API: identity trait management
     pub(crate) fn delete_identity_trait(&self, trait_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "DELETE FROM identity WHERE trait_id = $1",
-            params![trait_id],
+            &[SqlParam::Text(trait_id.to_string())],
         )?;
         Ok(())
     }
@@ -118,38 +112,38 @@ impl Storage {
         user_id: &str,
         limit: usize,
     ) -> Result<Vec<IdentityTrait>> {
-        let emb_literal = Self::format_embedding(query_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
+        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
         let sql = format!(
             r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
-                      CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR)
+                      created_at, updated_at
                FROM identity
                WHERE user_id = $1
-               ORDER BY array_cosine_distance(content_vec, {emb_literal}) ASC
+               ORDER BY {distance_expr} ASC
                LIMIT {limit}"#
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![user_id], map_identity_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(
+            &sql,
+            &[SqlParam::Text(user_id.to_string())],
+            map_identity_row,
+        )
     }
 }
 
-fn map_identity_row(row: &duckdb::Row<'_>) -> duckdb::Result<IdentityTrait> {
-    let evidence_raw: Option<String> = row.get(4)?;
+fn map_identity_row(row: &dyn RowAccess) -> Result<IdentityTrait> {
+    let evidence_raw: Option<String> = row.get_opt_string(4)?;
     let evidence_ids: Vec<String> = evidence_raw
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
     Ok(IdentityTrait {
-        trait_id: row.get(0)?,
-        trait_type: TraitType::parse(&row.get::<_, String>(1).unwrap_or_default()),
-        content: row.get(2)?,
-        confidence: row.get::<_, Option<f64>>(3)?.unwrap_or(0.5) as f32,
+        trait_id: row.get_string(0)?,
+        trait_type: TraitType::parse(&row.get_string(1).unwrap_or_default()),
+        content: row.get_string(2)?,
+        confidence: row.get_opt_f64(3)?.unwrap_or(0.5) as f32,
         evidence_ids,
-        user_id: row.get(5)?,
-        created_at: row.get::<_, String>(6)?,
-        updated_at: row.get::<_, Option<String>>(7)?,
+        user_id: row.get_string(5)?,
+        created_at: row.get_string(6)?,
+        updated_at: row.get_opt_string(7)?,
     })
 }

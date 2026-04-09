@@ -6,7 +6,7 @@ use crate::webhook::WebhookConfig;
 /// Configuration for the memory store.
 #[derive(Debug, Clone)]
 pub struct MemoryConfig {
-    /// Path to the DuckDB database file (e.g. "memory.duckdb").
+    /// Path to the SQLite database file (e.g. "memory.db").
     /// Use ":memory:" for an in-memory database.
     pub db_path: String,
 
@@ -112,7 +112,7 @@ pub struct MemoryConfig {
     pub meditation_batch_size: usize,
 
     /// Minimum significance threshold for episodes to be processed by meditation.
-    /// Episodes below this threshold are skipped. Default: 0.0 (process all).
+    /// Episodes below this threshold are skipped. Default: 0.3 (skip generic Q&A).
     pub meditation_min_significance: f32,
 
     /// Minimum estimated token count before using LLM for compact.
@@ -142,6 +142,19 @@ pub struct MemoryConfig {
     /// RRF weight for the temporal search channel. Default: 0.15.
     /// Activated when queries contain temporal intent ("When did...", date references).
     pub rrf_temporal_weight: f64,
+
+    /// RRF weight for the event-level search channel. Default: 0.35.
+    /// Searches raw/purified events for high-recall retrieval of original conversation text.
+    /// The channel is adaptively enabled only when the user's memory count is below
+    /// `event_memory_threshold`, avoiding noise when the full pipeline has produced
+    /// enough memories.
+    pub rrf_event_weight: f64,
+
+    /// Memory count threshold for adaptive event channel activation. Default: 100.
+    /// When the user has fewer than this many memories, the event search channel
+    /// is enabled to provide retrieval coverage; once the memory count reaches this
+    /// threshold the channel is skipped because memory-based channels are sufficient.
+    pub event_memory_threshold: usize,
 
     /// Maximum tokens for LLM generation calls.
     /// Reasoning models (gpt-5, kimi-k2.5) need 8000-16384 due to thinking tokens.
@@ -205,7 +218,7 @@ pub struct PowerConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            db_path: "memory.duckdb".to_string(),
+            db_path: "memory.db".to_string(),
             collection_name: "default".to_string(),
             embedding_dims: 384,
             dedup_threshold: 0.15,
@@ -232,19 +245,21 @@ impl Default for MemoryConfig {
             compact_threshold: 20,
             meditation_cooldown_hours: 1,
             meditation_batch_size: 20,
-            meditation_min_significance: 0.0,
+            meditation_min_significance: 0.3,
             compact_fallback_token_threshold: 200,
-            rrf_vector_weight: 0.5,
-            rrf_fts_weight: 0.3,
+            rrf_vector_weight: 0.3,
+            rrf_fts_weight: 0.35,
             rrf_entity_weight: 0.2,
             rrf_k: 30,
             rrf_candidate_multiplier: 3,
             rrf_temporal_weight: 0.15,
+            rrf_event_weight: 0.35,
+            event_memory_threshold: 100,
             llm_max_tokens: 2048,
             llm_temperature: Some(0.1),
             deferred_flush_interval_secs: 30,
             resolution_weight_granular: 1.0,
-            resolution_weight_narrative: 0.85,
+            resolution_weight_narrative: 0.65,
             resolution_weight_identity: 0.7,
             adaptive_rrf_alpha: 0.0,
             enable_rerank: false,
@@ -390,7 +405,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = MemoryConfig::default();
-        assert_eq!(cfg.db_path, "memory.duckdb");
+        assert_eq!(cfg.db_path, "memory.db");
         assert_eq!(cfg.collection_name, "default");
         assert_eq!(cfg.embedding_dims, 384);
         assert_eq!(cfg.dedup_threshold, 0.15);

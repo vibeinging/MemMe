@@ -11,7 +11,7 @@ An embeddable AI memory engine. One file. Your device. Your rules.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-**Rust Core** · **DuckDB Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 82.92%**
+**Rust Core** · **SQLite Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 82.92%**
 
 English | [中文](README_CN.md)
 
@@ -44,8 +44,8 @@ AI memory is more sensitive than regular data. It's not just what you said — i
 ## One file. All your memories.
 
 ```
-memory.duckdb              <- your entire memory, one file
-memory.duckdb.replica      <- automatic backup copy
+memory.db                  <- your entire memory, one file
+memory.db.replica          <- automatic backup copy
 |
 ├── memories               content + vectors + metadata
 ├── entities / relationships   knowledge graph (people, places, events)
@@ -89,12 +89,12 @@ Pipeline: append_events → compact → meditate (per-episode fact extraction + 
 
 | | **MemMe** | **mem0** | **Zep** |
 |---|---|---|---|
-| Deployment | Single `.duckdb` file | Server + Qdrant + Neo4j | Managed cloud |
+| Deployment | Single `.db` file | Server + Qdrant + Neo4j | Managed cloud |
 | Mobile / iOS | Native (UniFFI) | No | No |
 | Offline | Full support | Requires cloud APIs | Cloud only |
 | Latency (no LLM) | <10ms | Always needs LLM | Always needs LLM |
 | Language | Rust core | Python only | Go (server) |
-| Knowledge graph | Built-in (DuckDB) | External Neo4j | No |
+| Knowledge graph | Built-in (SQLite) | External Neo4j | No |
 | Hybrid search | Vector + BM25 + RRF | No | Partial |
 | Reranking | Built-in (API / ONNX) | Optional | No |
 | Forgetting curve | Built-in | No | No |
@@ -117,7 +117,7 @@ use memme_core::{MemoryConfig, MemoryStore, AddOptions, SearchOptions};
 use memme_embeddings::onnx::OnnxEmbedder;
 
 fn main() -> memme_core::Result<()> {
-    let config = MemoryConfig::new("memory.duckdb", 384);
+    let config = MemoryConfig::new("memory.db", 384);
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
@@ -141,7 +141,7 @@ pip install memme
 ```python
 from memme import MemoryStore
 
-store = MemoryStore("memory.duckdb")
+store = MemoryStore("memory.db")
 store.add("User prefers dark mode", user_id="alice")
 results = store.search("preferences", user_id="alice")
 for r in results:
@@ -158,7 +158,7 @@ npm install memme
 const { MemoryStore } = require("memme");
 
 // Use OpenAI embeddings (or newMock() for testing without API)
-const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.duckdb");
+const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.db");
 await store.add("User prefers dark mode", "alice");
 const results = await store.search("preferences", "alice");
 console.log(results);
@@ -171,7 +171,7 @@ import MemMe
 
 // Host app provides HTTP transport (URLSession, OkHttp, etc.)
 let store = try MemoryStore.newWithHttpClient(
-    dbPath: "memory.duckdb",
+    dbPath: "memory.db",
     httpClient: myHttpClient,  // implements HttpClient protocol
     apiKey: "sk-...",
     model: "text-embedding-3-small",
@@ -209,7 +209,7 @@ let results = try store.search("preferences", userId: "alice")
 
 ### Data Safety
 
-- **Single-file deployment** — one `.duckdb` file holds vectors, graph, FTS index, and history
+- **Single-file deployment** — one `.db` file holds vectors, graph, FTS index, and history
 - **Dual-replica protection** — CHECKPOINT + atomic file copy before meditation; auto-recovery from replica on corruption
 - **Cloud backup** — `backup_to_path()` creates portable snapshots (with metadata: memory count, schema version, file size); `restore_from_backup()` validates and restores. Host app handles upload to iCloud/S3/cloud drive
 - **Full export/import** — export all 8 data layers (memories, sessions, events, episodes, entities, relations, identity, sources) as JSON; import back losslessly
@@ -228,7 +228,7 @@ let results = try store.search("preferences", userId: "alice")
 - **Diagnostics** — built-in health checks for storage, embedder, and LLM with per-check latency
 - **Four-level scoping** — `user_id` / `agent_id` / `app_id` / `run_id` isolation
 - **Battery-aware** — defers heavy operations on low battery
-- **Analytics** — user stats, memory frequency, top entities (powered by DuckDB OLAP)
+- **Analytics** — user stats, memory frequency, top entities
 
 ## Import Your Chat History
 
@@ -259,12 +259,12 @@ MemMe maintains a dual-replica system to ensure your memories are never lost:
 store.sync_replica()?;
 
 // Cloud backup: portable snapshot with metadata
-let info = store.backup_to_path("/path/to/backup.duckdb")?;
+let info = store.backup_to_path("/path/to/backup.db")?;
 println!("Backed up {} memories ({} bytes)", info.memory_count, info.size_bytes);
 // Host app uploads the file to iCloud / S3 / cloud drive
 
 // Restore from backup (caller must re-open MemoryStore after)
-MemoryStore::restore_from_backup("/path/to/backup.duckdb", &config)?;
+MemoryStore::restore_from_backup("/path/to/backup.db", &config)?;
 
 // Full export: all 8 data layers as a single JSON
 let export = store.full_export(Some("alice"))?;
@@ -299,7 +299,7 @@ Meditation automatically syncs the replica before starting. If the primary file 
 │          ──► RRF Fusion ──► Rerank                       │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  DuckDB (.duckdb single file + .replica backup)    │  │
+│  │  SQLite (.db single file + .replica backup)         │  │
 │  │  memories │ entities │ relationships │ episodes     │  │
 │  │  sessions │ events │ identity │ history │ meditations│  │
 │  └────────────────────────────────────────────────────┘  │
@@ -325,7 +325,7 @@ Meditation automatically syncs the replica before starting. If the primary file 
 ## REST API
 
 ```bash
-cargo run -p memme-server -- --db-path memory.duckdb --port 8080
+cargo run -p memme-server -- --db-path memory.db --port 8080
 ```
 
 ```bash
@@ -356,7 +356,7 @@ For Claude Desktop, Cursor, and other MCP clients:
   "mcpServers": {
     "memme": {
       "command": "/path/to/memme-mcp",
-      "args": ["--db-path", "memory.duckdb"]
+      "args": ["--db-path", "memory.db"]
     }
   }
 }
@@ -379,8 +379,6 @@ cargo test   # 340+ tests
 
 | Feature | Description |
 |---|---|
-| `bundled` (default) | Compile DuckDB from source |
-| `memme-db` | Link precompiled DuckDB + MemMe-DB (HNSW) |
 | `api-rerank` | API-based reranker (Jina/Cohere) |
 | `onnx-rerank` | Local ONNX cross-encoder reranker |
 

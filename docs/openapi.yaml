@@ -3,7 +3,7 @@ info:
   title: MemMe REST API
   description: |
     Self-hosted REST API for the MemMe AI memory engine.
-    All data is stored in a local DuckDB file. Your memories never leave your device.
+    All data is stored in a local SQLite file. Your memories never leave your device.
   version: 0.1.0
   license:
     name: Apache-2.0

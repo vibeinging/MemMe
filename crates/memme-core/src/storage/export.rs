@@ -1,9 +1,7 @@
-use duckdb::params;
-
 use crate::error::Result;
 use crate::types::{
     Entity, Episode, Event, EventType, FullExport, GraphRelation, IdentityTrait, MemoryExport,
-    Session, Source, TraitType,
+    Session, Source, SqlParam, TraitType,
 };
 
 use super::util::opt_text;
@@ -29,73 +27,62 @@ impl Storage {
         } else {
             " AND (privacy IS NULL OR privacy != 'local_only')"
         };
-        let (sql, has_user) = if user_id.is_some() {
+        let (sql, params) = if let Some(uid) = user_id {
             (
                 format!(
                     "SELECT id, content, user_id, agent_id, app_id, run_id,
-                        CAST(metadata AS VARCHAR) AS metadata,
+                        metadata,
                         importance, immutable,
-                        CAST(expiration_date AS VARCHAR) AS expiration_date,
-                        CAST(categories AS VARCHAR) AS categories,
-                        CAST(created_at AS VARCHAR) AS created_at,
-                        CAST(updated_at AS VARCHAR) AS updated_at,
+                        expiration_date,
+                        categories,
+                        created_at,
+                        updated_at,
                         stability
                  FROM memories WHERE user_id = $1{privacy_filter}
                  ORDER BY created_at"
                 ),
-                true,
+                vec![SqlParam::Text(uid.to_string())],
             )
         } else {
             (
                 format!(
                     "SELECT id, content, user_id, agent_id, app_id, run_id,
-                        CAST(metadata AS VARCHAR) AS metadata,
+                        metadata,
                         importance, immutable,
-                        CAST(expiration_date AS VARCHAR) AS expiration_date,
-                        CAST(categories AS VARCHAR) AS categories,
-                        CAST(created_at AS VARCHAR) AS created_at,
-                        CAST(updated_at AS VARCHAR) AS updated_at,
+                        expiration_date,
+                        categories,
+                        created_at,
+                        updated_at,
                         stability
                  FROM memories WHERE 1=1{privacy_filter}
                  ORDER BY created_at"
                 ),
-                false,
+                vec![],
             )
         };
 
-        let map_export = |row: &duckdb::Row<'_>| -> duckdb::Result<MemoryExport> {
-            let metadata_str: Option<String> = row.get(6)?;
-            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
-            let categories_raw: Option<String> = row.get(10)?;
+        self.backend.query_read(&sql, &params, |row| {
+            let metadata = row
+                .get_opt_string(6)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            let categories_raw: Option<String> = row.get_opt_string(10)?;
             Ok(MemoryExport {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                user_id: row.get(2)?,
-                agent_id: row.get(3)?,
-                app_id: row.get(4)?,
-                run_id: row.get(5)?,
+                id: row.get_string(0)?,
+                content: row.get_string(1)?,
+                user_id: row.get_string(2)?,
+                agent_id: row.get_opt_string(3)?,
+                app_id: row.get_opt_string(4)?,
+                run_id: row.get_opt_string(5)?,
                 metadata,
-                importance: row.get::<_, Option<f64>>(7)?.unwrap_or(0.5) as f32,
-                immutable: row.get::<_, Option<bool>>(8)?.unwrap_or(false),
-                expiration_date: row.get(9)?,
+                importance: row.get_opt_f64(7)?.unwrap_or(0.5) as f32,
+                immutable: row.get_opt_bool(8)?.unwrap_or(false),
+                expiration_date: row.get_opt_string(9)?,
                 categories: Self::parse_categories(categories_raw),
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
-                stability: row.get::<_, Option<f64>>(13)?.map(|v| v as f32),
+                created_at: row.get_string(11)?,
+                updated_at: row.get_string(12)?,
+                stability: row.get_opt_f64(13)?.map(|v| v as f32),
             })
-        };
-
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = if has_user {
-            stmt.query_map(params![user_id.unwrap()], map_export)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            stmt.query_map([], map_export)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-
-        Ok(rows)
+        })
     }
 
     // ── Full export ──
@@ -167,171 +154,162 @@ impl Storage {
 
     /// List all sessions without user_id filter.
     fn list_all_sessions(&self) -> Result<Vec<Session>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            r#"SELECT s.session_id, s.user_id, s.source_id,
-                      CAST(s.started_at AS VARCHAR), CAST(s.ended_at AS VARCHAR),
-                      s.metadata, CAST(s.created_at AS VARCHAR),
+        let sql = r#"SELECT s.session_id, s.user_id, s.source_id,
+                      s.started_at, s.ended_at,
+                      s.metadata, s.created_at,
                       (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
                       s.structured_notes
                FROM sessions s
-               ORDER BY s.started_at DESC"#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
+               ORDER BY s.started_at DESC"#;
+        self.backend.query_read(
+            sql,
+            &[],
+            |row| {
                 Ok(Session {
-                    session_id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    source_id: row.get::<_, Option<String>>(2)?,
-                    started_at: row.get::<_, String>(3)?,
-                    ended_at: row.get::<_, Option<String>>(4)?,
+                    session_id: row.get_string(0)?,
+                    user_id: row.get_string(1)?,
+                    source_id: row.get_opt_string(2)?,
+                    started_at: row.get_string(3)?,
+                    ended_at: row.get_opt_string(4)?,
                     metadata: row
-                        .get::<_, Option<String>>(5)?
+                        .get_opt_string(5)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
-                    created_at: row.get::<_, String>(6)?,
-                    event_count: row.get::<_, Option<i64>>(7)?.unwrap_or(0) as u32,
-                    structured_notes: row.get::<_, Option<String>>(8)?,
+                    created_at: row.get_string(6)?,
+                    event_count: row.get_opt_i64(7)?.unwrap_or(0) as u32,
+                    structured_notes: row.get_opt_string(8)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// List all events without user_id filter.
     fn list_all_events(&self) -> Result<Vec<Event>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            r#"SELECT event_id, source_id, session_id, CAST(timestamp AS VARCHAR),
+        let sql = r#"SELECT event_id, source_id, session_id, timestamp,
                       event_type, content, parent_id, metadata, user_id,
-                      processed, CAST(processed_at AS VARCHAR),
-                      purified_content, purified, CAST(event_time AS VARCHAR), location
-               FROM events ORDER BY timestamp DESC"#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
+                      processed, processed_at,
+                      purified_content, purified, event_time, location
+               FROM events ORDER BY timestamp DESC"#;
+        self.backend.query_read(
+            sql,
+            &[],
+            |row| {
                 Ok(Event {
-                    event_id: row.get(0)?,
-                    source_id: row.get::<_, Option<String>>(1)?,
-                    session_id: row.get::<_, Option<String>>(2)?,
-                    timestamp: row.get::<_, String>(3)?,
+                    event_id: row.get_string(0)?,
+                    source_id: row.get_opt_string(1)?,
+                    session_id: row.get_opt_string(2)?,
+                    timestamp: row.get_string(3)?,
                     event_type: EventType::parse(
-                        &row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                        &row.get_opt_string(4)?.unwrap_or_default(),
                     ),
-                    content: row.get(5)?,
-                    parent_id: row.get::<_, Option<String>>(6)?,
+                    content: row.get_string(5)?,
+                    parent_id: row.get_opt_string(6)?,
                     metadata: row
-                        .get::<_, Option<String>>(7)?
+                        .get_opt_string(7)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
-                    user_id: row.get(8)?,
-                    processed: row.get::<_, Option<bool>>(9)?.unwrap_or(false),
-                    processed_at: row.get::<_, Option<String>>(10)?,
-                    purified_content: row.get::<_, Option<String>>(11)?,
-                    purified: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
-                    event_time: row.get::<_, Option<String>>(13)?,
-                    location: row.get::<_, Option<String>>(14)?,
+                    user_id: row.get_string(8)?,
+                    processed: row.get_opt_bool(9)?.unwrap_or(false),
+                    processed_at: row.get_opt_string(10)?,
+                    purified_content: row.get_opt_string(11)?,
+                    purified: row.get_opt_bool(12)?.unwrap_or(false),
+                    event_time: row.get_opt_string(13)?,
+                    location: row.get_opt_string(14)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// List all episodes without user_id filter.
     fn list_all_episodes(&self) -> Result<Vec<Episode>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            r#"SELECT episode_id, title, summary,
-                      CAST(started_at AS VARCHAR), CAST(ended_at AS VARCHAR),
+        let sql = r#"SELECT episode_id, title, summary,
+                      started_at, ended_at,
                       significance, outcome, source_id, event_ids, user_id,
-                      CAST(created_at AS VARCHAR), CAST(last_recalled AS VARCHAR),
+                      created_at, last_recalled,
                       recall_count, storage_strength, retrieval_strength,
-                      session_ids, CAST(last_meditated_at AS VARCHAR)
-               FROM episodes ORDER BY started_at DESC"#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                let event_ids_raw: Option<String> = row.get(8)?;
+                      session_ids, last_meditated_at
+               FROM episodes ORDER BY started_at DESC"#;
+        self.backend.query_read(
+            sql,
+            &[],
+            |row| {
+                let event_ids_raw: Option<String> = row.get_opt_string(8)?;
                 let event_ids: Vec<String> = event_ids_raw
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
-                let session_ids_raw: Option<String> =
-                    row.get::<_, Option<String>>(15).ok().flatten();
+                let session_ids_raw: Option<String> = row.get_opt_string(15)?;
                 let session_ids: Vec<String> = session_ids_raw
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
                 Ok(Episode {
-                    episode_id: row.get(0)?,
-                    title: row.get(1)?,
-                    summary: row.get(2)?,
-                    started_at: row.get::<_, String>(3)?,
-                    ended_at: row.get::<_, Option<String>>(4)?,
-                    significance: row.get::<_, Option<f64>>(5)?.unwrap_or(0.5) as f32,
-                    outcome: row.get::<_, Option<String>>(6)?,
-                    source_id: row.get::<_, Option<String>>(7)?,
+                    episode_id: row.get_string(0)?,
+                    title: row.get_string(1)?,
+                    summary: row.get_string(2)?,
+                    started_at: row.get_string(3)?,
+                    ended_at: row.get_opt_string(4)?,
+                    significance: row.get_opt_f64(5)?.unwrap_or(0.5) as f32,
+                    outcome: row.get_opt_string(6)?,
+                    source_id: row.get_opt_string(7)?,
                     event_ids,
                     session_ids,
-                    user_id: row.get(9)?,
-                    created_at: row.get::<_, String>(10)?,
-                    last_recalled: row.get::<_, Option<String>>(11)?,
-                    recall_count: row.get::<_, Option<i32>>(12)?.unwrap_or(0) as u32,
-                    storage_strength: row.get::<_, Option<f64>>(13)?.unwrap_or(1.0) as f32,
-                    retrieval_strength: row.get::<_, Option<f64>>(14)?.unwrap_or(1.0) as f32,
-                    last_meditated_at: row.get::<_, Option<String>>(16)?,
+                    user_id: row.get_string(9)?,
+                    created_at: row.get_string(10)?,
+                    last_recalled: row.get_opt_string(11)?,
+                    recall_count: row.get_opt_i64(12)?.unwrap_or(0) as u32,
+                    storage_strength: row.get_opt_f64(13)?.unwrap_or(1.0) as f32,
+                    retrieval_strength: row.get_opt_f64(14)?.unwrap_or(1.0) as f32,
+                    last_meditated_at: row.get_opt_string(16)?,
                     score: None,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// List all identity traits without user_id filter.
     fn list_all_identity_traits(&self) -> Result<Vec<IdentityTrait>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
+        let sql =
             r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
-                      CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR)
-               FROM identity ORDER BY confidence DESC"#,
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                let evidence_raw: Option<String> = row.get(4)?;
+                      created_at, updated_at
+               FROM identity ORDER BY confidence DESC"#;
+        self.backend.query_read(
+            sql,
+            &[],
+            |row| {
+                let evidence_raw: Option<String> = row.get_opt_string(4)?;
                 let evidence_ids: Vec<String> = evidence_raw
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
                 Ok(IdentityTrait {
-                    trait_id: row.get(0)?,
-                    trait_type: TraitType::parse(&row.get::<_, String>(1).unwrap_or_default()),
-                    content: row.get(2)?,
-                    confidence: row.get::<_, Option<f64>>(3)?.unwrap_or(0.5) as f32,
+                    trait_id: row.get_string(0)?,
+                    trait_type: TraitType::parse(&row.get_string(1).unwrap_or_default()),
+                    content: row.get_string(2)?,
+                    confidence: row.get_opt_f64(3)?.unwrap_or(0.5) as f32,
                     evidence_ids,
-                    user_id: row.get(5)?,
-                    created_at: row.get::<_, String>(6)?,
-                    updated_at: row.get::<_, Option<String>>(7)?,
+                    user_id: row.get_string(5)?,
+                    created_at: row.get_string(6)?,
+                    updated_at: row.get_opt_string(7)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     /// List all sources without user_id filter.
     fn list_all_sources(&self) -> Result<Vec<Source>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            "SELECT source_id, source_type, name, CAST(registered_at AS VARCHAR), metadata FROM sources ORDER BY registered_at DESC",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
+        let sql =
+            "SELECT source_id, source_type, name, registered_at, metadata FROM sources ORDER BY registered_at DESC";
+        self.backend.query_read(
+            sql,
+            &[],
+            |row| {
                 Ok(Source {
-                    source_id: row.get(0)?,
-                    source_type: row.get(1)?,
-                    name: row.get::<_, Option<String>>(2)?,
-                    registered_at: row.get::<_, String>(3)?,
+                    source_id: row.get_string(0)?,
+                    source_type: row.get_string(1)?,
+                    name: row.get_opt_string(2)?,
+                    registered_at: row.get_string(3)?,
                     metadata: row
-                        .get::<_, Option<String>>(4)?
+                        .get_opt_string(4)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            },
+        )
     }
 
     // ── Export entities and relations as typed structs ──
@@ -339,46 +317,36 @@ impl Storage {
     /// Export entities as Entity structs, optionally filtered by user_id.
     fn export_entities(&self, user_id: Option<&str>) -> Result<Vec<Entity>> {
         let collection = &self.config.collection_name;
-        let (sql, has_user) = if user_id.is_some() {
+        let (sql, params) = if let Some(uid) = user_id {
             (
                 format!(
                     "SELECT id, name, entity_type, user_id FROM entities_{collection} WHERE user_id = $1 ORDER BY created_at"
                 ),
-                true,
+                vec![SqlParam::Text(uid.to_string())],
             )
         } else {
             (
                 format!(
                     "SELECT id, name, entity_type, user_id FROM entities_{collection} ORDER BY created_at"
                 ),
-                false,
+                vec![],
             )
         };
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let map_entity = |row: &duckdb::Row<'_>| -> duckdb::Result<Entity> {
+        self.backend.query_read(&sql, &params, |row| {
             Ok(Entity {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                entity_type: row.get::<_, Option<String>>(2)?,
-                user_id: row.get(3)?,
+                id: row.get_string(0)?,
+                name: row.get_string(1)?,
+                entity_type: row.get_opt_string(2)?,
+                user_id: row.get_string(3)?,
             })
-        };
-        let rows = if has_user {
-            stmt.query_map(params![user_id.unwrap()], map_entity)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            stmt.query_map([], map_entity)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        Ok(rows)
+        })
     }
 
     /// Export relationships as GraphRelation structs, optionally filtered by user_id.
     fn export_relations(&self, user_id: Option<&str>) -> Result<Vec<GraphRelation>> {
         let collection = &self.config.collection_name;
-        let (sql, has_user) = if user_id.is_some() {
+        let (sql, params) = if let Some(uid) = user_id {
             (
                 format!(
                     r#"SELECT r.id, r.source_id, r.target_id, r.relation_type, r.user_id,
@@ -388,7 +356,7 @@ impl Storage {
                        JOIN entities_{collection} t ON r.target_id = t.id
                        WHERE r.user_id = $1"#
                 ),
-                true,
+                vec![SqlParam::Text(uid.to_string())],
             )
         } else {
             (
@@ -399,32 +367,22 @@ impl Storage {
                        JOIN entities_{collection} s ON r.source_id = s.id
                        JOIN entities_{collection} t ON r.target_id = t.id"#
                 ),
-                false,
+                vec![],
             )
         };
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let map_relation = |row: &duckdb::Row<'_>| -> duckdb::Result<GraphRelation> {
+        self.backend.query_read(&sql, &params, |row| {
             Ok(GraphRelation {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                target_id: row.get(2)?,
-                relation_type: row.get(3)?,
-                user_id: row.get(4)?,
-                source: row.get(5)?,
-                target: row.get(6)?,
-                description: row.get::<_, Option<String>>(7)?,
+                id: row.get_string(0)?,
+                source_id: row.get_string(1)?,
+                target_id: row.get_string(2)?,
+                relation_type: row.get_string(3)?,
+                user_id: row.get_string(4)?,
+                source: row.get_string(5)?,
+                target: row.get_string(6)?,
+                description: row.get_opt_string(7)?,
             })
-        };
-        let rows = if has_user {
-            stmt.query_map(params![user_id.unwrap()], map_relation)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            stmt.query_map([], map_relation)?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        Ok(rows)
+        })
     }
 
     // ── Bulk import methods ──
@@ -432,8 +390,8 @@ impl Storage {
     /// Import sources from export records. Returns the number of successfully imported sources.
     #[allow(dead_code)]
     pub(crate) fn import_sources(&self, sources: &[Source]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for src in sources {
             let name_val = opt_text(src.name.as_deref());
             let meta_val = opt_text(
@@ -441,28 +399,30 @@ impl Storage {
                     .as_ref()
                     .map(|m| serde_json::to_string(m).unwrap_or_default()),
             );
-            let affected = conn.execute(
-                r#"INSERT INTO sources (source_id, source_type, name, registered_at, metadata)
-                   VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP), $5)
-                   ON CONFLICT (source_id) DO NOTHING"#,
-                params![
-                    src.source_id,
-                    src.source_type,
+            let sql = r#"INSERT INTO sources (source_id, source_type, name, registered_at, metadata)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (source_id) DO NOTHING"#;
+            let affected = self.backend.execute(
+                sql,
+                &[
+                    SqlParam::Text(src.source_id.clone()),
+                    SqlParam::Text(src.source_type.clone()),
                     name_val,
-                    src.registered_at,
-                    meta_val
+                    SqlParam::Text(src.registered_at.clone()),
+                    meta_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
     /// Import sessions from export records. Returns the number of successfully imported sessions.
     #[allow(dead_code)]
     pub(crate) fn import_sessions(&self, sessions: &[Session]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for sess in sessions {
             let source_val = opt_text(sess.source_id.as_deref());
             let ended_val = opt_text(sess.ended_at.as_deref());
@@ -472,25 +432,25 @@ impl Storage {
                     .map(|m| serde_json::to_string(m).unwrap_or_default()),
             );
             let notes_val = opt_text(sess.structured_notes.as_deref());
-            let affected = conn.execute(
-                r#"INSERT INTO sessions (session_id, user_id, source_id, started_at, ended_at, metadata, created_at, structured_notes)
-                   VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP),
-                           CASE WHEN $5 IS NULL THEN NULL ELSE CAST($5 AS TIMESTAMP) END,
-                           $6, CAST($7 AS TIMESTAMP), $8)
-                   ON CONFLICT DO NOTHING"#,
-                params![
-                    sess.session_id,
-                    sess.user_id,
+            let sql = r#"INSERT INTO sessions (session_id, user_id, source_id, started_at, ended_at, metadata, created_at, structured_notes)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT DO NOTHING"#;
+            let affected = self.backend.execute(
+                sql,
+                &[
+                    SqlParam::Text(sess.session_id.clone()),
+                    SqlParam::Text(sess.user_id.clone()),
                     source_val,
-                    sess.started_at,
+                    SqlParam::Text(sess.started_at.clone()),
                     ended_val,
                     meta_val,
-                    sess.created_at,
-                    notes_val
+                    SqlParam::Text(sess.created_at.clone()),
+                    notes_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
@@ -498,8 +458,8 @@ impl Storage {
     /// Embeddings (content_vec) are set to NULL since they are not exported.
     #[allow(dead_code)]
     pub(crate) fn import_events(&self, events: &[Event]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for evt in events {
             let source_val = opt_text(evt.source_id.as_deref());
             let session_val = opt_text(evt.session_id.as_deref());
@@ -512,36 +472,38 @@ impl Storage {
             let purified_val = opt_text(evt.purified_content.as_deref());
             let event_time_val = opt_text(evt.event_time.as_deref());
             let location_val = opt_text(evt.location.as_deref());
-            let affected = conn.execute(
-                r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type,
+            let sql = r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type,
                                        content, parent_id, metadata, user_id,
                                        processed, purified_content, purified,
                                        event_time, location)
-                   VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP), $5,
+                   VALUES ($1, $2, $3, $4, $5,
                            $6, $7, $8, $9,
                            $10, $11, $12,
-                           CASE WHEN $13 IS NULL THEN NULL ELSE CAST($13 AS TIMESTAMP) END,
+                           $13,
                            $14)
-                   ON CONFLICT (event_id) DO NOTHING"#,
-                params![
-                    evt.event_id,
+                   ON CONFLICT (event_id) DO NOTHING"#;
+            let affected = self.backend.execute(
+                sql,
+                &[
+                    SqlParam::Text(evt.event_id.clone()),
                     source_val,
                     session_val,
-                    evt.timestamp,
-                    evt.event_type.as_str(),
-                    evt.content,
+                    SqlParam::Text(evt.timestamp.clone()),
+                    SqlParam::Text(evt.event_type.as_str().to_string()),
+                    SqlParam::Text(evt.content.clone()),
                     parent_val,
                     meta_val,
-                    evt.user_id,
-                    evt.processed,
+                    SqlParam::Text(evt.user_id.clone()),
+                    SqlParam::Bool(evt.processed),
                     purified_val,
-                    evt.purified,
+                    SqlParam::Bool(evt.purified),
                     event_time_val,
-                    location_val
+                    location_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
@@ -549,8 +511,8 @@ impl Storage {
     /// Embeddings (summary_vec) are set to NULL since they are not exported.
     #[allow(dead_code)]
     pub(crate) fn import_episodes(&self, episodes: &[Episode]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for ep in episodes {
             let ended_val = opt_text(ep.ended_at.as_deref());
             let outcome_val = opt_text(ep.outcome.as_deref());
@@ -559,42 +521,41 @@ impl Storage {
             let session_ids_str = serde_json::to_string(&ep.session_ids).unwrap_or_default();
             let last_recalled_val = opt_text(ep.last_recalled.as_deref());
             let last_meditated_val = opt_text(ep.last_meditated_at.as_deref());
-            let affected = conn.execute(
-                r#"INSERT INTO episodes (episode_id, title, summary, started_at, ended_at,
+            let sql = r#"INSERT INTO episodes (episode_id, title, summary, started_at, ended_at,
                                          significance, outcome, source_id, event_ids, user_id,
                                          created_at, last_recalled, recall_count,
                                          storage_strength, retrieval_strength,
                                          session_ids, last_meditated_at)
-                   VALUES ($1, $2, $3, CAST($4 AS TIMESTAMP),
-                           CASE WHEN $5 IS NULL THEN NULL ELSE CAST($5 AS TIMESTAMP) END,
+                   VALUES ($1, $2, $3, $4, $5,
                            $6, $7, $8, $9, $10,
-                           CAST($11 AS TIMESTAMP),
-                           CASE WHEN $12 IS NULL THEN NULL ELSE CAST($12 AS TIMESTAMP) END,
-                           $13, $14, $15, $16,
-                           CASE WHEN $17 IS NULL THEN NULL ELSE CAST($17 AS TIMESTAMP) END)
-                   ON CONFLICT (episode_id) DO NOTHING"#,
-                params![
-                    ep.episode_id,
-                    ep.title,
-                    ep.summary,
-                    ep.started_at,
+                           $11, $12,
+                           $13, $14, $15, $16, $17)
+                   ON CONFLICT (episode_id) DO NOTHING"#;
+            let affected = self.backend.execute(
+                sql,
+                &[
+                    SqlParam::Text(ep.episode_id.clone()),
+                    SqlParam::Text(ep.title.clone()),
+                    SqlParam::Text(ep.summary.clone()),
+                    SqlParam::Text(ep.started_at.clone()),
                     ended_val,
-                    ep.significance as f64,
+                    SqlParam::Float(ep.significance as f64),
                     outcome_val,
                     source_val,
-                    event_ids_str,
-                    ep.user_id,
-                    ep.created_at,
+                    SqlParam::Text(event_ids_str),
+                    SqlParam::Text(ep.user_id.clone()),
+                    SqlParam::Text(ep.created_at.clone()),
                     last_recalled_val,
-                    ep.recall_count as i32,
-                    ep.storage_strength as f64,
-                    ep.retrieval_strength as f64,
-                    session_ids_str,
-                    last_meditated_val
+                    SqlParam::Int(ep.recall_count as i64),
+                    SqlParam::Float(ep.storage_strength as f64),
+                    SqlParam::Float(ep.retrieval_strength as f64),
+                    SqlParam::Text(session_ids_str),
+                    last_meditated_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
@@ -602,8 +563,8 @@ impl Storage {
     #[allow(dead_code)]
     pub(crate) fn import_entities(&self, entities: &[Entity]) -> Result<u64> {
         let collection = &self.config.collection_name;
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for ent in entities {
             let type_val = opt_text(ent.entity_type.as_deref());
             let sql = format!(
@@ -611,9 +572,18 @@ impl Storage {
                    VALUES ($1, $2, $3, $4)
                    ON CONFLICT (id) DO NOTHING"#
             );
-            let affected = conn.execute(&sql, params![ent.id, ent.name, type_val, ent.user_id])?;
+            let affected = self.backend.execute(
+                &sql,
+                &[
+                    SqlParam::Text(ent.id.clone()),
+                    SqlParam::Text(ent.name.clone()),
+                    type_val,
+                    SqlParam::Text(ent.user_id.clone()),
+                ],
+            )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
@@ -621,8 +591,8 @@ impl Storage {
     #[allow(dead_code)]
     pub(crate) fn import_relations(&self, relations: &[GraphRelation]) -> Result<u64> {
         let collection = &self.config.collection_name;
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for rel in relations {
             let desc_val = opt_text(rel.description.as_deref());
             let sql = format!(
@@ -630,19 +600,20 @@ impl Storage {
                    VALUES ($1, $2, $3, $4, $5, $6)
                    ON CONFLICT (id) DO NOTHING"#
             );
-            let affected = conn.execute(
+            let affected = self.backend.execute(
                 &sql,
-                params![
-                    rel.id,
-                    rel.source_id,
-                    rel.target_id,
-                    rel.relation_type,
-                    rel.user_id,
-                    desc_val
+                &[
+                    SqlParam::Text(rel.id.clone()),
+                    SqlParam::Text(rel.source_id.clone()),
+                    SqlParam::Text(rel.target_id.clone()),
+                    SqlParam::Text(rel.relation_type.clone()),
+                    SqlParam::Text(rel.user_id.clone()),
+                    desc_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
@@ -650,37 +621,38 @@ impl Storage {
     /// Embeddings (content_vec) are set to NULL since they are not exported.
     #[allow(dead_code)]
     pub(crate) fn import_identity_traits(&self, traits: &[IdentityTrait]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for t in traits {
             let evidence_str = serde_json::to_string(&t.evidence_ids).unwrap_or_default();
             let updated_val = opt_text(t.updated_at.as_deref());
-            let affected = conn.execute(
-                r#"INSERT INTO identity (trait_id, trait_type, content, confidence, evidence_ids, user_id, created_at, updated_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, CAST($7 AS TIMESTAMP),
-                           CASE WHEN $8 IS NULL THEN NULL ELSE CAST($8 AS TIMESTAMP) END)
-                   ON CONFLICT (trait_id) DO NOTHING"#,
-                params![
-                    t.trait_id,
-                    t.trait_type.as_str(),
-                    t.content,
-                    t.confidence as f64,
-                    evidence_str,
-                    t.user_id,
-                    t.created_at,
-                    updated_val
+            let sql = r#"INSERT INTO identity (trait_id, trait_type, content, confidence, evidence_ids, user_id, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT (trait_id) DO NOTHING"#;
+            let affected = self.backend.execute(
+                sql,
+                &[
+                    SqlParam::Text(t.trait_id.clone()),
+                    SqlParam::Text(t.trait_type.as_str().to_string()),
+                    SqlParam::Text(t.content.clone()),
+                    SqlParam::Float(t.confidence as f64),
+                    SqlParam::Text(evidence_str),
+                    SqlParam::Text(t.user_id.clone()),
+                    SqlParam::Text(t.created_at.clone()),
+                    updated_val,
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 
     /// Import memories from export records. Returns the number of successfully imported memories.
     #[allow(dead_code)]
     pub(crate) fn import_memories(&self, memories: &[MemoryExport]) -> Result<u64> {
+        self.backend.execute_batch("BEGIN")?;
         let mut count: u64 = 0;
-        let conn = self.write_conn();
         for mem in memories {
             let meta_val = opt_text(
                 mem.metadata
@@ -691,36 +663,37 @@ impl Storage {
             let run_val = opt_text(mem.run_id.as_deref());
             let app_val = opt_text(mem.app_id.as_deref());
             let exp_val = opt_text(mem.expiration_date.as_deref());
-            let cats_literal = Self::format_categories(mem.categories.as_deref())?;
+            let cats_literal = self.format_categories(mem.categories.as_deref())?;
 
             // Use ON CONFLICT to skip duplicates
             let sql = format!(
                 r#"INSERT INTO memories (id, content, user_id, agent_id, run_id, app_id, metadata, importance, immutable, expiration_date, categories, created_at, updated_at)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                           CASE WHEN $10 IS NULL THEN NULL ELSE CAST($10 AS TIMESTAMP) END,
+                           $10,
                            {cats_literal},
-                           CAST($11 AS TIMESTAMP), CAST($12 AS TIMESTAMP))
+                           $11, $12)
                    ON CONFLICT (id) DO NOTHING"#
             );
-            let affected = conn.execute(
+            let affected = self.backend.execute(
                 &sql,
-                params![
-                    mem.id,
-                    mem.content,
-                    mem.user_id,
+                &[
+                    SqlParam::Text(mem.id.clone()),
+                    SqlParam::Text(mem.content.clone()),
+                    SqlParam::Text(mem.user_id.clone()),
                     agent_val,
                     run_val,
                     app_val,
                     meta_val,
-                    mem.importance as f64,
-                    mem.immutable,
+                    SqlParam::Float(mem.importance as f64),
+                    SqlParam::Bool(mem.immutable),
                     exp_val,
-                    mem.created_at,
-                    mem.updated_at
+                    SqlParam::Text(mem.created_at.clone()),
+                    SqlParam::Text(mem.updated_at.clone()),
                 ],
             )?;
             count += affected as u64;
         }
+        self.backend.execute_batch("COMMIT")?;
         Ok(count)
     }
 }

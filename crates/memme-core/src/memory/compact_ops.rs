@@ -164,7 +164,7 @@ impl super::MemoryStore {
             && estimated_tokens < self.config.compact_fallback_token_threshold;
 
         // Purify events + generate episode summary in a single LLM call
-        let (purified, title, summary, significance) = if use_fallback {
+        let (purified, title, summary, significance, prospective_queries) = if use_fallback {
             let purified = fallback_purify_events(&events);
             let (t, s, sig) = match session.structured_notes {
                 Some(ref notes) if !notes.trim().is_empty() => {
@@ -174,7 +174,7 @@ impl super::MemoryStore {
                 }
                 _ => fallback_episode_summary(&events),
             };
-            (purified, t, s, sig)
+            (purified, t, s, sig, vec![])
         } else {
             compact_with_llm(&events, &llm)
         };
@@ -213,7 +213,17 @@ impl super::MemoryStore {
         }
 
         // Insert narrative trace into memories table
-        let narrative_content = format!("{}: {}", title, summary);
+        // Append prospective queries to narrative content for BM25 + vector search matching
+        let narrative_content = if prospective_queries.is_empty() {
+            format!("{}: {}", title, summary)
+        } else {
+            format!(
+                "{}: {} [Prospective: {}]",
+                title,
+                summary,
+                prospective_queries.join(" ")
+            )
+        };
         let narrative_embedding = self
             .embedder
             .embed(&narrative_content)
@@ -335,11 +345,11 @@ impl super::MemoryStore {
 /// Generate episode title, summary, and significance.
 /// Tries LLM first, falls back to truncation-based approach.
 /// Combined purification + summarization in a single LLM call.
-/// Returns (purified_events, title, summary, significance).
+/// Returns (purified_events, title, summary, significance, prospective_queries).
 fn compact_with_llm(
     events: &[Event],
     llm: &Arc<dyn memme_llm::LlmProvider>,
-) -> (Vec<PurifiedEvent>, String, String, f32) {
+) -> (Vec<PurifiedEvent>, String, String, f32, Vec<String>) {
     let context = events
         .iter()
         .enumerate()
@@ -358,6 +368,9 @@ For each message, resolve coreferences (pronouns → names), ground temporal ref
 ## Section 2: Episode Summary
 Summarize the entire conversation as a title, summary, and significance score.
 
+## Section 3: Prospective Queries
+Generate 2-3 hypothetical future queries that a user might ask that should retrieve this conversation. Think about what questions this memory could answer.
+
 **Input** ({count} messages):
 {context}
 
@@ -370,7 +383,8 @@ Summarize the entire conversation as a title, summary, and significance score.
   ],
   "title": "Brief title (max 60 chars)",
   "summary": "2-3 sentence summary of what was discussed",
-  "significance": 0.7
+  "significance": 0.7,
+  "prospective_queries": ["What restaurant did the user visit?", "Who did the user have dinner with?"]
 }}
 ```
 
@@ -379,7 +393,12 @@ Summarize the entire conversation as a title, summary, and significance score.
 - Resolve pronouns to actual names, "there" to actual place
 - CRITICAL: Replace ALL relative time expressions in the purified text with absolute dates based on the conversation date above. E.g. "yesterday" → "on YYYY-MM-DD", "last week" → "on YYYY-MM-DD". The purified text must be self-contained — readable without knowing the conversation date.
 - If no purification needed, use original content
-- "significance": 0.0 (trivial) to 1.0 (life-changing)
+- "significance": rate the **personal memory value** of this conversation:
+  - 0.0-0.2: Generic Q&A, coding help, informational queries with no personal context
+  - 0.3-0.5: Mild personal context, routine activities, general preferences mentioned in passing
+  - 0.6-0.8: Significant personal events, strong preferences, relationships, plans, goals
+  - 0.9-1.0: Life-changing events, core identity revelations, deeply emotional moments
+- "prospective_queries": 2-3 natural language questions someone might ask in the future that this memory would answer. Focus on the personal facts, preferences, events, or relationships mentioned.
 - Respond ONLY with JSON, no other text."#,
         conversation_time = conversation_time,
         context = context,
@@ -442,22 +461,32 @@ Summarize the entire conversation as a title, summary, and significance score.
         let summary = parsed["summary"].as_str().unwrap_or("").to_string();
         let significance = parsed["significance"].as_f64().unwrap_or(0.5) as f32;
 
-        Ok((purified, title, summary, significance.clamp(0.0, 1.0)))
+        // Parse prospective queries
+        let prospective_queries = parsed["prospective_queries"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok((purified, title, summary, significance.clamp(0.0, 1.0), prospective_queries))
     }) {
-        Ok((mut purified, title, summary, significance)) => {
+        Ok((mut purified, title, summary, significance, prospective_queries)) => {
             // Pad or truncate purified to match event count
             purified.resize_with(expected_len, || PurifiedEvent {
                 purified_content: String::new(),
                 event_time: None,
                 location: None,
             });
-            (purified, title, summary, significance)
+            (purified, title, summary, significance, prospective_queries)
         }
         Err(e) => {
             tracing::warn!("Combined compact LLM call failed: {e}, using fallback");
             let purified = fallback_purify_events(events);
             let (t, s, sig) = fallback_episode_summary(events);
-            (purified, t, s, sig)
+            (purified, t, s, sig, vec![])
         }
     }
 }

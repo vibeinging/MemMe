@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-**Rust 内核** · **DuckDB 单文件** · **<10ms 检索** · **6 语言绑定** · **LoCoMo 82.92%**
+**Rust 内核** · **SQLite 单文件** · **<10ms 检索** · **6 语言绑定** · **LoCoMo 82.92%**
 
 [English](README.md) | 中文
 
@@ -44,8 +44,8 @@ AI 记忆比普通数据敏感得多。它不只是你说了什么，更是你**
 ## MemMe：一个文件，装下全部记忆
 
 ```
-memory.duckdb              <- 你的全部记忆，一个文件
-memory.duckdb.replica      <- 自动备份副本，防丢失
+memory.db                  <- 你的全部记忆，一个文件
+memory.db.replica          <- 自动备份副本，防丢失
 |
 ├── memories               内容 + 向量 + 元数据
 ├── entities / relationships   知识图谱（人、地、事 + 关系）
@@ -129,7 +129,7 @@ python demos/playground/server.py
 
 ```rust
 store.sync_replica()?;                         // 同步副本
-let info = store.backup_to_path("/path/to/backup.duckdb")?;  // 云备份
+let info = store.backup_to_path("/path/to/backup.db")?;  // 云备份
 store.full_export(Some("alice"))?;             // 导出全部数据
 store.full_import(&data)?;                     // 导入全部数据
 ```
@@ -165,7 +165,7 @@ store.import_conversations(&convs, "alice")?;
 
 ### 知识图谱
 
-LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要外挂 Neo4j。
+LLM 自动提取实体和关系，存在 SQLite 里，SQL 直接查。不需要外挂 Neo4j。
 
 ### 隐私控制
 
@@ -188,7 +188,7 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 | Python 生态 | PyO3 绑定 |
 | 机器人 / IoT | Rust 编译到 ARM |
 
-所有平台共享同一个 Rust 内核，同一个 `.duckdb` 文件格式。
+所有平台共享同一个 Rust 内核，同一个 `.db` 文件格式。
 
 ### 生态集成
 
@@ -207,7 +207,7 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 
 | | **MemMe** | **mem0** | **Zep** |
 |---|---|---|---|
-| 部署 | 一个 `.duckdb` 文件 | 服务器 + Qdrant + Neo4j | 托管云 |
+| 部署 | 一个 `.db` 文件 | 服务器 + Qdrant + Neo4j | 托管云 |
 | 移动端 | 原生支持 | 不支持 | 不支持 |
 | 离线 | 完整支持 | 需要云 API | 仅云端 |
 | 无 LLM 延迟 | <10ms | 必须有 LLM | 必须有 LLM |
@@ -241,7 +241,7 @@ LLM 自动提取实体和关系，存在 DuckDB 里，SQL 直接查。不需要�
 ```python
 from memme import MemoryStore
 
-store = MemoryStore("memory.duckdb")
+store = MemoryStore("memory.db")
 store.add("Alex 喜欢喝燕麦拿铁", user_id="alex")
 store.add("女儿 Mia 的生日是 3 月 15 日", user_id="alex")
 
@@ -258,7 +258,7 @@ use memme_core::{MemoryConfig, MemoryStore, AddOptions, SearchOptions};
 use memme_embeddings::onnx::OnnxEmbedder;
 
 fn main() -> memme_core::Result<()> {
-    let config = MemoryConfig::new("memory.duckdb", 384);
+    let config = MemoryConfig::new("memory.db", 384);
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
@@ -274,7 +274,7 @@ fn main() -> memme_core::Result<()> {
 const { MemoryStore } = require("memme");
 
 // OpenAI embedding（或 newMock() 免 API 测试）
-const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.duckdb");
+const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.db");
 await store.add("Alex 喜欢喝燕麦拿铁", "alex");
 const results = await store.search("饮品偏好", "alex");
 ```
@@ -286,7 +286,7 @@ import MemMe
 
 // 宿主 App 提供 HTTP 传输（URLSession / OkHttp）
 let store = try MemoryStore.newWithHttpClient(
-    dbPath: "memory.duckdb",
+    dbPath: "memory.db",
     httpClient: myHttpClient,  // 实现 HttpClient 协议
     apiKey: "sk-...",
     model: "text-embedding-3-small",
@@ -318,7 +318,7 @@ let results = try store.search("饮品偏好", userId: "alex")
 │        ──► RRF 融合 ──► 重排序                             │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  DuckDB（.duckdb 单文件 + .replica 备份）            │  │
+│  │  SQLite（.db 单文件 + .replica 备份）                │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
 │  memme-embeddings          memme-llm                     │
@@ -330,7 +330,7 @@ let results = try store.search("饮品偏好", userId: "alex")
 ### REST API
 
 ```bash
-cargo run -p memme-server -- --db-path memory.duckdb --port 8080
+cargo run -p memme-server -- --db-path memory.db --port 8080
 ```
 
 ```bash
@@ -354,7 +354,7 @@ curl -X POST http://localhost:8080/v1/memories/search \
   "mcpServers": {
     "memme": {
       "command": "/path/to/memme-mcp",
-      "args": ["--db-path", "memory.duckdb"]
+      "args": ["--db-path", "memory.db"]
     }
   }
 }
@@ -371,8 +371,6 @@ cargo test   # 340+ 测试
 
 | Feature | 说明 |
 |---|---|
-| `bundled`（默认） | 从源码编译 DuckDB |
-| `memme-db` | 预编译 DuckDB + MemMe-DB (HNSW) |
 | `api-rerank` | API 重排序 (Jina/Cohere) |
 | `onnx-rerank` | 本地 ONNX 重排序 |
 

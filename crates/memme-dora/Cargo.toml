@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Dora-rs memory node powered by MemMe — give your robot long-term memory"
-keywords = ["memory", "ai", "robotics", "dora", "duckdb"]
+keywords = ["memory", "ai", "robotics", "dora", "sqlite"]
 categories = ["science::robotics", "science::machine-learning"]
 rust-version.workspace = true
 
@@ -18,7 +18,7 @@ name = "memme-dora"
 path = "src/main.rs"
 
 [dependencies]
-memme-core = { workspace = true, features = ["bundled"] }
+memme-core = { workspace = true }
 memme-embeddings = { workspace = true, features = ["openai"] }
 memme-llm = { workspace = true, features = ["openai"] }
 dora-node-api = { version = "0.5", features = ["tracing"] }

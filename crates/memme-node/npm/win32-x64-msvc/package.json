@@ -11,7 +11,7 @@
   "files": [
     "memme.win32-x64-msvc.node"
   ],
-  "description": "Edge-first AI memory engine powered by DuckDB",
+  "description": "Edge-first AI memory engine powered by SQLite",
   "author": "MemMe Contributors",
   "license": "Apache-2.0",
   "repository": {

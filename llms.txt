@@ -1,10 +1,10 @@
 # MemMe
 
-> Edge-first AI memory engine. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
+> Edge-first AI memory engine. Rust-native, single-file SQLite storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
 
 ## Core Concepts
 
-- **Single-file DuckDB storage**: One `.duckdb` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
+- **Single-file SQLite storage**: One `.db` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
 - **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
 - **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
 - **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.

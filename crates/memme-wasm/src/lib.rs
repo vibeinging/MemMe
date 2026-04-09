@@ -1,12 +1,8 @@
 //! WASM bindings for MemMe.
 //!
-//! **Limitations**: DuckDB's bundled C++ library does not compile to
-//! `wasm32-unknown-unknown`. These bindings currently target native
-//! WASM runtimes (wasmtime, wasmer) via `wasm32-wasip1`, or serve
-//! as a reference for future DuckDB-WASM integration.
-//!
-//! For browser usage, consider using DuckDB-WASM on the JavaScript side
-//! and only delegating memory management logic from this crate.
+//! **Note**: These bindings target native WASM runtimes (wasmtime, wasmer)
+//! via `wasm32-wasip1`, or serve as a reference for browser-side integration.
+//! SQLite compiles cleanly to WASM targets.
 
 use std::sync::Mutex;
 
@@ -15,7 +11,7 @@ use wasm_bindgen::prelude::*;
 /// WASM wrapper for MemMe memory store.
 ///
 /// Wraps `memme_core::memory::MemoryStore` with a `Mutex` because
-/// DuckDB's `Connection` is not `Sync`. JavaScript is single-threaded
+/// SQLite's `Connection` is not `Sync`. JavaScript is single-threaded
 /// so the lock is never contended in practice.
 #[wasm_bindgen]
 pub struct MemoryStore {

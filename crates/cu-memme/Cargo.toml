@@ -5,13 +5,13 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Copper-rs memory task powered by MemMe — give your robot long-term memory"
 publish = false
-keywords = ["memory", "ai", "robotics", "copper", "duckdb"]
+keywords = ["memory", "ai", "robotics", "copper", "sqlite"]
 categories = ["science::robotics", "science::machine-learning"]
 rust-version = "1.77"
 repository = "https://github.com/vibeinging/MemMe"
 
 [dependencies]
-memme-core = { path = "../memme-core", default-features = false, features = ["bundled"] }
+memme-core = { path = "../memme-core", default-features = false }
 memme-embeddings = { path = "../memme-embeddings", default-features = false, features = ["onnx"] }
 memme-llm = { path = "../memme-llm", default-features = false }
 cu29 = "0.14"

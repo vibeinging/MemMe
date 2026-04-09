@@ -5,7 +5,7 @@ Merges all 10 LoCoMo v20 conversations into a single database to simulate
 a realistic multi-user scenario with larger data volumes.
 """
 
-import duckdb
+import sqlite3
 import time
 import os
 import statistics
@@ -13,7 +13,7 @@ import json
 import glob
 
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__)) + "/cache"
-WORK_DB = os.path.dirname(os.path.abspath(__file__)) + "/bench_merged_work.duckdb"
+WORK_DB = os.path.dirname(os.path.abspath(__file__)) + "/bench_merged_work.db"
 COLLECTION = "default"
 WARMUP_RUNS = 5
 BENCH_RUNS = 50
@@ -21,9 +21,9 @@ BENCH_RUNS = 50
 
 def merge_databases():
     """Merge all conversation databases into one."""
-    db_files = sorted(glob.glob(CACHE_DIR + "/conv-*.duckdb"))
+    db_files = sorted(glob.glob(CACHE_DIR + "/conv-*.db"))
     if not db_files:
-        raise RuntimeError(f"No .duckdb files found in {CACHE_DIR}")
+        raise RuntimeError(f"No .db files found in {CACHE_DIR}")
 
     if os.path.exists(WORK_DB):
         os.remove(WORK_DB)
@@ -40,7 +40,7 @@ def merge_databases():
     if os.path.exists(src_replica):
         shutil.copy2(src_replica, replica)
 
-    conn = duckdb.connect(WORK_DB)
+    conn = sqlite3.connect(WORK_DB)
 
     # Merge remaining databases
     tables_to_merge = [
@@ -231,7 +231,7 @@ def run_benchmark():
     print("Phase 1: WITHOUT extra indexes (baseline)")
     print("=" * 70)
 
-    conn = duckdb.connect(WORK_DB)
+    conn = sqlite3.connect(WORK_DB)
     entities = get_real_entities(conn)
     user_ids = get_real_user_ids(conn)
     user_id = user_ids[0]
@@ -262,7 +262,7 @@ def run_benchmark():
     print("Phase 2: WITH B-tree indexes")
     print("=" * 70)
 
-    conn = duckdb.connect(WORK_DB)
+    conn = sqlite3.connect(WORK_DB)
     add_indexes(conn)
     print()
 

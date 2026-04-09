@@ -31,8 +31,8 @@ struct Cli {
     #[arg(long, default_value = "8080")]
     port: u16,
 
-    /// DuckDB database path
-    #[arg(long, default_value = "memory.duckdb")]
+    /// SQLite database path
+    #[arg(long, default_value = "memory.db")]
     db_path: String,
 
     /// Embedding dimensions

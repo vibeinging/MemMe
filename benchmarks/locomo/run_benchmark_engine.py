@@ -224,7 +224,7 @@ def ingest_conversation_engine(config: BenchConfig, conv: dict):
 
     # Use file-based db so we can reuse ingested data
     cache_dir = os.environ.get("MEMME_CACHE_DIR", "cache")
-    db_path = f"{cache_dir}/{sample_id}.duckdb"
+    db_path = f"{cache_dir}/{sample_id}.db"
     os.makedirs(cache_dir, exist_ok=True)
     skip_ingest = os.path.exists(db_path) and getattr(config, 'reuse_cache', False)
 
@@ -627,7 +627,7 @@ def main():
     parser.add_argument("--output-dir", default="results_engine")
     parser.add_argument("--max-llm-concurrent", type=int, default=5)
     parser.add_argument("--results-only", type=str, default=None)
-    parser.add_argument("--reuse-cache", action="store_true", help="Skip ingestion, reuse cached .duckdb files")
+    parser.add_argument("--reuse-cache", action="store_true", help="Skip ingestion, reuse cached .db files")
     parser.add_argument("--enable-forgetting-curve", action="store_true", default=False)
     parser.add_argument("--rrf-vector-weight", type=float, default=0.5)
     parser.add_argument("--rrf-fts-weight", type=float, default=0.3)

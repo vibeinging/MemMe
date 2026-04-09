@@ -181,6 +181,26 @@ pub(crate) fn compute_retention(updated_at: &str, stability: f32) -> f32 {
     retention.clamp(0.0, 1.0)
 }
 
+/// Interference-based forgetting discount (cognitive science model).
+///
+/// When a user accumulates many memories, similar memories compete for
+/// retrieval — this is "crowding interference". The discount is logarithmic
+/// so it grows slowly and never drops below 0.70 (max 30% penalty).
+///
+/// - < 50 memories: no interference (discount = 1.0)
+/// - 50–500 memories: mild discount (≈ 0.95–0.85)
+/// - 500+ memories: stronger discount (≈ 0.85–0.70)
+pub(crate) fn interference_discount(memory_count: usize) -> f32 {
+    let count = memory_count as f32;
+    if count < 50.0 {
+        1.0
+    } else {
+        // 1.0 / (1.0 + log2(count / 50) * 0.15)
+        let discount = 1.0 / (1.0 + (count / 50.0).log2() * 0.15);
+        discount.max(0.70)
+    }
+}
+
 /// Parse a timestamp string and return days elapsed since then.
 ///
 /// Handles formats: `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM:SS`,

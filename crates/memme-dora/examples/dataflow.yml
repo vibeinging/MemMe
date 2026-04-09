@@ -40,7 +40,7 @@ nodes:
         - results
         - error
       env:
-        MEMME_DB_PATH: ./robot_memory.duckdb
+        MEMME_DB_PATH: ./robot_memory.db
         MEMME_COLLECTION: dialogue
         OPENAI_API_KEY: env:OPENAI_API_KEY
 

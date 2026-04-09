@@ -16,7 +16,7 @@ name = "memme_ffi"
 [dependencies]
 uniffi = { version = "0.29", features = ["cli"] }
 thiserror.workspace = true
-memme-core = { workspace = true, default-features = false, features = ["bundled"] }
+memme-core = { workspace = true, default-features = false }
 memme-llm = { workspace = true }
 memme-embeddings = { workspace = true, default-features = false }
 serde_json = { workspace = true }

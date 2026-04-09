@@ -6,11 +6,7 @@ Thank you for your interest in contributing to MemMe! This document provides gui
 
 - **Rust 1.77+** (install via [rustup](https://rustup.rs/))
 - **Git** with submodule support
-- **DuckDB** (optional -- the default `bundled` feature compiles DuckDB from source)
-
 ### Optional
-
-- **CMake 3.20+** -- required only if building with the `memme-db` feature (DuckDB + MemMe-DB extension)
 - **Node.js 18+** -- for `memme-node` binding development
 - **Python 3.9+** -- for `memme-python` binding development
 - **wasm-pack** -- for `memme-wasm` development
@@ -22,7 +18,7 @@ Thank you for your interest in contributing to MemMe! This document provides gui
 git clone --recursive https://github.com/vibeinging/MemMe.git
 cd MemMe
 
-# Build the core crate (uses bundled DuckDB by default)
+# Build the core crate
 cargo build -p memme-core
 
 # Build all binding crates

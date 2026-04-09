@@ -64,13 +64,15 @@ const _: () = {
 enum DeferredWrite {
     IncrementAccess(String),
     ReinforceStability(String, f32),
+    /// Mark a session as queried (feedback-driven consolidation).
+    MarkSessionQueried(String),
 }
 
 /// Main entry point for all memory operations.
 ///
 /// `MemoryStore` is the public API surface of `memme-core`. It manages the full
 /// memory lifecycle: adding, searching, updating, deleting, and consolidating
-/// memories backed by DuckDB storage and vector embeddings.
+/// memories backed by SQLite storage and vector embeddings.
 ///
 /// # Creating a store
 ///
@@ -111,12 +113,22 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Create a new MemoryStore, opening (or creating) the database and
-    /// initializing the schema.
+    /// Create a new MemoryStore, opening (or creating) the SQLite database
+    /// and initializing the schema.
     pub fn new(config: MemoryConfig, embedder: Arc<dyn Embedder>) -> Result<Self> {
+        let storage = Storage::open(config.clone())?;
+        info!(db_path = %config.db_path, collection = %config.collection_name, "MemoryStore initialized (SQLite)");
+        Self::from_storage(storage, config, embedder)
+    }
+
+    /// Shared builder: validates config + embedder, then assembles `Self`.
+    fn from_storage(
+        storage: Storage,
+        config: MemoryConfig,
+        embedder: Arc<dyn Embedder>,
+    ) -> Result<Self> {
         config.validate()?;
 
-        // Validate that embedder dims match config
         if embedder.dimensions() != config.embedding_dims {
             return Err(MemoryError::Config(format!(
                 "Embedder dimension {} does not match config dimension {}",
@@ -124,9 +136,6 @@ impl MemoryStore {
                 config.embedding_dims,
             )));
         }
-
-        let storage = Storage::open(config.clone())?;
-        info!(db_path = %config.db_path, collection = %config.collection_name, "MemoryStore initialized");
 
         #[cfg(feature = "webhooks")]
         let webhook_manager = config
@@ -141,7 +150,7 @@ impl MemoryStore {
             llm: Mutex::new(None),
             #[cfg(feature = "webhooks")]
             webhook_manager,
-            battery_level: AtomicU32::new(100), // default: full battery
+            battery_level: AtomicU32::new(100),
             battery_charging: AtomicU32::new(0),
             deferred_ops: Mutex::new(Vec::new()),
             deferred_writes: Mutex::new(Vec::new()),
@@ -169,6 +178,9 @@ impl MemoryStore {
                 }
                 DeferredWrite::ReinforceStability(id, factor) => {
                     let _ = self.storage.reinforce_stability(&id, factor);
+                }
+                DeferredWrite::MarkSessionQueried(session_id) => {
+                    let _ = self.storage.mark_session_queried(&session_id);
                 }
             }
         }
@@ -306,14 +318,54 @@ impl MemoryStore {
             }
         }
 
+        // Fast path: exact content hash match — skip embedding computation
+        let hash = content_hash(content);
+        if let Some((existing_id, existing_content)) = self.storage.find_by_hash(
+            &hash,
+            &options.user_id,
+            options.agent_id.as_deref(),
+            None,
+            None,
+        )? {
+            if existing_content == content {
+                debug!(id = %existing_id, "Exact hash match — skipping embedding computation");
+
+                // Update metadata and timestamp only — no embedding recomputation needed
+                self.storage.update_metadata_on_dedup(
+                    &existing_id,
+                    options.metadata.as_ref(),
+                )?;
+
+                let history_id = Uuid::new_v4().to_string();
+                self.storage.record_history(
+                    &history_id,
+                    &existing_id,
+                    &options.user_id,
+                    Some(&existing_content),
+                    content,
+                    HistoryEvent::Update.as_str(),
+                )?;
+                let _ = self.storage.bump_sync_version(&existing_id, None);
+
+                #[cfg(feature = "webhooks")]
+                self.fire_webhook(
+                    WebhookEvent::MemoryUpdate,
+                    &existing_id,
+                    serde_json::json!({"content": content, "dedup": true}),
+                );
+
+                return self
+                    .get_trace(&existing_id)?
+                    .ok_or_else(|| MemoryError::NotFound(existing_id));
+            }
+        }
+
         let embedding = self
             .embedder
             .embed(content)
             .map_err(MemoryError::Embedding)?;
 
-        let hash = content_hash(content);
-
-        // Check for duplicates
+        // Check for duplicates (vector similarity + hash)
         let dedup = dedup::check_dedup(
             &self.storage,
             &embedding,
@@ -455,6 +507,155 @@ impl MemoryStore {
                 Ok(result)
             }
         }
+    }
+
+    /// Add multiple memories in batch. Embeddings are computed in a single
+    /// batch API call, then each memory is deduped and stored individually.
+    ///
+    /// This is significantly faster than calling `add()` in a loop when
+    /// using an API-based embedder (one HTTP request instead of N).
+    ///
+    /// Returns results for successfully added/updated memories.
+    /// Failures for individual items are logged and skipped.
+    pub fn add_batch(
+        &self,
+        items: &[(String, AddOptions)],
+    ) -> Result<Vec<MemoryResult>> {
+        self.flush_deferred_writes();
+
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Filter out empty content
+        let valid_items: Vec<&(String, AddOptions)> = items
+            .iter()
+            .filter(|(content, _)| !content.trim().is_empty())
+            .collect();
+
+        if valid_items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch embed all texts in one API call
+        let texts: Vec<&str> = valid_items.iter().map(|(c, _)| c.as_str()).collect();
+        let embeddings = self
+            .embedder
+            .embed_batch(&texts)
+            .map_err(MemoryError::Embedding)?;
+
+        // Process each item with its pre-computed embedding
+        let mut results = Vec::new();
+        for (i, (content, options)) in valid_items.into_iter().enumerate() {
+            let embedding = &embeddings[i];
+            let hash = content_hash(content);
+
+            // Dedup check
+            let dedup = dedup::check_dedup(
+                &self.storage,
+                embedding,
+                &hash,
+                content,
+                &options.user_id,
+                options.agent_id.as_deref(),
+                self.config.dedup_threshold,
+            )?;
+
+            match dedup {
+                DedupResult::Duplicate {
+                    existing_id,
+                    existing_content,
+                } => {
+                    let meta_update = Some(options.metadata.as_ref());
+                    self.storage.update_memory(
+                        &existing_id,
+                        content,
+                        embedding,
+                        &hash,
+                        meta_update,
+                        None,
+                    )?;
+
+                    let history_id = Uuid::new_v4().to_string();
+                    let _ = self.storage.record_history(
+                        &history_id,
+                        &existing_id,
+                        &options.user_id,
+                        Some(&existing_content),
+                        content,
+                        HistoryEvent::Update.as_str(),
+                    );
+                    let _ = self.storage.bump_sync_version(&existing_id, None);
+
+                    if let Ok(Some(r)) = self.get_trace_no_access(&existing_id) {
+                        results.push(r);
+                    }
+                }
+                DedupResult::New => {
+                    let id = Uuid::new_v4().to_string();
+                    let metadata_str = options
+                        .metadata
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()?;
+
+                    let initial_stability = if self.config.enable_forgetting_curve {
+                        let imp = options.importance.unwrap_or(0.5);
+                        Some(initial_stability_for_tier(imp, 0))
+                    } else {
+                        None
+                    };
+
+                    if let Err(e) = self.storage.insert_memory(
+                        &id,
+                        content,
+                        embedding,
+                        &options.user_id,
+                        &hash,
+                        &InsertMemoryParams {
+                            agent_id: options.agent_id.clone(),
+                            run_id: options.run_id.clone(),
+                            app_id: options.app_id.clone(),
+                            actor_id: options.actor_id.clone(),
+                            metadata: metadata_str,
+                            importance: options.importance,
+                            immutable: options.immutable,
+                            expiration_date: options.expiration_date.clone(),
+                            categories: options.categories.clone(),
+                            memory_type: options.memory_type.clone(),
+                            stability: initial_stability,
+                            privacy: Some(options.privacy.as_str().to_string()),
+                            event_time: options.event_time.clone(),
+                            episode_id: options.episode_id.clone(),
+                            session_id: options.session_id.clone(),
+                            ..Default::default()
+                        },
+                    ) {
+                        tracing::warn!(id = %id, error = %e, "Failed to insert memory in batch");
+                        continue;
+                    }
+
+                    let history_id = Uuid::new_v4().to_string();
+                    let _ = self.storage.record_history(
+                        &history_id, &id, &options.user_id, None, content,
+                        HistoryEvent::Add.as_str(),
+                    );
+                    let _ = self.storage.bump_sync_version(&id, None);
+
+                    if let Ok(Some(r)) = self.get_trace_no_access(&id) {
+                        results.push(r);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Internal: get a trace without bumping access count (for batch operations).
+    fn get_trace_no_access(&self, id: &str) -> Result<Option<MemoryResult>> {
+        let row = self.storage.get_memory(id)?;
+        Ok(row.map(helpers::row_to_result))
     }
 
     /// Get a single trace by its ID.
@@ -604,7 +805,7 @@ impl MemoryStore {
     }
 
     /// Reset the entire store — delete ALL data.
-    /// For production use, simply delete the .duckdb file instead.
+    /// For production use, simply delete the .db file instead.
     pub fn reset(&self) -> Result<()> {
         self.storage.reset()?;
         info!("Store reset — all data deleted");

@@ -1,7 +1,7 @@
 //! Replica management: CHECKPOINT + atomic file copy for data safety.
 //!
 //! Guarantees that at least one complete copy of the database exists on disk
-//! at all times. The replica is a full binary copy of the primary .duckdb file.
+//! at all times. The replica is a full binary copy of the primary database file.
 
 use std::fs;
 use std::path::Path;
@@ -27,12 +27,9 @@ impl Storage {
     /// CHECKPOINT (flush WAL) then atomic file copy from primary to `dst`.
     fn checkpoint_and_copy(&self, dst: &str) -> Result<u64> {
         let primary = &self.config.db_path;
-        {
-            let conn = self.write_conn();
-            conn.execute_batch("CHECKPOINT")
-                .map_err(MemoryError::DuckDb)?;
-        }
-        // Lock released — file copy does not block reads/writes
+        // Flush WAL via the backend abstraction
+        self.backend.execute_batch(self.dialect().checkpoint_sql())?;
+        // File copy does not block reads/writes
         atomic_copy(primary, dst)?;
         Ok(fs::metadata(dst).map(|m| m.len()).unwrap_or(0))
     }
@@ -106,17 +103,11 @@ impl Storage {
 
         let primary = &self.config.db_path;
 
-        // Gather metadata before CHECKPOINT so a metadata query failure
-        // doesn't mask a successful backup.
-        let memory_count = {
-            let conn = self.read_conn();
-            let mut stmt = conn.prepare("SELECT COUNT(*) FROM memories")?;
-            let count: i64 = stmt
-                .query_map([], |row| row.get(0))?
-                .next()
-                .expect("aggregate always returns a row")?;
-            count as u64
-        };
+        // Gather metadata via Backend API
+        let memory_count = self.backend.query_count(
+            "SELECT COUNT(*) FROM memories",
+            &[],
+        )? as u64;
         let schema_version = Self::SCHEMA_VERSION.to_string();
 
         let size_bytes = self.checkpoint_and_copy(backup_path)?;
@@ -141,9 +132,46 @@ impl Storage {
     }
 }
 
+/// Validate that a database file is a real SQLite database with tables.
+/// SQLite will happily open any file as an empty database, so we also
+/// verify that `sqlite_master` contains at least one table.
+fn validate_db_file(path: &str) -> Result<()> {
+    let conn = rusqlite::Connection::open(path)
+        .map_err(|e| MemoryError::Config(format!("Cannot open database: {e}")))?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| MemoryError::Config(format!("Not a valid database: {e}")))?;
+    if count == 0 {
+        return Err(MemoryError::Config(format!(
+            "Backup file has no tables: {path}"
+        )));
+    }
+    Ok(())
+}
+
+/// Check if a database file can be opened and contains tables.
+#[allow(dead_code)]
+fn is_db_file_valid(path: &str) -> bool {
+    let conn = match rusqlite::Connection::open(path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .unwrap_or(false)
+}
+
 /// Restore primary database from a backup file.
 ///
-/// Validates the backup is a readable DuckDB file, then performs an atomic copy
+/// Validates the backup is a readable database file, then performs an atomic copy
 /// to `primary_path`. The caller must re-open `Storage` after this call.
 pub(crate) fn restore_from_backup(backup_path: &str, primary_path: &str) -> Result<()> {
     if primary_path == ":memory:" {
@@ -157,10 +185,7 @@ pub(crate) fn restore_from_backup(backup_path: &str, primary_path: &str) -> Resu
         )));
     }
 
-    // Validate that the file is a readable DuckDB database
-    duckdb::Connection::open(backup_path).map_err(|e| {
-        MemoryError::Config(format!("Backup file is not a valid DuckDB database: {e}"))
-    })?;
+    validate_db_file(backup_path)?;
 
     atomic_copy(backup_path, primary_path)?;
     info!(
@@ -172,9 +197,10 @@ pub(crate) fn restore_from_backup(backup_path: &str, primary_path: &str) -> Resu
 }
 
 /// Attempt to recover from a corrupted primary by copying the replica over it.
-/// Called during startup before the connection pool is created.
+/// Called during startup before the connection is created.
 ///
 /// Returns `true` if recovery was performed.
+#[allow(dead_code)]
 pub(crate) fn try_recover_from_replica(db_path: &str) -> bool {
     let replica = replica_path_for(db_path);
     if !Path::new(&replica).exists() {
@@ -182,7 +208,7 @@ pub(crate) fn try_recover_from_replica(db_path: &str) -> bool {
     }
 
     // Try opening primary to see if it's valid
-    if duckdb::Connection::open(db_path).is_ok() {
+    if is_db_file_valid(db_path) {
         return false; // primary is fine
     }
 
@@ -276,7 +302,7 @@ mod tests {
 
     fn temp_db_path() -> String {
         let id = uuid::Uuid::new_v4();
-        format!("/tmp/memme_test_replica_{id}.duckdb")
+        format!("/tmp/memme_test_replica_{id}.db")
     }
 
     fn cleanup(path: &str) {
@@ -386,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_restore_no_replica_returns_error() {
-        let db_path = "/tmp/memme_no_replica_test.duckdb";
+        let db_path = "/tmp/memme_no_replica_test.db";
         let _ = fs::remove_file(&format!("{db_path}.replica"));
         let err = restore_primary_from_replica(db_path);
         assert!(err.is_err());
@@ -401,7 +427,7 @@ mod tests {
 
     fn temp_backup_path() -> String {
         let id = uuid::Uuid::new_v4();
-        format!("/tmp/memme_test_backup_{id}.duckdb")
+        format!("/tmp/memme_test_backup_{id}.db")
     }
 
     #[test]
@@ -455,7 +481,7 @@ mod tests {
         let config = MemoryConfig::new(":memory:", 384);
         let storage = Storage::open(config).unwrap();
 
-        let result = storage.backup_to_path("/tmp/should_not_exist.duckdb");
+        let result = storage.backup_to_path("/tmp/should_not_exist.db");
         assert!(result.is_err());
     }
 
@@ -494,17 +520,17 @@ mod tests {
     #[test]
     fn test_restore_nonexistent_backup() {
         let id = uuid::Uuid::new_v4();
-        let path = format!("/tmp/memme_nonexistent_{id}.duckdb");
-        let result = restore_from_backup(&path, "/tmp/target.duckdb");
+        let path = format!("/tmp/memme_nonexistent_{id}.db");
+        let result = restore_from_backup(&path, "/tmp/target.db");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_restore_invalid_backup() {
         let invalid_path = temp_backup_path();
-        fs::write(&invalid_path, b"not a duckdb file").unwrap();
+        fs::write(&invalid_path, b"not a database file").unwrap();
 
-        let result = restore_from_backup(&invalid_path, "/tmp/target.duckdb");
+        let result = restore_from_backup(&invalid_path, "/tmp/target.db");
         assert!(result.is_err());
 
         cleanup_backup(&invalid_path);
@@ -512,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_restore_to_memory_db_returns_error() {
-        let result = restore_from_backup("/tmp/some_backup.duckdb", ":memory:");
+        let result = restore_from_backup("/tmp/some_backup.db", ":memory:");
         assert!(result.is_err());
     }
 }

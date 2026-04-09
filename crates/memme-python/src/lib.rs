@@ -32,7 +32,7 @@ fn shared_runtime() -> &'static tokio::runtime::Runtime {
 /// Python's GIL ensures single-threaded access anyway.
 ///
 /// LLM provider is managed internally by the Rust MemoryStore and persisted
-/// in the DuckDB database — no separate Python-side caching needed.
+/// in the SQLite database — no separate Python-side caching needed.
 #[pyclass]
 struct MemoryStore {
     inner: memme_core::memory::MemoryStore,
@@ -47,7 +47,7 @@ impl MemoryStore {
     /// Create a new MemoryStore.
     ///
     /// Args:
-    ///     db_path: Path to DuckDB file, or ":memory:" for in-memory.
+    ///     db_path: Path to SQLite file, or ":memory:" for in-memory.
     ///     embedder: "onnx" (default, local), "openai", or "mock" (testing).
     ///     api_key: API key for OpenAI embedder.
     ///     base_url: Custom API base URL (OpenAI-compatible).
@@ -58,7 +58,7 @@ impl MemoryStore {
     ///     llm_model: LLM model name (default depends on provider).
     ///     llm_base_url: Custom LLM API base URL.
     #[new]
-    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None))]
+    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rrf_event_weight=None, event_memory_threshold=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None))]
     fn new(
         db_path: &str,
         embedder: &str,
@@ -78,6 +78,8 @@ impl MemoryStore {
         rrf_entity_weight: Option<f64>,
         rrf_k: Option<usize>,
         rrf_temporal_weight: Option<f64>,
+        rrf_event_weight: Option<f64>,
+        event_memory_threshold: Option<usize>,
         rerank_api_key: Option<&str>,
         rerank_base_url: Option<&str>,
         rerank_model: Option<&str>,
@@ -150,6 +152,12 @@ impl MemoryStore {
         }
         if let Some(w) = rrf_temporal_weight {
             config.rrf_temporal_weight = w;
+        }
+        if let Some(w) = rrf_event_weight {
+            config.rrf_event_weight = w;
+        }
+        if let Some(t) = event_memory_threshold {
+            config.event_memory_threshold = t;
         }
         if rerank_api_key.is_some() {
             config.enable_rerank = true;
@@ -816,7 +824,7 @@ fn parse_metadata(metadata: Option<&str>) -> PyResult<Option<serde_json::Value>>
         .map_err(|e| PyRuntimeError::new_err(format!("Invalid metadata JSON: {e}")))
 }
 
-/// MemMe: Edge-first AI memory engine powered by DuckDB.
+/// MemMe: Edge-first AI memory engine powered by SQLite.
 #[pymodule]
 fn memme(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MemoryStore>()?;

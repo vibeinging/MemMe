@@ -49,7 +49,7 @@ impl fmt::Display for DiagnoseReport {
 impl super::MemoryStore {
     /// Run diagnostic checks on all configured components.
     ///
-    /// Tests: storage (DuckDB), embedder (embed a short string), LLM (if configured).
+    /// Tests: storage (SQLite), embedder (embed a short string), LLM (if configured).
     /// Returns a report with per-check latency and error details.
     pub fn diagnose(&self) -> DiagnoseReport {
         let mut checks = Vec::new();
@@ -78,7 +78,7 @@ fn check_storage(storage: &crate::storage::Storage) -> CheckResult {
             name: "storage",
             ok: true,
             latency_ms,
-            detail: "DuckDB responsive".to_string(),
+            detail: "SQLite responsive".to_string(),
         },
         Err(e) => CheckResult {
             name: "storage",

@@ -238,22 +238,11 @@ fn test_add_records_history() {
     let store = make_store(384);
     let added = store.add("history test", AddOptions::new("user1")).unwrap();
 
-    // Check that a history event was recorded
-    let conn = store.storage.read_conn();
-    let mut stmt = conn
-        .prepare("SELECT event, new_memory FROM history WHERE memory_id = $1")
-        .unwrap();
-    let rows: Vec<(String, String)> = stmt
-        .query_map(duckdb::params![&added.id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .unwrap()
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .unwrap();
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].0, "ADD");
-    assert_eq!(rows[0].1, "history test");
+    // Check that a history event was recorded via the public API
+    let history = store.trace_history(&added.id).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].event, "ADD");
+    assert_eq!(history[0].new_memory, "history test");
 }
 
 #[test]

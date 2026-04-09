@@ -1,4 +1,4 @@
-//! OLAP analytics powered by DuckDB's analytical engine.
+//! OLAP analytics powered by the storage engine.
 //! Provides insights into memory usage patterns.
 
 use serde::{Deserialize, Serialize};

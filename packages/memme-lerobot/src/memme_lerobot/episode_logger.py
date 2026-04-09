@@ -36,7 +36,7 @@ class EpisodeLogger(MemoryMixin):
         self,
         *,
         user_id: str = "robot",
-        db_path: str = "robot_memory.duckdb",
+        db_path: str = "robot_memory.db",
         embedder: str = "onnx",
         api_key: str | None = None,
         llm_provider: str = "openai",

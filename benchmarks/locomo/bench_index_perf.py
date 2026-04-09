@@ -9,7 +9,7 @@ Tests the three bottleneck SQL patterns identified in the analysis:
   4. Full vector+filter search pattern
 """
 
-import duckdb
+import sqlite3
 import time
 import shutil
 import os
@@ -17,8 +17,8 @@ import statistics
 import json
 
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__)) + "/cache"
-SOURCE_DB = CACHE_DIR + "/conv-26.duckdb"
-WORK_DB = os.path.dirname(os.path.abspath(__file__)) + "/bench_index_perf_work.duckdb"
+SOURCE_DB = CACHE_DIR + "/conv-26.db"
+WORK_DB = os.path.dirname(os.path.abspath(__file__)) + "/bench_index_perf_work.db"
 COLLECTION = "default"
 WARMUP_RUNS = 3
 BENCH_RUNS = 20
@@ -188,7 +188,7 @@ def run_benchmark():
     print("Phase 1: WITHOUT extra indexes (baseline)")
     print("=" * 60)
 
-    conn = duckdb.connect(WORK_DB)
+    conn = sqlite3.connect(WORK_DB)
     entities = get_real_entities(conn)
     user_id = get_real_user_id(conn)
     embedding = get_sample_embedding(conn)
@@ -221,7 +221,7 @@ def run_benchmark():
     print("Phase 2: WITH B-tree indexes")
     print("=" * 60)
 
-    conn = duckdb.connect(WORK_DB)
+    conn = sqlite3.connect(WORK_DB)
     add_indexes(conn)
 
     # Re-run same queries

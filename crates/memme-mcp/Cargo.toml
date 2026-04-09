@@ -14,7 +14,7 @@ name = "memme-mcp"
 path = "src/main.rs"
 
 [dependencies]
-memme-core = { workspace = true, features = ["bundled", "webhooks"] }
+memme-core = { workspace = true, features = ["webhooks"] }
 memme-embeddings = { workspace = true, features = ["openai"] }
 memme-llm = { workspace = true, features = ["openai"] }
 tokio.workspace = true

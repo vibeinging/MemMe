@@ -8,7 +8,7 @@
 //! (
 //!     tasks: [
 //!         (id: "memme", type: "cu_memme::MemMeTask", config: {
-//!             "db_path": "robot_memory.duckdb",
+//!             "db_path": "robot_memory.db",
 //!             "user_id": "robot-001",
 //!             "embedding_dims": "384",
 //!         }),

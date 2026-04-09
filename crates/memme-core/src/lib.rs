@@ -1,6 +1,6 @@
 //! # memme-core
 //!
-//! Core library for MemMe — an edge-first AI memory engine backed by DuckDB.
+//! Core library for MemMe — an edge-first AI memory engine backed by SQLite.
 //!
 //! This crate provides the main [`MemoryStore`] API for storing, searching, and
 //! managing memories with vector similarity, knowledge graphs, and an Ebbinghaus

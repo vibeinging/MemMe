@@ -1,40 +1,50 @@
-use duckdb::params;
-
 use crate::error::Result;
-use crate::types::{Event, EventType, IngestEventOptions, ListEventsOptions, Source};
+use crate::types::{Event, EventType, IngestEventOptions, ListEventsOptions, Source, SqlParam};
 
+use super::backend::RowAccess;
 use super::util::opt_text;
 use super::Storage;
 
-/// Standard columns for Event SELECT queries.
-const EVENT_COLS: &str = "event_id, source_id, session_id, CAST(timestamp AS VARCHAR), \
-    event_type, content, parent_id, metadata, user_id, \
-    processed, CAST(processed_at AS VARCHAR), \
-    purified_content, purified, CAST(event_time AS VARCHAR), location";
+/// Generate event SELECT columns.
+fn event_cols() -> &'static str {
+    "event_id, source_id, session_id, timestamp, event_type, content, parent_id, metadata, user_id, processed, processed_at, purified_content, purified, event_time, location"
+}
 
-/// Map a DuckDB row to an Event struct. Expects columns in standard order:
+/// Map a row to an Event struct. Expects columns in standard order:
 /// event_id(0), source_id(1), session_id(2), timestamp(3), event_type(4),
 /// content(5), parent_id(6), metadata(7), user_id(8), processed(9), processed_at(10),
 /// purified_content(11), purified(12), event_time(13), location(14)
-fn map_event_row(row: &duckdb::Row<'_>) -> duckdb::Result<Event> {
+fn map_event_row(row: &dyn RowAccess) -> Result<Event> {
     Ok(Event {
-        event_id: row.get(0)?,
-        source_id: row.get::<_, Option<String>>(1)?,
-        session_id: row.get::<_, Option<String>>(2)?,
-        timestamp: row.get::<_, String>(3)?,
-        event_type: EventType::parse(&row.get::<_, Option<String>>(4)?.unwrap_or_default()),
-        content: row.get(5)?,
-        parent_id: row.get::<_, Option<String>>(6)?,
+        event_id: row.get_string(0)?,
+        source_id: row.get_opt_string(1)?,
+        session_id: row.get_opt_string(2)?,
+        timestamp: row.get_string(3)?,
+        event_type: EventType::parse(&row.get_opt_string(4)?.unwrap_or_default()),
+        content: row.get_string(5)?,
+        parent_id: row.get_opt_string(6)?,
         metadata: row
-            .get::<_, Option<String>>(7)?
+            .get_opt_string(7)?
             .and_then(|s| serde_json::from_str(&s).ok()),
-        user_id: row.get(8)?,
-        processed: row.get::<_, Option<bool>>(9)?.unwrap_or(false),
-        processed_at: row.get::<_, Option<String>>(10)?,
-        purified_content: row.get::<_, Option<String>>(11)?,
-        purified: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
-        event_time: row.get::<_, Option<String>>(13)?,
-        location: row.get::<_, Option<String>>(14)?,
+        user_id: row.get_string(8)?,
+        processed: row.get_opt_bool(9)?.unwrap_or(false),
+        processed_at: row.get_opt_string(10)?,
+        purified_content: row.get_opt_string(11)?,
+        purified: row.get_opt_bool(12)?.unwrap_or(false),
+        event_time: row.get_opt_string(13)?,
+        location: row.get_opt_string(14)?,
+    })
+}
+
+fn map_source_row(row: &dyn RowAccess) -> Result<Source> {
+    Ok(Source {
+        source_id: row.get_string(0)?,
+        source_type: row.get_string(1)?,
+        name: row.get_opt_string(2)?,
+        registered_at: row.get_string(3)?,
+        metadata: row
+            .get_opt_string(4)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
     })
 }
 
@@ -51,10 +61,15 @@ impl Storage {
     ) -> Result<()> {
         let name_val = opt_text(name);
         let meta_val = opt_text(metadata.map(|m| serde_json::to_string(m).unwrap_or_default()));
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "INSERT INTO sources (source_id, source_type, name, metadata, user_id) VALUES ($1, $2, $3, $4, $5)",
-            params![source_id, source_type, name_val, meta_val, user_id],
+            &[
+                SqlParam::Text(source_id.to_string()),
+                SqlParam::Text(source_type.to_string()),
+                name_val,
+                meta_val,
+                SqlParam::Text(user_id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -62,48 +77,21 @@ impl Storage {
     /// Get a source by ID.
     #[allow(dead_code)] // planned API: stream source management
     pub(crate) fn get_source(&self, source_id: &str) -> Result<Option<Source>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            "SELECT source_id, source_type, name, CAST(registered_at AS VARCHAR), metadata FROM sources WHERE source_id = $1",
-        )?;
-        let mut rows = stmt.query_map(params![source_id], |row| {
-            Ok(Source {
-                source_id: row.get(0)?,
-                source_type: row.get(1)?,
-                name: row.get::<_, Option<String>>(2)?,
-                registered_at: row.get::<_, String>(3)?,
-                metadata: row
-                    .get::<_, Option<String>>(4)?
-                    .and_then(|s| serde_json::from_str(&s).ok()),
-            })
-        })?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+        self.backend.query_one(
+            "SELECT source_id, source_type, name, registered_at, metadata FROM sources WHERE source_id = $1",
+            &[SqlParam::Text(source_id.to_string())],
+            |row| map_source_row(row),
+        )
     }
 
     /// List all sources for a user.
     #[allow(dead_code)] // planned API: stream source management
     pub(crate) fn list_sources(&self, user_id: &str) -> Result<Vec<Source>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
-            "SELECT source_id, source_type, name, CAST(registered_at AS VARCHAR), metadata FROM sources WHERE user_id = $1 ORDER BY registered_at DESC",
-        )?;
-        let rows = stmt
-            .query_map(params![user_id], |row| {
-                Ok(Source {
-                    source_id: row.get(0)?,
-                    source_type: row.get(1)?,
-                    name: row.get::<_, Option<String>>(2)?,
-                    registered_at: row.get::<_, String>(3)?,
-                    metadata: row
-                        .get::<_, Option<String>>(4)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(
+            "SELECT source_id, source_type, name, registered_at, metadata FROM sources WHERE user_id = $1 ORDER BY registered_at DESC",
+            &[SqlParam::Text(user_id.to_string())],
+            |row| map_source_row(row),
+        )
     }
 
     /// Insert a new event into the stream.
@@ -118,7 +106,7 @@ impl Storage {
         let emb_literal = if content_vec.is_empty() {
             "NULL".to_string()
         } else {
-            Self::format_embedding(content_vec, self.config.embedding_dims)?
+            self.format_embedding(content_vec, self.config.embedding_dims)?
         };
         let event_type = options.event_type.as_deref().unwrap_or("system");
         let timestamp_val = opt_text(options.timestamp.as_deref());
@@ -132,23 +120,23 @@ impl Storage {
                 .map(|m| serde_json::to_string(m).unwrap_or_default()),
         );
 
+        let now_expr = self.dialect().current_timestamp_expr();
         let sql = format!(
             r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type, content, content_vec, parent_id, metadata, user_id)
-               VALUES ($1, $2, $3, CASE WHEN $4 IS NULL THEN current_timestamp ELSE CAST($4 AS TIMESTAMP) END, $5, $6, {emb_literal}, $7, $8, $9)"#
+               VALUES ($1, $2, $3, CASE WHEN $4 IS NULL THEN {now_expr} ELSE $4 END, $5, $6, {emb_literal}, $7, $8, $9)"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![
-                event_id,
+            &[
+                SqlParam::Text(event_id.to_string()),
                 source_val,
                 session_val,
                 timestamp_val,
-                event_type,
-                content,
+                SqlParam::Text(event_type.to_string()),
+                SqlParam::Text(content.to_string()),
                 parent_val,
                 meta_val,
-                &options.user_id
+                SqlParam::Text(options.user_id.clone()),
             ],
         )?;
         Ok(())
@@ -163,7 +151,7 @@ impl Storage {
         event_time: Option<&str>,
         location: Option<&str>,
     ) -> Result<()> {
-        // Normalize incomplete date formats that DuckDB can't parse as TIMESTAMP
+        // Normalize incomplete date formats for TIMESTAMP compatibility
         let normalized_time = event_time.map(|t| {
             let t = t.trim();
             if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
@@ -174,7 +162,7 @@ impl Storage {
                 t.to_string()
             }
         });
-        let emb_literal = Self::format_embedding(content_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(content_vec, self.config.embedding_dims)?;
         let sql = format!(
             r#"UPDATE events SET
                 purified_content = $1,
@@ -184,14 +172,13 @@ impl Storage {
                 location = $3
                WHERE event_id = $4"#
         );
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             &sql,
-            params![
-                purified_content,
-                normalized_time.as_deref(),
-                location,
-                event_id
+            &[
+                SqlParam::Text(purified_content.to_string()),
+                opt_text(normalized_time.as_deref()),
+                opt_text(location),
+                SqlParam::Text(event_id.to_string()),
             ],
         )?;
         Ok(())
@@ -200,29 +187,29 @@ impl Storage {
     /// List events with filters.
     pub(crate) fn list_events(&self, options: &ListEventsOptions) -> Result<Vec<Event>> {
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> =
+            vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref sid) = options.source_id {
             param_idx += 1;
             conditions.push(format!("source_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(sid.clone()));
+            dynamic_params.push(SqlParam::Text(sid.clone()));
         }
         if let Some(ref sess) = options.session_id {
             param_idx += 1;
             conditions.push(format!("session_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(sess.clone()));
+            dynamic_params.push(SqlParam::Text(sess.clone()));
         }
         if let Some(ref since) = options.since {
             param_idx += 1;
-            conditions.push(format!("timestamp >= CAST(${param_idx} AS TIMESTAMP)"));
-            dynamic_params.push(duckdb::types::Value::Text(since.clone()));
+            conditions.push(format!("timestamp >= ${param_idx}"));
+            dynamic_params.push(SqlParam::Text(since.clone()));
         }
         if let Some(ref until) = options.until {
             param_idx += 1;
-            conditions.push(format!("timestamp <= CAST(${param_idx} AS TIMESTAMP)"));
-            dynamic_params.push(duckdb::types::Value::Text(until.clone()));
+            conditions.push(format!("timestamp <= ${param_idx}"));
+            dynamic_params.push(SqlParam::Text(until.clone()));
         }
         if let Some(processed) = options.processed {
             conditions.push(format!("processed = {processed}"));
@@ -231,33 +218,21 @@ impl Storage {
 
         let limit = options.limit.unwrap_or(100);
         let where_clause = conditions.join(" AND ");
+        let cols = event_cols();
         let sql = format!(
-            "SELECT {EVENT_COLS} FROM events WHERE {where_clause} ORDER BY timestamp DESC LIMIT {limit}"
+            "SELECT {cols} FROM events WHERE {where_clause} ORDER BY timestamp DESC LIMIT {limit}"
         );
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(&sql, &dynamic_params, |row| map_event_row(row))
     }
 
     /// Get a single event by ID.
     pub(crate) fn get_event(&self, event_id: &str) -> Result<Option<Event>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {EVENT_COLS} FROM events WHERE event_id = $1"
-        ))?;
-        let mut rows = stmt.query_map(params![event_id], map_event_row)?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+        self.backend.query_one(
+            &format!("SELECT {} FROM events WHERE event_id = $1", event_cols()),
+            &[SqlParam::Text(event_id.to_string())],
+            |row| map_event_row(row),
+        )
     }
 
     /// Mark events as processed (batch UPDATE with WHERE IN).
@@ -270,14 +245,11 @@ impl Storage {
             "UPDATE events SET processed = true, processed_at = current_timestamp WHERE event_id IN ({})",
             placeholders.join(", ")
         );
-        let conn = self.write_conn();
-        let param_vals: Vec<duckdb::types::Value> = event_ids
+        let param_vals: Vec<SqlParam> = event_ids
             .iter()
-            .map(|id| duckdb::types::Value::Text(id.to_string()))
+            .map(|id| SqlParam::Text(id.to_string()))
             .collect();
-        let param_refs: Vec<&dyn duckdb::ToSql> =
-            param_vals.iter().map(|p| p as &dyn duckdb::ToSql).collect();
-        conn.execute(&sql, param_refs.as_slice())?;
+        self.backend.execute(&sql, &param_vals)?;
         Ok(())
     }
 
@@ -289,21 +261,15 @@ impl Storage {
         // Build IN clause with positional params
         let placeholders: Vec<String> = (1..=event_ids.len()).map(|i| format!("${i}")).collect();
         let sql = format!(
-            "SELECT {EVENT_COLS} FROM events WHERE event_id IN ({}) ORDER BY timestamp ASC",
+            "SELECT {} FROM events WHERE event_id IN ({}) ORDER BY timestamp ASC",
+            event_cols(),
             placeholders.join(", ")
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_vals: Vec<duckdb::types::Value> = event_ids
+        let param_vals: Vec<SqlParam> = event_ids
             .iter()
-            .map(|id| duckdb::types::Value::Text(id.clone()))
+            .map(|id| SqlParam::Text(id.clone()))
             .collect();
-        let param_refs: Vec<&dyn duckdb::ToSql> =
-            param_vals.iter().map(|p| p as &dyn duckdb::ToSql).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
     }
 
     /// Search events by vector similarity within a specific session/episode.
@@ -318,29 +284,52 @@ impl Storage {
         if event_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let emb_literal = Self::format_embedding(query_vec, self.config.embedding_dims)?;
+        let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
+        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
         let placeholders: Vec<String> = (1..=event_ids.len()).map(|i| format!("${i}")).collect();
+        let cols = event_cols();
         let sql = format!(
-            r#"SELECT {EVENT_COLS},
-                      array_cosine_distance(content_vec, {emb_literal}) AS distance
+            r#"SELECT {cols},
+                      {distance_expr} AS distance
                FROM events
                WHERE event_id IN ({})
                ORDER BY distance ASC
                LIMIT {limit}"#,
             placeholders.join(", ")
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_vals: Vec<duckdb::types::Value> = event_ids
+        let param_vals: Vec<SqlParam> = event_ids
             .iter()
-            .map(|id| duckdb::types::Value::Text(id.clone()))
+            .map(|id| SqlParam::Text(id.clone()))
             .collect();
-        let param_refs: Vec<&dyn duckdb::ToSql> =
-            param_vals.iter().map(|p| p as &dyn duckdb::ToSql).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
+    }
+
+    /// Search events by vector similarity for a user (no event_id constraint).
+    /// Used by the event search channel in multi-channel retrieval.
+    /// Returns (Event, distance) tuples sorted by ascending cosine distance.
+    pub(crate) fn search_events_by_vector_for_user(
+        &self,
+        query_vec: &[f32],
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(Event, f32)>> {
+        let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
+        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
+        let cols = event_cols();
+        let sql = format!(
+            r#"SELECT {cols},
+                      {distance_expr} AS distance
+               FROM events
+               WHERE user_id = $1
+                 AND content_vec IS NOT NULL
+               ORDER BY distance ASC
+               LIMIT {limit}"#,
+        );
+        self.backend.query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
+            let event = map_event_row(row)?;
+            let distance: f32 = row.get_f64(15).unwrap_or(2.0) as f32;
+            Ok((event, distance))
+        })
     }
 
     /// FTS (BM25) search on events, constrained to specific event IDs.
@@ -354,76 +343,64 @@ impl Storage {
         if event_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let fts_score = self.dialect().fts_match_score_expr("events", "e.event_id", "$1");
         let placeholders: Vec<String> =
             (2..=event_ids.len() + 1).map(|i| format!("${i}")).collect();
+        let cols = event_cols();
         let sql = format!(
-            r#"SELECT {EVENT_COLS}
+            r#"SELECT {cols}
                FROM events e
-               WHERE fts_main_events.match_bm25(e.event_id, $1) IS NOT NULL
+               WHERE {fts_score} IS NOT NULL
                  AND e.event_id IN ({})
-               ORDER BY fts_main_events.match_bm25(e.event_id, $1) DESC
+               ORDER BY {fts_score} DESC
                LIMIT {limit}"#,
             placeholders.join(", ")
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let mut param_vals: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(query.to_string())];
+        let mut param_vals: Vec<SqlParam> =
+            vec![SqlParam::Text(query.to_string())];
         for id in event_ids {
-            param_vals.push(duckdb::types::Value::Text(id.clone()));
+            param_vals.push(SqlParam::Text(id.clone()));
         }
-        let param_refs: Vec<&dyn duckdb::ToSql> =
-            param_vals.iter().map(|p| p as &dyn duckdb::ToSql).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
     }
 
     /// Count unprocessed events for a user.
     #[allow(dead_code)] // planned API: event processing status
     pub(crate) fn count_unprocessed_events(&self, user_id: &str) -> Result<u64> {
-        let conn = self.read_conn();
-        let mut stmt =
-            conn.prepare("SELECT COUNT(*) FROM events WHERE user_id = $1 AND processed = false")?;
-        let count: i64 = stmt
-            .query_map(params![user_id], |row| row.get(0))?
-            .next()
-            .expect("COUNT always returns a row")?;
+        let count = self.backend.query_count(
+            "SELECT COUNT(*) FROM events WHERE user_id = $1 AND processed = false",
+            &[SqlParam::Text(user_id.to_string())],
+        )?;
         Ok(count as u64)
     }
 
     /// Count unprocessed events in a specific session.
     pub(crate) fn count_unprocessed_events_in_session(&self, session_id: &str) -> Result<u64> {
-        let conn = self.read_conn();
-        let mut stmt = conn
-            .prepare("SELECT COUNT(*) FROM events WHERE session_id = $1 AND processed = false")?;
-        let count: i64 = stmt
-            .query_map(params![session_id], |row| row.get(0))?
-            .next()
-            .expect("COUNT always returns a row")?;
+        let count = self.backend.query_count(
+            "SELECT COUNT(*) FROM events WHERE session_id = $1 AND processed = false",
+            &[SqlParam::Text(session_id.to_string())],
+        )?;
         Ok(count as u64)
     }
 
     /// Get all unprocessed events in a session, ordered by timestamp.
     pub(crate) fn get_unprocessed_events_in_session(&self, session_id: &str) -> Result<Vec<Event>> {
+        let cols = event_cols();
         let sql = format!(
-            "SELECT {EVENT_COLS} FROM events WHERE session_id = $1 AND processed = false ORDER BY timestamp ASC"
+            "SELECT {cols} FROM events WHERE session_id = $1 AND processed = false ORDER BY timestamp ASC"
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![session_id], map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(
+            &sql,
+            &[SqlParam::Text(session_id.to_string())],
+            |row| map_event_row(row),
+        )
     }
 
     /// Reset all events in a session to unprocessed (for re-extraction).
     pub(crate) fn reset_events_processed(&self, session_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE events SET processed = false, processed_at = NULL WHERE session_id = $1",
-            params![session_id],
+            &[SqlParam::Text(session_id.to_string())],
         )?;
         Ok(())
     }
@@ -431,8 +408,10 @@ impl Storage {
     /// Delete all events for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_events(&self, user_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute("DELETE FROM events WHERE user_id = $1", params![user_id])?;
+        self.backend.execute(
+            "DELETE FROM events WHERE user_id = $1",
+            &[SqlParam::Text(user_id.to_string())],
+        )?;
         Ok(())
     }
 
@@ -443,31 +422,30 @@ impl Storage {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<Event>> {
+        let cols = event_cols();
         let sql = format!(
-            "SELECT {EVENT_COLS} FROM events WHERE session_id = $1 ORDER BY timestamp ASC LIMIT $2"
+            "SELECT {cols} FROM events WHERE session_id = $1 ORDER BY timestamp ASC LIMIT $2"
         );
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(params![session_id, limit as i64], map_event_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        self.backend.query_read(
+            &sql,
+            &[
+                SqlParam::Text(session_id.to_string()),
+                SqlParam::Int(limit as i64),
+            ],
+            |row| map_event_row(row),
+        )
     }
 
     /// Get the episode summary for a session (from memories table, resolution=Narrative).
     pub(crate) fn get_session_episode_summary(&self, session_id: &str) -> Result<Option<String>> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(
+        self.backend.query_one(
             r#"SELECT metadata->>'$.summary' as summary
                FROM memories
                WHERE session_id = $1 AND resolution = 'Narrative'
                ORDER BY created_at DESC
                LIMIT 1"#,
-        )?;
-        let mut rows = stmt.query_map(params![session_id], |row| row.get(0))?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
+            &[SqlParam::Text(session_id.to_string())],
+            |row| row.get_string(0),
+        )
     }
 }

@@ -155,6 +155,11 @@ impl super::MemoryStore {
             let mut episode_ids_to_mark: Vec<String> = Vec::new();
 
             for (ep_idx, episode) in episodes.iter().enumerate() {
+                // Per-episode timeout: 3 minutes max to prevent a single stalled
+                // LLM call from blocking the entire meditation run.
+                let ep_start = std::time::Instant::now();
+                let ep_timeout = std::time::Duration::from_secs(180);
+
                 let events = self.storage.get_events_by_ids(&episode.event_ids)?;
                 if events.is_empty() {
                     let _ = self.storage.mark_episode_meditated(&episode.episode_id);
@@ -188,9 +193,20 @@ impl super::MemoryStore {
                             ep_idx + 1,
                             episodes.len()
                         );
+                        episode_ids_to_mark.push(episode.episode_id.clone());
                         continue;
                     }
                 };
+
+                // Check per-episode timeout after the LLM call
+                if ep_start.elapsed() > ep_timeout {
+                    tracing::warn!(
+                        "Episode {}/{}: exceeded {}s timeout after fact extraction, skipping remaining steps",
+                        ep_idx + 1, episodes.len(), ep_timeout.as_secs()
+                    );
+                    episode_ids_to_mark.push(episode.episode_id.clone());
+                    continue;
+                }
 
                 let mut facts: Vec<String> = Vec::new();
                 let mut fact_meta: HashMap<String, FactMeta> = HashMap::new();
@@ -229,41 +245,61 @@ impl super::MemoryStore {
                     continue;
                 }
 
-                // ── Step 2: Store facts directly via add() ──
-                // Vector dedup (cosine distance < threshold) handles duplicates.
+                // ── Step 2: Store facts via batch add ──
+                // Batch embed all facts in one API call, then dedup + store each.
                 let mut all_new_memories: Vec<MemoryResult> = Vec::new();
 
-                for fact in &facts {
-                    let mut add_opts = AddOptions::new(&options.user_id);
-                    if let Some(meta) = fact_meta.get(fact) {
-                        if let Some(ref et) = meta.event_time {
-                            add_opts = add_opts.event_time(et);
+                let batch_items: Vec<(String, AddOptions)> = facts
+                    .iter()
+                    .map(|fact| {
+                        let mut add_opts = AddOptions::new(&options.user_id);
+                        if let Some(meta) = fact_meta.get(fact) {
+                            if let Some(ref et) = meta.event_time {
+                                add_opts = add_opts.event_time(et);
+                            }
+                            if let Some(ref sid) = meta.session_id {
+                                add_opts = add_opts.session_id(sid);
+                            }
+                            add_opts = add_opts.importance(meta.significance);
                         }
-                        if let Some(ref sid) = meta.session_id {
-                            add_opts = add_opts.session_id(sid);
-                        }
-                        add_opts = add_opts.importance(meta.significance);
+                        (fact.clone(), add_opts)
+                    })
+                    .collect();
+
+                match self.add_batch(&batch_items) {
+                    Ok(results) => {
+                        record.memories_created += results.len() as u32;
+                        all_new_memories.extend(results);
                     }
-                    match self.add(fact, add_opts) {
-                        Ok(result) => {
-                            all_new_memories.push(result);
-                            record.memories_created += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(text = %fact, error = %e, "Failed to add memory, skipping");
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Batch add failed, falling back to individual adds");
+                        // Fallback: try one by one
+                        for (fact, opts) in &batch_items {
+                            match self.add(fact, opts.clone()) {
+                                Ok(result) => {
+                                    all_new_memories.push(result);
+                                    record.memories_created += 1;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(text = %fact, error = %e, "Failed to add memory");
+                                }
+                            }
                         }
                     }
                 }
 
                 // ── Step 3: Graph extraction + entity linking ──
                 if let Some(ref gp) = graph_processor {
-                    self.process_graph_batch(
-                        gp,
-                        &text,
-                        &options.user_id,
-                        &all_new_memories,
-                        record,
-                    );
+                    // Skip graph if we're already past the timeout budget
+                    if ep_start.elapsed() <= ep_timeout {
+                        self.process_graph_batch(
+                            gp,
+                            &text,
+                            &options.user_id,
+                            &all_new_memories,
+                            record,
+                        );
+                    }
                 }
 
                 episode_ids_to_mark.push(episode.episode_id.clone());

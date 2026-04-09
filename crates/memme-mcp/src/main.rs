@@ -4,7 +4,7 @@
 //! with Claude Desktop, Cursor, Windsurf, and other MCP-compatible clients.
 //!
 //! Usage:
-//!   OPENAI_API_KEY=<your-api-key> memme-mcp [--db-path memory.duckdb]
+//!   OPENAI_API_KEY=<your-api-key> memme-mcp [--db-path memory.db]
 
 use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex};
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let db_path = std::env::args()
         .skip_while(|a| a != "--db-path")
         .nth(1)
-        .unwrap_or_else(|| "memory.duckdb".into());
+        .unwrap_or_else(|| "memory.db".into());
 
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
         eprintln!("Error: OPENAI_API_KEY env var required");

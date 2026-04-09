@@ -1,10 +1,10 @@
 # MemMe
 
-> Edge-first AI memory engine. Rust-native, single-file DuckDB storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
+> Edge-first AI memory engine. Rust-native, single-file SQLite storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
 
 ## Core Concepts
 
-- **Single-file DuckDB storage**: One `.duckdb` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
+- **Single-file SQLite storage**: One `.db` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
 - **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
 - **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
 - **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.
@@ -321,7 +321,7 @@ pub fn top_entities(&self, user_id: &str, limit: usize) -> Result<Vec<EntityStat
 
 ```rust
 pub struct MemoryConfig {
-    pub db_path: String,                          // default: "memory.duckdb"
+    pub db_path: String,                          // default: "memory.db"
     pub collection_name: String,                  // default: "default"
     pub embedding_dims: usize,                    // default: 384
     pub dedup_threshold: f32,                     // default: 0.15
@@ -678,7 +678,7 @@ Query
   +-- Channel 1: Vector Search (cosine similarity on embeddings)
   |     weight: 0.5 (rrf_vector_weight)
   |
-  +-- Channel 2: BM25 Full-Text Search (DuckDB FTS extension)
+  +-- Channel 2: BM25 Full-Text Search (SQLite FTS5)
   |     weight: 0.3 (rrf_fts_weight)
   |     activated when: SearchOptions.keyword_search = true
   |
@@ -747,7 +747,7 @@ use memme_embeddings::onnx::OnnxEmbedder;
 
 fn main() -> memme_core::Result<()> {
     // 1. Create store
-    let config = MemoryConfig::new("memory.duckdb", 384);
+    let config = MemoryConfig::new("memory.db", 384);
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
@@ -777,7 +777,7 @@ fn main() -> memme_core::Result<()> {
 from memme import MemoryStore
 
 # Create store (uses local ONNX embeddings by default)
-store = MemoryStore("memory.duckdb")
+store = MemoryStore("memory.db")
 
 # Add memories
 store.add("User prefers dark mode", user_id="alice")
@@ -806,7 +806,7 @@ results = store.hybrid_search("Tokyo startup", user_id="alice", limit=5)
 ```javascript
 const { MemoryStore } = require("memme");
 
-const store = new MemoryStore("memory.duckdb");
+const store = new MemoryStore("memory.db");
 await store.add("User prefers dark mode", { userId: "alice" });
 const results = await store.search("preferences", { userId: "alice" });
 console.log(results);
@@ -822,7 +822,7 @@ use memme_core::types::PruningStrategy;
 use memme_core::config::ExtractionDepth;
 
 let config = MemoryConfig {
-    db_path: "memory.duckdb".into(),
+    db_path: "memory.db".into(),
     collection_name: "default".into(),
     embedding_dims: 384,
     dedup_threshold: 0.15,

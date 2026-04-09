@@ -60,7 +60,7 @@ fn main() {
             vec!["learning", "language"],
         ),
         (
-            "User built a personal note-taking app using Rust and DuckDB",
+            "User built a personal note-taking app using Rust and SQLite",
             "user_alice",
             json!({"category": "projects"}),
             Some(0.8),

@@ -35,7 +35,7 @@ impl super::MemoryStore {
     /// Backup the database to a user-specified path.
     ///
     /// Performs CHECKPOINT (flush WAL) then atomic file copy.
-    /// The resulting file is a complete, self-contained DuckDB database
+    /// The resulting file is a complete, self-contained SQLite database
     /// that can be uploaded to cloud storage by the host application.
     ///
     /// Returns metadata about the backup (size, memory count, schema version).
@@ -46,7 +46,7 @@ impl super::MemoryStore {
 
     /// Restore the primary database from a backup file.
     ///
-    /// Validates the backup is a readable DuckDB file, then performs
+    /// Validates the backup is a readable database file, then performs
     /// an atomic copy to the primary database path.
     ///
     /// **Warning**: The caller must re-open the `MemoryStore` after calling this,

@@ -1,16 +1,16 @@
-use duckdb::params;
 use tracing::debug;
 
 use crate::error::{MemoryError, Result};
+use crate::types::SqlParam;
 
 use super::Storage;
 
-/// Convert an `Option<impl AsRef<str>>` to a DuckDB parameter value.
-/// `Some("text")` → `Value::Text`, `None` → `Value::Null`.
-pub(crate) fn opt_text(opt: Option<impl AsRef<str>>) -> duckdb::types::Value {
+/// Convert an `Option<impl AsRef<str>>` to a SQL parameter value.
+/// `Some("text")` → `SqlParam::Text`, `None` → `SqlParam::Null`.
+pub(crate) fn opt_text(opt: Option<impl AsRef<str>>) -> SqlParam {
     match opt {
-        Some(s) => duckdb::types::Value::Text(s.as_ref().to_string()),
-        None => duckdb::types::Value::Null,
+        Some(s) => SqlParam::Text(s.as_ref().to_string()),
+        None => SqlParam::Null,
     }
 }
 
@@ -18,68 +18,37 @@ impl Storage {
     /// Execute SQL that might fail (e.g. if MemMe-DB extension is not loaded),
     /// logging the error but not propagating it.
     pub(crate) fn execute_ignore_error(&self, sql: &str) {
-        let conn = self.write_conn();
-        if let Err(e) = conn.execute_batch(sql) {
-            tracing::warn!("SQL ignored (extension may not be loaded): {e}");
-            debug!("Failed SQL: {sql}");
-        }
+        self.backend.execute_batch_ignore(sql);
     }
 
-    // ── Helper: format a Vec<f32> as DuckDB array literal ──
+    // ── Helper: format a Vec<f32> as a SQL array literal ──
 
-    /// Convert an embedding vector to a DuckDB-compatible array literal string.
-    /// Example output: `[0.1, 0.2, 0.3]::FLOAT[384]`
-    pub(crate) fn format_embedding(embedding: &[f32], dims: usize) -> Result<String> {
-        if embedding.iter().any(|v| v.is_nan() || v.is_infinite()) {
-            return Err(MemoryError::Config(
-                "embedding contains NaN or Infinity".into(),
-            ));
-        }
-        let values: Vec<String> = embedding.iter().map(|v| format!("{v}")).collect();
-        Ok(format!("[{}]::FLOAT[{dims}]", values.join(",")))
+    /// Convert an embedding vector to a database-compatible array literal string.
+    /// Delegates to the configured SQL dialect.
+    pub(crate) fn format_embedding(&self, embedding: &[f32], dims: usize) -> Result<String> {
+        self.dialect().format_embedding_literal(embedding, dims)
     }
 
-    /// Format categories as a DuckDB list literal string, e.g. `['cat1', 'cat2']`
-    ///
-    /// Category names are validated to only allow alphanumeric, underscore,
-    /// hyphen, and space characters.
+    /// Format categories as a SQL list literal string.
+    /// Delegates validation and formatting to the configured SQL dialect.
     pub(crate) fn format_categories(
+        &self,
         categories: Option<&[String]>,
-    ) -> std::result::Result<String, MemoryError> {
+    ) -> Result<String> {
         match categories {
-            Some(cats) if !cats.is_empty() => {
-                for cat in cats {
-                    if !cat
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ')
-                    {
-                        return Err(MemoryError::Config(format!(
-                            "Invalid category name '{}': only alphanumeric, underscore, hyphen, and space allowed",
-                            cat
-                        )));
-                    }
-                    if cat.is_empty() {
-                        return Err(MemoryError::Config("Category name cannot be empty".into()));
-                    }
-                }
-                let items: Vec<String> = cats
-                    .iter()
-                    .map(|c| format!("'{}'", c.replace('\'', "''")))
-                    .collect();
-                Ok(format!("[{}]", items.join(", ")))
-            }
+            Some(cats) if !cats.is_empty() => self.dialect().format_categories_literal(cats),
             _ => Ok("NULL".to_string()),
         }
     }
 
-    /// Parse a DuckDB list string like `[cat1, cat2]` into a Vec<String>.
+    /// Parse a list string like `[cat1, cat2]` or `["cat1","cat2"]` into a Vec<String>.
     pub(crate) fn parse_categories(raw: Option<String>) -> Option<Vec<String>> {
         let raw = raw?;
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed == "[]" {
             return None;
         }
-        // DuckDB returns list as `[val1, val2]` — strip brackets and split
+        // Parse list as `[val1, val2]` or JSON array — strip brackets and split
         let inner = trimmed.trim_start_matches('[').trim_end_matches(']');
         if inner.is_empty() {
             return None;
@@ -98,26 +67,23 @@ impl Storage {
 
     /// Check if a memory is immutable, returning an error if it is.
     pub(crate) fn check_immutable(&self, id: &str) -> Result<()> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare("SELECT immutable FROM memories WHERE id = $1")?;
-        let mut rows = stmt.query_map(params![id], |row| row.get::<_, Option<bool>>(0))?;
-        if let Some(row) = rows.next() {
-            let immutable = row?.unwrap_or(false);
-            if immutable {
-                return Err(MemoryError::ImmutableMemory(id.to_string()));
-            }
+        let immutable = self.backend.query_one(
+            "SELECT immutable FROM memories WHERE id = $1",
+            &[SqlParam::Text(id.to_string())],
+            |row| row.get_opt_bool(0).map(|v| v.unwrap_or(false)),
+        )?;
+        if immutable == Some(true) {
+            return Err(MemoryError::ImmutableMemory(id.to_string()));
         }
         Ok(())
     }
 
     /// Count the number of memories for a given user.
     pub(crate) fn count_user_memories(&self, user_id: &str) -> Result<usize> {
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare("SELECT COUNT(*) FROM memories WHERE user_id = $1")?;
-        let count: i64 = stmt
-            .query_map(params![user_id], |row| row.get(0))?
-            .next()
-            .expect("COUNT always returns a row")?;
+        let count = self.backend.query_count(
+            "SELECT COUNT(*) FROM memories WHERE user_id = $1",
+            &[SqlParam::Text(user_id.to_string())],
+        )?;
         Ok(count as usize)
     }
 
@@ -126,12 +92,10 @@ impl Storage {
     pub(crate) fn db_size_bytes(&self) -> Result<u64> {
         if self.config.db_path == ":memory:" {
             // For in-memory, estimate from row count
-            let conn = self.read_conn();
-            let mut stmt = conn.prepare("SELECT COUNT(*) FROM memories")?;
-            let count: i64 = stmt
-                .query_map([], |row| row.get(0))?
-                .next()
-                .expect("COUNT always returns a row")?;
+            let count = self.backend.query_count(
+                "SELECT COUNT(*) FROM memories",
+                &[],
+            )?;
             // Rough estimate: ~1KB per memory
             return Ok(count as u64 * 1024);
         }
@@ -171,16 +135,18 @@ impl Storage {
                 LIMIT {count_to_remove}
             )"
         );
-        let conn = self.write_conn();
-        let count = conn.execute(&sql, params![user_id])? as u64;
+        let count = self.backend.execute(
+            &sql,
+            &[SqlParam::Text(user_id.to_string())],
+        )? as u64;
         Ok(count)
     }
 
     /// Delete memories past their expiration_date. Returns the number of deleted memories.
     pub(crate) fn cleanup_expired(&self) -> Result<u64> {
-        let conn = self.write_conn();
-        let sql = "DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < now()::TIMESTAMP";
-        let count = conn.execute(sql, [])? as u64;
+        let now_ts = self.dialect().current_timestamp_expr();
+        let sql = format!("DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < {now_ts}");
+        let count = self.backend.execute(&sql, &[])? as u64;
         Ok(count)
     }
 
@@ -193,29 +159,43 @@ impl Storage {
         min_importance: f32,
         delete_below: bool,
     ) -> Result<crate::types::ConsolidateResult> {
-        // Use a single write connection for all operations to avoid Mutex re-entry deadlock.
-        let conn = self.write_conn();
-
         // 1. Decay importance based on days since last access (updated_at)
-        let decay_sql = r#"UPDATE memories
-            SET importance = GREATEST(0.0, importance - $1 * (epoch(now()::TIMESTAMP) - epoch(updated_at)) / 86400.0)
-            WHERE user_id = $2"#;
-        let decayed = conn.execute(decay_sql, params![decay_rate as f64, user_id])?;
+        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
+        let greatest = self.dialect().greatest_expr(
+            "0.0",
+            &format!("importance - $1 * ({now_epoch} - {updated_epoch}) / 86400.0"),
+        );
+        let decay_sql = format!(
+            "UPDATE memories SET importance = {greatest} WHERE user_id = $2"
+        );
+        let decay_params = vec![
+            SqlParam::Float(decay_rate as f64),
+            SqlParam::Text(user_id.to_string()),
+        ];
+        let decayed = self.backend.execute(&decay_sql, &decay_params)? as u64;
 
         // 2. Optionally delete memories below min_importance
         let deleted = if delete_below {
             let delete_sql = "DELETE FROM memories WHERE user_id = $1 AND importance < $2";
-            conn.execute(delete_sql, params![user_id, min_importance as f64])? as u64
+            let del_params = vec![
+                SqlParam::Text(user_id.to_string()),
+                SqlParam::Float(min_importance as f64),
+            ];
+            self.backend.execute(delete_sql, &del_params)? as u64
         } else {
             0
         };
 
-        // 3. Cleanup expired memories (inline to avoid re-acquiring write_conn)
-        let expired_sql = "DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < now()::TIMESTAMP";
-        let expired_count = conn.execute(expired_sql, [])? as u64;
+        // 3. Cleanup expired memories
+        let now_ts = self.dialect().current_timestamp_expr();
+        let expired_sql = format!(
+            "DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < {now_ts}"
+        );
+        let expired_count = self.backend.execute(&expired_sql, &[])? as u64;
 
         Ok(crate::types::ConsolidateResult {
-            decayed_count: decayed as u64,
+            decayed_count: decayed,
             deleted_count: deleted,
             expired_count,
         })
@@ -225,10 +205,9 @@ impl Storage {
 
     /// Increment the access_count for a memory by ID.
     pub(crate) fn increment_access_count(&self, id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "UPDATE memories SET access_count = access_count + 1 WHERE id = $1",
-            params![id],
+            &[SqlParam::Text(id.to_string())],
         )?;
         Ok(())
     }
@@ -240,20 +219,31 @@ impl Storage {
         // Note: updated_at is NOT reset here — it reflects last content update, not access.
         // Retention is computed from updated_at, so resetting it would make R≈1 always,
         // defeating the forgetting curve.
-        let sql = r#"UPDATE memories
-            SET stability = LEAST(365.0,
-                COALESCE(stability, 1.0) * (1.0 + $1 *
-                    (1.0 - POWER(
-                        1.0 + (epoch(now()::TIMESTAMP) - epoch(updated_at)) / 86400.0
-                              / (5.0 * GREATEST(COALESCE(stability, 1.0), 0.01)),
-                        -0.5
-                    ))
-                )
+        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
+        let stability_floor = self.dialect().greatest_expr("COALESCE(stability, 1.0)", "0.01");
+        let power = self.dialect().power_expr(
+            &format!(
+                "1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"
             ),
-            access_count = access_count + 1
-            WHERE id = $2"#;
-        let conn = self.write_conn();
-        conn.execute(sql, params![growth_factor as f64, id])?;
+            "-0.5",
+        );
+        let least = self.dialect().least_expr(
+            "365.0",
+            &format!(
+                "COALESCE(stability, 1.0) * (1.0 + $1 * (1.0 - {power}))"
+            ),
+        );
+        let sql = format!(
+            "UPDATE memories \
+            SET stability = {least}, \
+            access_count = access_count + 1 \
+            WHERE id = $2"
+        );
+        self.backend.execute(
+            &sql,
+            &[SqlParam::Float(growth_factor as f64), SqlParam::Text(id.to_string())],
+        )?;
         Ok(())
     }
 
@@ -265,32 +255,42 @@ impl Storage {
         retention_threshold: f32,
         min_age_days: f32,
     ) -> Result<u64> {
-        let sql = r#"DELETE FROM memories
-            WHERE user_id = $1
-            AND POWER(
-                1.0 + (epoch(now()::TIMESTAMP) - epoch(updated_at)) / 86400.0
-                      / (5.0 * GREATEST(COALESCE(stability, 1.0), 0.01)),
-                -0.5
-            ) < $2
-            AND (epoch(now()::TIMESTAMP) - epoch(updated_at)) / 86400.0 > $3"#;
-        let conn = self.write_conn();
-        let count = conn.execute(
-            sql,
-            params![user_id, retention_threshold as f64, min_age_days as f64],
+        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
+        let stability_floor = self.dialect().greatest_expr("COALESCE(stability, 1.0)", "0.01");
+        let power = self.dialect().power_expr(
+            &format!(
+                "1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"
+            ),
+            "-0.5",
+        );
+        let sql = format!(
+            "DELETE FROM memories \
+            WHERE user_id = $1 \
+            AND {power} < $2 \
+            AND ({now_epoch} - {updated_epoch}) / 86400.0 > $3"
+        );
+        let count = self.backend.execute(
+            &sql,
+            &[
+                SqlParam::Text(user_id.to_string()),
+                SqlParam::Float(retention_threshold as f64),
+                SqlParam::Float(min_age_days as f64),
+            ],
         )? as u64;
         Ok(count)
     }
 
     /// Create or rebuild the FTS index on the memories table.
-    /// DuckDB FTS extension must be available (bundled in most builds).
     pub(crate) fn create_fts_index(&self) -> Result<()> {
         // Ensure FTS extension is loaded
-        self.execute_ignore_error("INSTALL fts");
-        self.execute_ignore_error("LOAD fts");
+        for sql in self.dialect().load_fts_extension_sql() {
+            self.execute_ignore_error(sql);
+        }
 
         // Create FTS index with overwrite to handle existing index
-        let conn = self.write_conn();
-        conn.execute_batch("PRAGMA create_fts_index('memories', 'id', 'content', overwrite=1)")?;
+        let fts_sql = self.dialect().create_fts_index_sql("memories", "id", &["content"]);
+        self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on memories table");
         Ok(())
     }
@@ -298,12 +298,11 @@ impl Storage {
     /// Create or rebuild the FTS index on the episodes table (title + summary).
     #[allow(dead_code)] // planned API: episode FTS indexing
     pub(crate) fn create_fts_index_episodes(&self) -> Result<()> {
-        self.execute_ignore_error("INSTALL fts");
-        self.execute_ignore_error("LOAD fts");
-        let conn = self.write_conn();
-        conn.execute_batch(
-            "PRAGMA create_fts_index('episodes', 'episode_id', 'title', 'summary', overwrite=1)",
-        )?;
+        for sql in self.dialect().load_fts_extension_sql() {
+            self.execute_ignore_error(sql);
+        }
+        let fts_sql = self.dialect().create_fts_index_sql("episodes", "episode_id", &["title", "summary"]);
+        self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on episodes table");
         Ok(())
     }
@@ -311,13 +310,12 @@ impl Storage {
     /// Create or rebuild the FTS index on the events table (purified_content).
     /// Note: This should only be called after compact() has populated purified_content.
     pub(crate) fn create_fts_index_events(&self) -> Result<()> {
-        self.execute_ignore_error("INSTALL fts");
-        self.execute_ignore_error("LOAD fts");
-        let conn = self.write_conn();
+        for sql in self.dialect().load_fts_extension_sql() {
+            self.execute_ignore_error(sql);
+        }
+        let fts_sql = self.dialect().create_fts_index_sql("events", "event_id", &["purified_content"]);
         // FTS on purified_content (not raw content) for better keyword matching
-        conn.execute_batch(
-            "PRAGMA create_fts_index('events', 'event_id', 'purified_content', overwrite=1)",
-        )?;
+        self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on events.purified_content");
         Ok(())
     }

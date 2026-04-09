@@ -34,7 +34,7 @@ from memme_lerobot import MemoryEnhancedRobot
 robot = MemoryEnhancedRobot(
     robot=make_robot("so100"),
     user_id="robot-001",
-    db_path="robot_memory.duckdb",
+    db_path="robot_memory.db",
 )
 
 robot.connect()
@@ -76,7 +76,7 @@ memories = logger.recall("how to pick up a cup")
 ```python
 import memme
 
-store = memme.MemoryStore(db_path="robot_memory.duckdb")
+store = memme.MemoryStore(db_path="robot_memory.db")
 
 # Store
 store.add("Robot successfully grasped red cup from table", user_id="robot-001")

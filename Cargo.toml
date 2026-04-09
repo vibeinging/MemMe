@@ -17,24 +17,12 @@ version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/vibeinging/MemMe"
-description = "Edge-first AI memory engine powered by MemMe-DB"
-keywords = ["memory", "ai", "edge", "duckdb", "embedding"]
+description = "Edge-first AI memory engine with SQLite single-file storage"
+keywords = ["memory", "ai", "edge", "sqlite", "embedding"]
 categories = ["database", "science"]
 rust-version = "1.77"
 
 [workspace.dependencies]
-# DuckDB — default uses bundled (compiles DuckDB from source, no HNSW).
-# To use precompiled DuckDB+VSS (HNSW vector search), build with:
-#   ./memme-db/build.sh release
-#   export DUCKDB_LIB_DIR=memme-db/build/release
-#   export DUCKDB_INCLUDE_DIR=memme-db/duckdb/src/include
-#   export DUCKDB_STATIC=1
-#   cargo build -p memme-core --no-default-features --features memme-db
-#
-# Version note: the duckdb-rs crate version must be ABI-compatible with
-# the DuckDB version built by memme-db (currently v1.5.0).
-duckdb = { version = "1.4" }
-
 # Async
 tokio = { version = "1", features = ["full"] }
 

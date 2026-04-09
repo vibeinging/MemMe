@@ -22,7 +22,7 @@ Browser opens automatically at `http://localhost:7860`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMME_PORT` | `7860` | Server port |
-| `MEMME_DB` | `playground.duckdb` | Database file path |
+| `MEMME_DB` | `playground.db` | Database file path |
 
 ## Features
 

@@ -11,8 +11,8 @@
     "properties": {
       "db_path": {
         "type": "string",
-        "default": "~/.openclaw/memme.duckdb",
-        "description": "Path to DuckDB database file"
+        "default": "~/.openclaw/memme.db",
+        "description": "Path to SQLite database file"
       },
       "embedding_provider": {
         "type": "string",

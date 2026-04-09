@@ -1,49 +1,69 @@
 use crate::error::Result;
-use crate::types::FilterExpression;
+use crate::types::{FilterExpression, SqlParam};
 
+use super::backend::RowAccess;
 use super::{MemoryRow, Storage};
 
-/// Map a row from the standard (non-vector-search) query to MemoryRow.
-/// Expects column order: id, content, user_id, created_at, updated_at, metadata,
-///                        importance, access_count, agent_id, app_id, run_id,
-///                        immutable, expiration_date, categories, memory_type,
-///                        stability, privacy, event_time, episode_id, session_id, resolution
-fn map_memory_row_full(row: &duckdb::Row<'_>) -> duckdb::Result<MemoryRow> {
+// ── Unified memory column definitions ──
+
+/// Base columns for MemoryRow (without score). Used to build SELECT clauses.
+const MEMORY_COLS_BASE: &str =
+    "id, content, user_id, created_at, updated_at, metadata";
+
+const MEMORY_COLS_AFTER_SCORE: &str =
+    "importance, access_count, agent_id, app_id, run_id, \
+     immutable, expiration_date, categories, memory_type, \
+     stability, privacy, event_time, episode_id, session_id, resolution";
+
+/// Generate SELECT columns for a memories query.
+/// - `score_expr`: SQL expression for score/distance, or `None` for `NULL AS score`
+/// - `prefix`: table alias prefix (e.g. `"m."` for JOINs), or `""` for bare columns
+pub(crate) fn memory_select_cols(score_expr: Option<&str>, prefix: &str) -> String {
+    let score = score_expr.unwrap_or("NULL");
+    let base = MEMORY_COLS_BASE
+        .split(", ")
+        .map(|c| format!("{prefix}{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let after = MEMORY_COLS_AFTER_SCORE
+        .split(", ")
+        .map(|c| format!("{prefix}{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{base}, {score} AS score, {after}")
+}
+
+/// Map a database row to MemoryRow. Unified mapper for all memory queries.
+/// Expects 22 columns in the order produced by `memory_select_cols()`:
+///   id(0), content(1), user_id(2), created_at(3), updated_at(4), metadata(5),
+///   score(6), importance(7), access_count(8), agent_id(9), app_id(10),
+///   run_id(11), immutable(12), expiration_date(13), categories(14),
+///   memory_type(15), stability(16), privacy(17), event_time(18),
+///   episode_id(19), session_id(20), resolution(21)
+pub(crate) fn map_memory_row(row: &dyn RowAccess) -> Result<MemoryRow> {
     Ok(MemoryRow {
-        id: row.get(0)?,
-        content: row.get(1)?,
-        user_id: row.get(2)?,
-        created_at: row.get::<_, String>(3)?,
-        updated_at: row.get::<_, String>(4)?,
-        metadata: row.get::<_, Option<String>>(5)?,
-        score: None,
-        importance: row
-            .get::<_, Option<f64>>(6)
-            .ok()
-            .flatten()
-            .map(|v| v as f32),
-        access_count: row
-            .get::<_, Option<i32>>(7)
-            .ok()
-            .flatten()
-            .map(|v| v as u32),
-        agent_id: row.get::<_, Option<String>>(8)?,
-        app_id: row.get::<_, Option<String>>(9)?,
-        run_id: row.get::<_, Option<String>>(10)?,
-        immutable: row.get::<_, Option<bool>>(11)?.unwrap_or(false),
-        expiration_date: row.get::<_, Option<String>>(12)?,
-        categories: row.get::<_, Option<String>>(13)?,
-        memory_type: row.get::<_, Option<String>>(14)?,
-        stability: row
-            .get::<_, Option<f64>>(15)
-            .ok()
-            .flatten()
-            .map(|v| v as f32),
-        privacy: row.get::<_, Option<String>>(16).ok().flatten(),
-        event_time: row.get::<_, Option<String>>(17).ok().flatten(),
-        episode_id: row.get::<_, Option<String>>(18).ok().flatten(),
-        session_id: row.get::<_, Option<String>>(19).ok().flatten(),
-        resolution: row.get::<_, Option<String>>(20).ok().flatten(),
+        id: row.get_string(0)?,
+        content: row.get_string(1)?,
+        user_id: row.get_string(2)?,
+        created_at: row.get_string(3)?,
+        updated_at: row.get_string(4)?,
+        metadata: row.get_opt_string(5)?,
+        score: row.get_opt_f64(6)?.map(|v| v as f32),
+        importance: row.get_opt_f64(7)?.map(|v| v as f32),
+        access_count: row.get_opt_i64(8)?.map(|v| v as u32),
+        agent_id: row.get_opt_string(9)?,
+        app_id: row.get_opt_string(10)?,
+        run_id: row.get_opt_string(11)?,
+        immutable: row.get_opt_bool(12)?.unwrap_or(false),
+        expiration_date: row.get_opt_string(13)?,
+        categories: row.get_opt_string(14)?,
+        memory_type: row.get_opt_string(15)?,
+        stability: row.get_opt_f64(16)?.map(|v| v as f32),
+        privacy: row.get_opt_string(17)?,
+        event_time: row.get_opt_string(18)?,
+        episode_id: row.get_opt_string(19)?,
+        session_id: row.get_opt_string(20)?,
+        resolution: row.get_opt_string(21)?,
     })
 }
 
@@ -59,28 +79,28 @@ impl Storage {
         filter: Option<&FilterExpression>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
-        // We use dynamic params via duckdb::types::Value for flexibility
+        // We use dynamic params via SqlParam for flexibility
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> =
+            vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
             conditions.push(format!("agent_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(aid.to_string()));
+            dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("run_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(rid.to_string()));
+            dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("app_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(appid.to_string()));
+            dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
 
         if let Some(f) = filter {
@@ -93,41 +113,12 @@ impl Storage {
         let _ = param_idx; // suppress unused warning
 
         let where_clause = conditions.join(" AND ");
+        let cols = memory_select_cols(None, "");
         let sql = format!(
-            "SELECT id, content, user_id,
-                    CAST(created_at AS VARCHAR) AS created_at,
-                    CAST(updated_at AS VARCHAR) AS updated_at,
-                    CAST(metadata AS VARCHAR) AS metadata,
-                    importance,
-                    access_count,
-                    agent_id,
-                    app_id,
-                    run_id,
-                    immutable,
-                    CAST(expiration_date AS VARCHAR) AS expiration_date,
-                    CAST(categories AS VARCHAR) AS categories,
-                    memory_type,
-                    stability,
-                    privacy,
-                    CAST(event_time AS VARCHAR) AS event_time,
-                    episode_id,
-                    session_id,
-                    resolution
-             FROM memories
-             WHERE {where_clause}
-             ORDER BY updated_at DESC
-             LIMIT {limit}"
+            "SELECT {cols} FROM memories WHERE {where_clause} ORDER BY updated_at DESC LIMIT {limit}"
         );
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_memory_row_full)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows = self.backend.query_read(&sql, &dynamic_params, map_memory_row)?;
 
         Ok(rows)
     }
@@ -148,29 +139,38 @@ impl Storage {
         filter: Option<&FilterExpression>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
-        let emb_literal = Self::format_embedding(embedding, self.config.embedding_dims)?;
+        let d = self.dialect();
+        let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
+        let has_extra_filters = agent_id.is_some() || run_id.is_some() || app_id.is_some() || filter.is_some();
+
+        // Use vec0 MATCH for simple user_id-only queries (fast KNN path).
+        // Fall back to brute-force scan when extra filters are present,
+        // since vec0 doesn't support arbitrary WHERE clauses.
+        if d.has_vec0_table() && !has_extra_filters {
+            return self.vector_search_vec0(embedding, user_id, limit);
+        }
 
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> =
+            vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
             conditions.push(format!("agent_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(aid.to_string()));
+            dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("run_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(rid.to_string()));
+            dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("app_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(appid.to_string()));
+            dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
 
         if let Some(f) = filter {
@@ -183,71 +183,38 @@ impl Storage {
         let _ = param_idx;
 
         let where_clause = conditions.join(" AND ");
+        let distance_expr = d.cosine_distance_expr("embedding", &emb_literal);
+        let cols = memory_select_cols(Some(&distance_expr), "");
         let sql = format!(
-            r#"SELECT id, content, user_id,
-                      CAST(created_at AS VARCHAR) AS created_at,
-                      CAST(updated_at AS VARCHAR) AS updated_at,
-                      CAST(metadata AS VARCHAR) AS metadata,
-                      array_cosine_distance(embedding, {emb_literal}) AS distance,
-                      importance,
-                      access_count,
-                      agent_id,
-                      app_id,
-                      run_id,
-                      immutable,
-                      CAST(expiration_date AS VARCHAR) AS expiration_date,
-                      CAST(categories AS VARCHAR) AS categories,
-                      memory_type,
-                      stability,
-                      privacy,
-                      CAST(event_time AS VARCHAR) AS event_time,
-                      episode_id,
-                      session_id,
-                      resolution
-               FROM memories
-               WHERE {where_clause}
-               ORDER BY distance ASC
-               LIMIT {limit}"#
+            "SELECT {cols} FROM memories WHERE {where_clause} ORDER BY score ASC LIMIT {limit}"
         );
 
-        let map_row = |row: &duckdb::Row<'_>| -> duckdb::Result<MemoryRow> {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                user_id: row.get(2)?,
-                created_at: row.get::<_, String>(3)?,
-                updated_at: row.get::<_, String>(4)?,
-                metadata: row.get::<_, Option<String>>(5)?,
-                score: row.get::<_, Option<f64>>(6)?.map(|d| d as f32),
-                importance: row.get::<_, Option<f64>>(7)?.map(|v| v as f32),
-                access_count: row.get::<_, Option<i32>>(8)?.map(|v| v as u32),
-                agent_id: row.get::<_, Option<String>>(9)?,
-                app_id: row.get::<_, Option<String>>(10)?,
-                run_id: row.get::<_, Option<String>>(11)?,
-                immutable: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
-                expiration_date: row.get::<_, Option<String>>(13)?,
-                categories: row.get::<_, Option<String>>(14)?,
-                memory_type: row.get::<_, Option<String>>(15)?,
-                stability: row.get::<_, Option<f64>>(16)?.map(|v| v as f32),
-                privacy: row.get::<_, Option<String>>(17)?,
-                event_time: row.get::<_, Option<String>>(18)?,
-                episode_id: row.get::<_, Option<String>>(19)?,
-                session_id: row.get::<_, Option<String>>(20).ok().flatten(),
-                resolution: row.get::<_, Option<String>>(21).ok().flatten(),
-            })
-        };
-
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows = self.backend.query_read(&sql, &dynamic_params, map_memory_row)?;
 
         Ok(rows)
+    }
+
+    /// vec0 MATCH-based vector search (SQLite with sqlite-vec).
+    /// Uses the vec0 virtual table for KNN, then JOINs back to memories for full data.
+    fn vector_search_vec0(
+        &self,
+        embedding: &[f32],
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryRow>> {
+        let d = self.dialect();
+        let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
+
+        let knn_sql = d.vec0_knn_sql(&emb_literal, "$1", limit)
+            .expect("vec0_knn_sql should be available when has_vec0_table() is true");
+
+        let cols = memory_select_cols(Some("knn.distance"), "m.");
+        let sql = format!(
+            "WITH knn AS ({knn_sql}) SELECT {cols} FROM knn JOIN memories m ON m.id = knn.memory_id ORDER BY knn.distance ASC"
+        );
+
+        let params = &[SqlParam::Text(user_id.to_string())];
+        self.backend.query_read(&sql, params, map_memory_row)
     }
 
     // ── FTS search ──
@@ -267,102 +234,45 @@ impl Storage {
         app_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
-        let map_row = |row: &duckdb::Row<'_>| -> duckdb::Result<MemoryRow> {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                user_id: row.get(2)?,
-                created_at: row.get::<_, String>(3)?,
-                updated_at: row.get::<_, String>(4)?,
-                metadata: row.get::<_, Option<String>>(5)?,
-                score: row.get::<_, Option<f64>>(6)?.map(|s| s as f32),
-                importance: row.get::<_, Option<f64>>(7)?.map(|v| v as f32),
-                access_count: row.get::<_, Option<i32>>(8)?.map(|v| v as u32),
-                agent_id: row.get::<_, Option<String>>(9)?,
-                app_id: row.get::<_, Option<String>>(10)?,
-                run_id: row.get::<_, Option<String>>(11)?,
-                immutable: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
-                expiration_date: row.get::<_, Option<String>>(13)?,
-                categories: row.get::<_, Option<String>>(14)?,
-                memory_type: row.get::<_, Option<String>>(15)?,
-                stability: row.get::<_, Option<f64>>(16)?.map(|v| v as f32),
-                privacy: row.get::<_, Option<String>>(17)?,
-                event_time: row.get::<_, Option<String>>(18)?,
-                episode_id: row.get::<_, Option<String>>(19)?,
-                session_id: row.get::<_, Option<String>>(20).ok().flatten(),
-                resolution: row.get::<_, Option<String>>(21).ok().flatten(),
-            })
-        };
-
         // Build WHERE clause dynamically. $1 = query, $2 = user_id, then agent/run/app
         let mut conditions = vec![
-            "score IS NOT NULL".to_string(),
+            "memories_fts MATCH $1".to_string(),
             "m.user_id = $2".to_string(),
         ];
-        let mut dynamic_params: Vec<duckdb::types::Value> = vec![
-            duckdb::types::Value::Text(query.to_string()),
-            duckdb::types::Value::Text(user_id.to_string()),
+        let mut dynamic_params: Vec<SqlParam> = vec![
+            SqlParam::Text(query.to_string()),
+            SqlParam::Text(user_id.to_string()),
         ];
         let mut param_idx: usize = 2;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
             conditions.push(format!("m.agent_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(aid.to_string()));
+            dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("m.run_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(rid.to_string()));
+            dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("m.app_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(appid.to_string()));
+            dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
         let _ = param_idx;
 
         let where_clause = conditions.join(" AND ");
+        // FTS5: JOIN on id column, rank is negative (lower = better match)
+        let cols = memory_select_cols(Some("memories_fts.rank"), "m.");
         let sql = format!(
-            r#"SELECT m.id, m.content, m.user_id,
-                      CAST(m.created_at AS VARCHAR) AS created_at,
-                      CAST(m.updated_at AS VARCHAR) AS updated_at,
-                      CAST(m.metadata AS VARCHAR) AS metadata,
-                      fts_main_memories.match_bm25(m.id, $1) AS score,
-                      m.importance,
-                      m.access_count,
-                      m.agent_id,
-                      m.app_id,
-                      m.run_id,
-                      m.immutable,
-                      CAST(m.expiration_date AS VARCHAR) AS expiration_date,
-                      CAST(m.categories AS VARCHAR) AS categories,
-                      m.memory_type,
-                      m.stability,
-                      m.privacy,
-                      CAST(m.event_time AS VARCHAR) AS event_time,
-                      m.episode_id,
-                      m.session_id,
-                      m.resolution
-               FROM memories m
-               WHERE {where_clause}
-               ORDER BY score DESC
-               LIMIT {limit}"#
+            "SELECT {cols} FROM memories_fts JOIN memories m ON m.id = memories_fts.id \
+             WHERE {where_clause} ORDER BY memories_fts.rank LIMIT {limit}"
         );
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), map_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(rows)
+        self.backend.query_read(&sql, &dynamic_params, map_memory_row)
     }
 
     // ── Temporal search ──
@@ -370,38 +280,17 @@ impl Storage {
     /// Search memories by event_time proximity, ordered by closeness to reference time.
     /// Only returns memories that have a non-NULL event_time.
     pub(crate) fn temporal_search(&self, user_id: &str, limit: usize) -> Result<Vec<MemoryRow>> {
-        let sql = r#"SELECT id, content, user_id,
-                      CAST(created_at AS VARCHAR) AS created_at,
-                      CAST(updated_at AS VARCHAR) AS updated_at,
-                      CAST(metadata AS VARCHAR) AS metadata,
-                      importance,
-                      access_count,
-                      agent_id,
-                      app_id,
-                      run_id,
-                      immutable,
-                      CAST(expiration_date AS VARCHAR) AS expiration_date,
-                      CAST(categories AS VARCHAR) AS categories,
-                      memory_type,
-                      stability,
-                      privacy,
-                      CAST(event_time AS VARCHAR) AS event_time,
-                      episode_id,
-                      session_id,
-                      resolution
-               FROM memories
-               WHERE user_id = $1
-                 AND event_time IS NOT NULL
-               ORDER BY event_time DESC
-               LIMIT $2"#;
+        let cols = memory_select_cols(None, "");
+        let sql = format!(
+            "SELECT {cols} FROM memories WHERE user_id = $1 AND event_time IS NOT NULL \
+             ORDER BY event_time DESC LIMIT $2"
+        );
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt
-            .query_map(duckdb::params![user_id, limit as i64], map_memory_row_full)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(rows)
+        let params = &[
+            SqlParam::Text(user_id.to_string()),
+            SqlParam::Int(limit as i64),
+        ];
+        self.backend.query_read(&sql, params, map_memory_row)
     }
 
     // ── Find by content hash ──
@@ -416,51 +305,41 @@ impl Storage {
         run_id: Option<&str>,
         app_id: Option<&str>,
     ) -> Result<Option<(String, String)>> {
-        let map_row = |row: &duckdb::Row<'_>| -> duckdb::Result<(String, String)> {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        let map_row = |row: &dyn RowAccess| -> Result<(String, String)> {
+            Ok((row.get_string(0)?, row.get_string(1)?))
         };
 
         // Build WHERE clause dynamically
         let mut conditions = vec!["hash = $1".to_string(), "user_id = $2".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> = vec![
-            duckdb::types::Value::Text(hash.to_string()),
-            duckdb::types::Value::Text(user_id.to_string()),
+        let mut dynamic_params: Vec<SqlParam> = vec![
+            SqlParam::Text(hash.to_string()),
+            SqlParam::Text(user_id.to_string()),
         ];
         let mut param_idx: usize = 2;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
             conditions.push(format!("agent_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(aid.to_string()));
+            dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("run_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(rid.to_string()));
+            dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("app_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(appid.to_string()));
+            dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
         let _ = param_idx;
 
         let where_clause = conditions.join(" AND ");
         let sql = format!("SELECT id, content FROM memories WHERE {where_clause} LIMIT 1");
 
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let mut result = stmt
-            .query_map(param_refs.as_slice(), map_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(result.pop())
+        self.backend.query_one(&sql, &dynamic_params, map_row)
     }
 }
 

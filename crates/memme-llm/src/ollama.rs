@@ -34,8 +34,9 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(config: OllamaConfig) -> Self {
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
+            .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(10))
+            .tcp_keepalive(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
         Self { config, client }

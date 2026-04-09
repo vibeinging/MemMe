@@ -18,8 +18,5 @@ wasm-bindgen = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-wasm-bindgen = "0.6"
-memme-core = { workspace = true, features = ["bundled"] }
+memme-core = { workspace = true }
 memme-embeddings = { workspace = true, default-features = false }
-# Note: DuckDB bundled does not compile to wasm32.
-# This crate is for native WASM runtimes (e.g., wasmtime) or
-# future DuckDB-WASM integration.

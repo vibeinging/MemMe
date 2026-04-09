@@ -16,6 +16,7 @@ pub mod identity;
 pub mod meditation;
 pub(crate) mod recall;
 pub mod session;
+mod sql_param;
 pub mod stream;
 pub use episode::*;
 pub use filter::*;
@@ -23,6 +24,7 @@ pub use identity::*;
 pub use meditation::*;
 pub(crate) use recall::*;
 pub use session::*;
+pub use sql_param::SqlParam;
 pub use stream::*;
 
 use std::collections::HashMap;
@@ -353,7 +355,7 @@ impl UpdateOptions {
 /// Returned by [`MemoryStore::add`], [`MemoryStore::get_trace`],
 /// [`MemoryStore::search`], and related methods.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryResult {
     /// Unique memory ID (UUID v4).
     pub id: String,

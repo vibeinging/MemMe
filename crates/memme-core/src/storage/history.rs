@@ -1,6 +1,5 @@
-use duckdb::params;
-
 use crate::error::Result;
+use crate::types::SqlParam;
 
 use super::util::opt_text;
 use super::Storage;
@@ -17,32 +16,33 @@ impl Storage {
     ) -> Result<()> {
         let old_val = opt_text(old_memory);
 
-        let conn = self.write_conn();
-        conn.execute(
+        self.backend.execute(
             "INSERT INTO history (id, memory_id, user_id, old_memory, new_memory, event) VALUES ($1, $2, $3, $4, $5, $6)",
-            params![id, memory_id, user_id, old_val, new_memory, event],
+            &[
+                SqlParam::Text(id.to_string()),
+                SqlParam::Text(memory_id.to_string()),
+                SqlParam::Text(user_id.to_string()),
+                old_val,
+                SqlParam::Text(new_memory.to_string()),
+                SqlParam::Text(event.to_string()),
+            ],
         )?;
         Ok(())
     }
 
     /// Get change history for a specific memory.
     pub(crate) fn get_history(&self, memory_id: &str) -> Result<Vec<crate::types::HistoryRecord>> {
-        let sql = "SELECT id, memory_id, old_memory, new_memory, event, CAST(created_at AS VARCHAR) FROM history WHERE memory_id = $1 ORDER BY created_at";
-        let conn = self.read_conn();
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt
-            .query_map(params![memory_id], |row| {
-                Ok(crate::types::HistoryRecord {
-                    id: row.get(0)?,
-                    memory_id: row.get(1)?,
-                    old_memory: row.get(2)?,
-                    new_memory: row.get(3)?,
-                    event: row.get(4)?,
-                    created_at: row.get(5)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let sql = "SELECT id, memory_id, old_memory, new_memory, event, created_at FROM history WHERE memory_id = $1 ORDER BY created_at";
+        self.backend.query_read(sql, &[SqlParam::Text(memory_id.to_string())], |row| {
+            Ok(crate::types::HistoryRecord {
+                id: row.get_string(0)?,
+                memory_id: row.get_string(1)?,
+                old_memory: row.get_opt_string(2)?,
+                new_memory: row.get_string(3)?,
+                event: row.get_string(4)?,
+                created_at: row.get_string(5)?,
+            })
+        })
     }
 
     /// Delete all memories for a user (optionally scoped by agent_id/run_id/app_id).
@@ -56,26 +56,26 @@ impl Storage {
     ) -> Result<u64> {
         // Build WHERE clause dynamically
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<duckdb::types::Value> =
-            vec![duckdb::types::Value::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> =
+            vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
             conditions.push(format!("agent_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(aid.to_string()));
+            dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("run_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(rid.to_string()));
+            dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("app_id = ${param_idx}"));
-            dynamic_params.push(duckdb::types::Value::Text(appid.to_string()));
+            dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
         let _ = param_idx;
 
@@ -85,34 +85,30 @@ impl Storage {
         let select_sql = format!("SELECT id, content FROM memories WHERE {where_clause}");
         let delete_sql = format!("DELETE FROM memories WHERE {where_clause}");
 
-        let conn = self.write_conn();
-        let mut stmt = conn.prepare(&select_sql)?;
-        let param_refs: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        let rows: Vec<(String, String)> = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows: Vec<(String, String)> = self.backend.query_read(
+            &select_sql,
+            &dynamic_params,
+            |row| Ok((row.get_string(0)?, row.get_string(1)?)),
+        )?;
 
         let count = rows.len() as u64;
 
         // Delete the memories
-        let mut del_stmt = conn.prepare(&delete_sql)?;
-        let param_refs2: Vec<&dyn duckdb::ToSql> = dynamic_params
-            .iter()
-            .map(|p| p as &dyn duckdb::ToSql)
-            .collect();
-        del_stmt.execute(param_refs2.as_slice())?;
+        self.backend.execute(&delete_sql, &dynamic_params)?;
 
-        // Record history for each deleted memory (inline to avoid re-locking conn)
+        // Record history for each deleted memory
         for (mem_id, content) in &rows {
             let history_id = uuid::Uuid::new_v4().to_string();
-            conn.execute(
+            self.backend.execute(
                 "INSERT INTO history (id, memory_id, user_id, old_memory, new_memory, event) VALUES ($1, $2, $3, $4, $5, $6)",
-                params![history_id, mem_id, user_id, content, "", "DELETE"],
+                &[
+                    SqlParam::Text(history_id),
+                    SqlParam::Text(mem_id.clone()),
+                    SqlParam::Text(user_id.to_string()),
+                    SqlParam::Text(content.clone()),
+                    SqlParam::Text(String::new()),
+                    SqlParam::Text("DELETE".to_string()),
+                ],
             )?;
         }
 
@@ -122,17 +118,18 @@ impl Storage {
     /// Delete all history records for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_history(&self, user_id: &str) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute("DELETE FROM history WHERE user_id = $1", params![user_id])?;
+        self.backend.execute(
+            "DELETE FROM history WHERE user_id = $1",
+            &[SqlParam::Text(user_id.to_string())],
+        )?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use duckdb::params;
-
     use crate::config::MemoryConfig;
+    use crate::types::SqlParam;
 
     use super::Storage;
 
@@ -166,16 +163,11 @@ mod tests {
             .unwrap();
 
         // Verify history entries exist by querying
-        let conn = storage.read_conn();
-        let mut stmt = conn
-            .prepare("SELECT COUNT(*) FROM history WHERE memory_id = $1")
-            .unwrap();
-        let count: i64 = stmt
-            .query_map(params!["mem1"], |row| row.get(0))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-        assert_eq!(count, 2);
+        let count: Vec<i64> = storage.backend.query_read(
+            "SELECT COUNT(*) FROM history WHERE memory_id = $1",
+            &[SqlParam::Text("mem1".to_string())],
+            |row| row.get_i64(0),
+        ).unwrap();
+        assert_eq!(count[0], 2);
     }
 }

@@ -91,7 +91,7 @@ fn main() -> Result<()> {
 /// Returns (store, runtime). The runtime must be kept alive for the process lifetime
 /// because the OpenAI embedder uses reqwest which requires a tokio runtime.
 fn init_store() -> Result<(MemoryStore, tokio::runtime::Runtime)> {
-    let db_path = std::env::var("MEMME_DB_PATH").unwrap_or_else(|_| "robot_memory.duckdb".into());
+    let db_path = std::env::var("MEMME_DB_PATH").unwrap_or_else(|_| "robot_memory.db".into());
     let collection = std::env::var("MEMME_COLLECTION").unwrap_or_else(|_| "default".into());
     let dims: usize = std::env::var("MEMME_EMBEDDING_DIMS")
         .unwrap_or_else(|_| "1536".into())
