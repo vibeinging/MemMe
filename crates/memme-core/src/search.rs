@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::tokenizer::Tokenizer;
 use crate::types::{Episode, Event, MemoryResult};
 
 /// Compute confidence score for a search channel based on its score distribution.
@@ -112,6 +113,74 @@ pub fn rrf_fuse_episodes(
             result
         })
         .collect()
+}
+
+/// Tokenize text into lowercase words by splitting on whitespace and punctuation.
+///
+/// This is the default tokenization (UnicodeTokenizer) kept for backward compatibility.
+/// For locale-aware tokenization, use [`tokenize_words_with`].
+#[allow(dead_code)] // used in tests; kept as convenience API
+pub(crate) fn tokenize_words(text: &str) -> Vec<String> {
+    crate::tokenizer::UnicodeTokenizer.tokenize(text)
+}
+
+/// Tokenize text using the given locale-aware tokenizer.
+pub(crate) fn tokenize_words_with(text: &str, tokenizer: &dyn Tokenizer) -> Vec<String> {
+    tokenizer.tokenize(text)
+}
+
+/// Compute word overlap score between a query and a candidate text.
+///
+/// Returns the fraction of query tokens that appear in the candidate (0.0 to 1.0).
+pub(crate) fn word_overlap_score(query_tokens: &[String], candidate: &str) -> f32 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let candidate_lower = candidate.to_lowercase();
+    let matched = query_tokens
+        .iter()
+        .filter(|qt| candidate_lower.contains(qt.as_str()))
+        .count();
+    matched as f32 / query_tokens.len() as f32
+}
+
+/// Score all candidates by word overlap with the query, returning them sorted
+/// by overlap score (descending). Only candidates with score > 0 are returned.
+///
+/// Uses the default UnicodeTokenizer. For locale-aware overlap, use
+/// [`word_overlap_rank_with`].
+#[allow(dead_code)] // used in tests; kept as convenience API
+pub(crate) fn word_overlap_rank(query: &str, candidates: &[MemoryResult]) -> Vec<MemoryResult> {
+    word_overlap_rank_with(query, candidates, &crate::tokenizer::UnicodeTokenizer)
+}
+
+/// Score all candidates by word overlap using a locale-aware tokenizer.
+pub(crate) fn word_overlap_rank_with(
+    query: &str,
+    candidates: &[MemoryResult],
+    tokenizer: &dyn Tokenizer,
+) -> Vec<MemoryResult> {
+    let query_tokens = tokenize_words_with(query, tokenizer);
+    if query_tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(f32, MemoryResult)> = candidates
+        .iter()
+        .filter_map(|c| {
+            let score = word_overlap_score(&query_tokens, &c.content);
+            if score > 0.0 {
+                let mut r = c.clone();
+                r.score = Some(score);
+                Some((score, r))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.into_iter().map(|(_, r)| r).collect()
 }
 
 /// RRF fusion for Event lists.
@@ -232,6 +301,107 @@ mod tests {
 
         // "a" should be ranked first
         assert_eq!(fused[0].id, "a");
+    }
+
+    #[test]
+    fn test_tokenize_words_basic() {
+        let tokens = tokenize_words("Hello, World! How are you?");
+        assert_eq!(tokens, vec!["hello", "world", "how", "are", "you"]);
+    }
+
+    #[test]
+    fn test_tokenize_words_empty() {
+        let tokens = tokenize_words("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_word_overlap_exact_match() {
+        let tokens = tokenize_words("coffee shop");
+        let score = word_overlap_score(&tokens, "I went to a coffee shop");
+        assert!((score - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_word_overlap_partial_match() {
+        let tokens = tokenize_words("coffee shop tokyo");
+        let score = word_overlap_score(&tokens, "I went to a coffee shop");
+        // 2 out of 3 tokens match
+        assert!((score - 2.0 / 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_word_overlap_no_match() {
+        let tokens = tokenize_words("xyz123");
+        let score = word_overlap_score(&tokens, "I went to a coffee shop");
+        assert!((score - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_word_overlap_rank_ordering() {
+        let candidates = vec![
+            make_result("a", "quantum physics lecture notes"),
+            make_result("b", "the cat sat on the mat"),
+            make_result("c", "the cat loves fish and the cat plays"),
+        ];
+        let ranked = word_overlap_rank("the cat", &candidates);
+        // "b" and "c" both contain "the" and "cat"; "a" may contain partial
+        assert!(!ranked.is_empty());
+        // All returned should have score > 0
+        for r in &ranked {
+            assert!(r.score.unwrap() > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_word_overlap_empty_query() {
+        let candidates = vec![make_result("a", "hello world")];
+        let ranked = word_overlap_rank("", &candidates);
+        assert!(ranked.is_empty());
+    }
+
+    #[test]
+    fn test_tokenize_words_with_cjk_tokenizer() {
+        let t = crate::tokenizer::CJKTokenizer;
+        let tokens = tokenize_words_with("我喜欢coffee", &t);
+        assert_eq!(tokens, vec!["我", "喜", "欢", "coffee"]);
+    }
+
+    #[test]
+    fn test_word_overlap_cjk() {
+        let t = crate::tokenizer::CJKTokenizer;
+        let query_tokens = tokenize_words_with("咖啡", &t);
+        // query tokens: ["咖", "啡"]
+        let score = word_overlap_score(&query_tokens, "我喜欢咖啡");
+        // Both "咖" and "啡" are in the candidate via contains()
+        assert!((score - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_word_overlap_rank_with_cjk() {
+        let candidates = vec![
+            make_result("a", "我喜欢咖啡和茶"),
+            make_result("b", "the cat sat on the mat"),
+            make_result("c", "今天天气很好"),
+        ];
+        let t = crate::tokenizer::CJKTokenizer;
+        let ranked = word_overlap_rank_with("咖啡", &candidates, &t);
+        // Only "a" contains 咖 and 啡
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].id, "a");
+    }
+
+    #[test]
+    fn test_word_overlap_rank_with_auto() {
+        let candidates = vec![
+            make_result("a", "我喜欢咖啡"),
+            make_result("b", "I like coffee"),
+        ];
+        let t = crate::tokenizer::AutoTokenizer;
+        let ranked = word_overlap_rank_with("咖啡", &candidates, &t);
+        // "咖" and "啡" should match in candidate "a"
+        assert!(!ranked.is_empty());
+        assert_eq!(ranked[0].id, "a");
     }
 
     #[test]

@@ -139,6 +139,18 @@ impl Storage {
                 SqlParam::Text(options.user_id.clone()),
             ],
         )?;
+        // Sync vec_events virtual table for unified vector search
+        if !content_vec.is_empty() {
+            if let Some(vec0_sql) = self.dialect().vec0_event_insert_sql("$1", &emb_literal) {
+                self.backend.execute(
+                    &vec0_sql,
+                    &[
+                        SqlParam::Text(event_id.to_string()),
+                        SqlParam::Text(options.user_id.clone()),
+                    ],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -181,14 +193,37 @@ impl Storage {
                 SqlParam::Text(event_id.to_string()),
             ],
         )?;
+        // Sync vec_events virtual table (delete + insert since vec0 doesn't support REPLACE)
+        if !content_vec.is_empty() {
+            if let Some(del_sql) = self.dialect().vec0_event_delete_sql() {
+                let _ = self.backend.execute(
+                    del_sql,
+                    &[SqlParam::Text(event_id.to_string())],
+                );
+            }
+            if let Some(vec0_sql) = self.dialect().vec0_event_insert_sql("$1", &emb_literal) {
+                let user_id = self.backend.query_one(
+                    "SELECT user_id FROM events WHERE event_id = $1",
+                    &[SqlParam::Text(event_id.to_string())],
+                    |row| row.get_string(0),
+                )?;
+                if let Some(uid) = user_id {
+                    self.backend.execute(
+                        &vec0_sql,
+                        &[SqlParam::Text(event_id.to_string()), SqlParam::Text(uid)],
+                    )?;
+                }
+            }
+        }
+        // Incrementally update events FTS index
+        self.fts_insert_event(event_id, purified_content);
         Ok(())
     }
 
     /// List events with filters.
     pub(crate) fn list_events(&self, options: &ListEventsOptions) -> Result<Vec<Event>> {
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref sid) = options.source_id {
@@ -223,7 +258,8 @@ impl Storage {
             "SELECT {cols} FROM events WHERE {where_clause} ORDER BY timestamp DESC LIMIT {limit}"
         );
 
-        self.backend.query_read(&sql, &dynamic_params, |row| map_event_row(row))
+        self.backend
+            .query_read(&sql, &dynamic_params, |row| map_event_row(row))
     }
 
     /// Get a single event by ID.
@@ -269,7 +305,8 @@ impl Storage {
             .iter()
             .map(|id| SqlParam::Text(id.clone()))
             .collect();
-        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
+        self.backend
+            .query_read(&sql, &param_vals, |row| map_event_row(row))
     }
 
     /// Search events by vector similarity within a specific session/episode.
@@ -285,7 +322,9 @@ impl Storage {
             return Ok(Vec::new());
         }
         let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
-        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
+        let distance_expr = self
+            .dialect()
+            .cosine_distance_expr("content_vec", &emb_literal);
         let placeholders: Vec<String> = (1..=event_ids.len()).map(|i| format!("${i}")).collect();
         let cols = event_cols();
         let sql = format!(
@@ -301,12 +340,13 @@ impl Storage {
             .iter()
             .map(|id| SqlParam::Text(id.clone()))
             .collect();
-        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
+        self.backend
+            .query_read(&sql, &param_vals, |row| map_event_row(row))
     }
 
     /// Search events by vector similarity for a user (no event_id constraint).
-    /// Used by the event search channel in multi-channel retrieval.
     /// Returns (Event, distance) tuples sorted by ascending cosine distance.
+    #[allow(dead_code)] // kept for direct event search use cases
     pub(crate) fn search_events_by_vector_for_user(
         &self,
         query_vec: &[f32],
@@ -314,7 +354,9 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<(Event, f32)>> {
         let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
-        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
+        let distance_expr = self
+            .dialect()
+            .cosine_distance_expr("content_vec", &emb_literal);
         let cols = event_cols();
         let sql = format!(
             r#"SELECT {cols},
@@ -325,11 +367,12 @@ impl Storage {
                ORDER BY distance ASC
                LIMIT {limit}"#,
         );
-        self.backend.query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
-            let event = map_event_row(row)?;
-            let distance: f32 = row.get_f64(15).unwrap_or(2.0) as f32;
-            Ok((event, distance))
-        })
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
+                let event = map_event_row(row)?;
+                let distance: f32 = row.get_f64(15).unwrap_or(2.0) as f32;
+                Ok((event, distance))
+            })
     }
 
     /// FTS (BM25) search on events, constrained to specific event IDs.
@@ -343,7 +386,9 @@ impl Storage {
         if event_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let fts_score = self.dialect().fts_match_score_expr("events", "e.event_id", "$1");
+        let fts_score = self
+            .dialect()
+            .fts_match_score_expr("events", "e.event_id", "$1");
         let placeholders: Vec<String> =
             (2..=event_ids.len() + 1).map(|i| format!("${i}")).collect();
         let cols = event_cols();
@@ -356,12 +401,12 @@ impl Storage {
                LIMIT {limit}"#,
             placeholders.join(", ")
         );
-        let mut param_vals: Vec<SqlParam> =
-            vec![SqlParam::Text(query.to_string())];
+        let mut param_vals: Vec<SqlParam> = vec![SqlParam::Text(query.to_string())];
         for id in event_ids {
             param_vals.push(SqlParam::Text(id.clone()));
         }
-        self.backend.query_read(&sql, &param_vals, |row| map_event_row(row))
+        self.backend
+            .query_read(&sql, &param_vals, |row| map_event_row(row))
     }
 
     /// Count unprocessed events for a user.
@@ -389,11 +434,10 @@ impl Storage {
         let sql = format!(
             "SELECT {cols} FROM events WHERE session_id = $1 AND processed = false ORDER BY timestamp ASC"
         );
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(session_id.to_string())],
-            |row| map_event_row(row),
-        )
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(session_id.to_string())], |row| {
+                map_event_row(row)
+            })
     }
 
     /// Reset all events in a session to unprocessed (for re-extraction).

@@ -23,10 +23,10 @@ impl super::MemoryStore {
             self.storage
                 .consolidate(user_id, decay_rate, min_importance, delete_below)?;
 
-        if self.config.enable_forgetting_curve {
+        if self.config.tuning.enable_forgetting_curve {
             let pruned = self.storage.consolidate_forgetting_curve(
                 user_id,
-                self.config.prune_retention_threshold,
+                self.config.tuning.prune_retention_threshold,
                 30.0,
             )?;
             result.deleted_count += pruned;
@@ -41,14 +41,19 @@ impl super::MemoryStore {
     }
 
     /// Manually prune memories for a user. Returns the number of deleted memories.
-    pub fn prune(&self, user_id: &str, count: usize) -> Result<u64> {
+    #[allow(dead_code)]
+    pub(crate) fn prune(&self, user_id: &str, count: usize) -> Result<u64> {
         self.storage
-            .prune_memories(user_id, &self.config.pruning_strategy, count)
+            .prune_memories(user_id, &self.config.tuning.pruning_strategy, count)
     }
 
     /// Batch update multiple traces. Returns updated results.
     /// Skips immutable traces (logs warning, doesn't error).
-    pub fn batch_update_traces(&self, updates: &[(String, String)]) -> Result<Vec<MemoryResult>> {
+    #[allow(dead_code)]
+    pub(crate) fn batch_update_traces(
+        &self,
+        updates: &[(String, String)],
+    ) -> Result<Vec<MemoryResult>> {
         let mut results = Vec::new();
         for (id, content) in updates {
             // Check immutable — skip if immutable
@@ -73,7 +78,8 @@ impl super::MemoryStore {
 
     /// Batch delete multiple traces by ID. Returns count of successfully deleted.
     /// Skips immutable traces (logs warning, doesn't error).
-    pub fn batch_delete_traces(&self, ids: &[String]) -> Result<u64> {
+    #[allow(dead_code)]
+    pub(crate) fn batch_delete_traces(&self, ids: &[String]) -> Result<u64> {
         let mut count = 0u64;
         for id in ids {
             // Check immutable — skip if immutable
@@ -98,7 +104,7 @@ impl super::MemoryStore {
 
     /// List traces with optional filters.
     pub fn list_traces(&self, options: ListOptions) -> Result<Vec<MemoryResult>> {
-        let limit = options.limit.unwrap_or(self.config.default_limit);
+        let limit = options.limit.unwrap_or(self.config.tuning.default_limit);
         let rows = self.storage.list_memories(
             &options.user_id,
             options.agent_id.as_deref(),

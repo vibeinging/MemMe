@@ -139,8 +139,8 @@ impl super::MemoryStore {
         loop {
             let episodes = self.storage.list_episodes_for_meditation(
                 &options.user_id,
-                self.config.meditation_min_significance,
-                self.config.meditation_batch_size,
+                self.config.tuning.meditation_min_significance,
+                self.config.tuning.meditation_batch_size,
             )?;
             if episodes.is_empty() {
                 break;
@@ -183,7 +183,7 @@ impl super::MemoryStore {
                 let extracted = match self.extract_facts_from_episode(
                     llm,
                     &text,
-                    self.config.custom_fact_extraction_prompt.as_deref(),
+                    self.config.tuning.custom_fact_extraction_prompt.as_deref(),
                     Some(conversation_time),
                 ) {
                     Ok(facts) => facts,
@@ -413,7 +413,7 @@ impl super::MemoryStore {
 
     /// Check if the user is within the meditation cooldown period.
     fn is_within_cooldown(&self, user_id: &str) -> bool {
-        if self.config.meditation_cooldown_hours == 0 {
+        if self.config.tuning.meditation_cooldown_hours == 0 {
             return false;
         }
         let last = match self.last_meditation(user_id) {
@@ -433,7 +433,7 @@ impl super::MemoryStore {
             Ok(t) => t.with_timezone(&chrono::Utc),
             Err(_) => return false,
         };
-        let cooldown = chrono::Duration::hours(self.config.meditation_cooldown_hours as i64);
+        let cooldown = chrono::Duration::hours(self.config.tuning.meditation_cooldown_hours as i64);
         chrono::Utc::now() - last_time < cooldown
     }
 }

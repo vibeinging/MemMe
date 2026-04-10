@@ -88,8 +88,7 @@ impl Storage {
 
         // Build OR conditions for LIKE matching, with parameterized patterns
         let mut like_conditions = Vec::new();
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
         for (i, name) in entity_names.iter().enumerate() {
             let idx = i + 2; // $1 is user_id
                              // Escape LIKE wildcards in entity name
@@ -151,11 +150,10 @@ impl Storage {
         let collection = &self.config.collection_name;
         let sql =
             format!("SELECT DISTINCT LOWER(name) FROM entities_{collection} WHERE user_id = $1");
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            |row| row.get_string(0),
-        )
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
+                row.get_string(0)
+            })
     }
 
     /// Spreading activation: expand seed entity names by traversing the graph.
@@ -224,11 +222,11 @@ impl Storage {
                 limit = MAX_SPREAD
             );
 
-            let rows: Vec<(String, String)> = self.backend.query_read(
-                &sql,
-                &[SqlParam::Text(user_id.to_string())],
-                |row| Ok((row.get_string(0)?, row.get_string(1)?)),
-            )?;
+            let rows: Vec<(String, String)> =
+                self.backend
+                    .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
+                        Ok((row.get_string(0)?, row.get_string(1)?))
+                    })?;
 
             let mut next_frontier = Vec::new();
             for (name, desc) in rows {
@@ -243,4 +241,3 @@ impl Storage {
         Ok(all)
     }
 }
-

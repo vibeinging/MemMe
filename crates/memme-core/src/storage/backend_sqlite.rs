@@ -37,11 +37,16 @@ pub(crate) fn open_sqlite(config: &MemoryConfig) -> Result<Connection> {
 
     // Register custom pow() function (SQLite doesn't have built-in math functions
     // unless compiled with SQLITE_ENABLE_MATH_FUNCTIONS).
-    conn.create_scalar_function("pow", 2, rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC, |ctx| {
-        let base: f64 = ctx.get(0)?;
-        let exp: f64 = ctx.get(1)?;
-        Ok(base.powf(exp))
-    })
+    conn.create_scalar_function(
+        "pow",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let base: f64 = ctx.get(0)?;
+            let exp: f64 = ctx.get(1)?;
+            Ok(base.powf(exp))
+        },
+    )
     .map_err(|e| MemoryError::Storage(format!("Failed to register pow(): {e}")))?;
 
     // Verify sqlite-vec is loaded
@@ -225,7 +230,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(dist.abs() < 1e-6, "identical vectors should have distance ~0, got {dist}");
+        assert!(
+            dist.abs() < 1e-6,
+            "identical vectors should have distance ~0, got {dist}"
+        );
 
         // Orthogonal vectors → distance 1
         let a: Vec<f32> = vec![1.0, 0.0];
@@ -239,7 +247,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!((dist - 1.0).abs() < 1e-6, "orthogonal vectors should have distance ~1, got {dist}");
+        assert!(
+            (dist - 1.0).abs() < 1e-6,
+            "orthogonal vectors should have distance ~1, got {dist}"
+        );
     }
 
     #[test]
@@ -257,15 +268,37 @@ mod tests {
 
         // Insert some memories with embeddings
         let params = crate::storage::InsertMemoryParams::default();
-        storage.insert_memory("m1", "coffee lover", &[1.0, 0.0, 0.0], "alice", "h1", &params).unwrap();
-        storage.insert_memory("m2", "tea drinker", &[0.9, 0.1, 0.0], "alice", "h2", &params).unwrap();
-        storage.insert_memory("m3", "juice fan", &[0.0, 1.0, 0.0], "alice", "h3", &params).unwrap();
-        storage.insert_memory("m4", "bob's memory", &[1.0, 0.0, 0.0], "bob", "h4", &params).unwrap();
+        storage
+            .insert_memory(
+                "m1",
+                "coffee lover",
+                &[1.0, 0.0, 0.0],
+                "alice",
+                "h1",
+                &params,
+            )
+            .unwrap();
+        storage
+            .insert_memory(
+                "m2",
+                "tea drinker",
+                &[0.9, 0.1, 0.0],
+                "alice",
+                "h2",
+                &params,
+            )
+            .unwrap();
+        storage
+            .insert_memory("m3", "juice fan", &[0.0, 1.0, 0.0], "alice", "h3", &params)
+            .unwrap();
+        storage
+            .insert_memory("m4", "bob's memory", &[1.0, 0.0, 0.0], "bob", "h4", &params)
+            .unwrap();
 
         // Search for vectors close to [1, 0, 0] — should find m1 first, m2 second, m3 last
-        let results = storage.vector_search(
-            &[1.0, 0.0, 0.0], "alice", None, None, None, None, 3,
-        ).unwrap();
+        let results = storage
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 3)
+            .unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].id, "m1");
@@ -273,8 +306,14 @@ mod tests {
         assert_eq!(results[2].id, "m3");
 
         // Score should be cosine distance (0 for identical)
-        assert!(results[0].score.unwrap() < 0.01, "identical vector should have ~0 distance");
-        assert!(results[2].score.unwrap() > 0.5, "orthogonal vector should have high distance");
+        assert!(
+            results[0].score.unwrap() < 0.01,
+            "identical vector should have ~0 distance"
+        );
+        assert!(
+            results[2].score.unwrap() > 0.5,
+            "orthogonal vector should have high distance"
+        );
 
         // Bob's memory should NOT appear (user isolation via partition key)
         assert!(results.iter().all(|r| r.user_id == "alice"));
@@ -293,17 +332,23 @@ mod tests {
         };
         let storage = Storage::open(config).unwrap();
         let params = crate::storage::InsertMemoryParams::default();
-        storage.insert_memory("m1", "test", &[1.0, 0.0, 0.0], "alice", "h1", &params).unwrap();
+        storage
+            .insert_memory("m1", "test", &[1.0, 0.0, 0.0], "alice", "h1", &params)
+            .unwrap();
 
         // Verify it's searchable
-        let results = storage.vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5).unwrap();
+        let results = storage
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5)
+            .unwrap();
         assert_eq!(results.len(), 1);
 
         // Delete it
         storage.delete_memory("m1").unwrap();
 
         // Should no longer be found
-        let results = storage.vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5).unwrap();
+        let results = storage
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5)
+            .unwrap();
         assert_eq!(results.len(), 0);
     }
 }

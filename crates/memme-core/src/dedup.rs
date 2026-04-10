@@ -76,14 +76,7 @@ mod tests {
     use crate::storage::InsertMemoryParams;
 
     fn test_config(dims: usize) -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: dims,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", dims)
     }
 
     #[test]

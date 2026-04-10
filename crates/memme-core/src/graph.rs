@@ -216,14 +216,7 @@ mod tests {
     use crate::storage::Storage;
 
     fn test_config() -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 4,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", 4)
     }
 
     fn open_storage() -> Storage {
@@ -439,14 +432,7 @@ mod smart_tests {
     }
 
     fn test_config() -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 4,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", 4)
     }
 
     fn open_storage() -> Storage {

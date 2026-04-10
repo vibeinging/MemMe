@@ -57,10 +57,7 @@ impl Storage {
     }
 
     /// Generate SQLite schema DDL.
-    fn sqlite_init_schema(
-        config: &MemoryConfig,
-        dialect: &dyn SqlDialect,
-    ) -> String {
+    fn sqlite_init_schema(config: &MemoryConfig, dialect: &dyn SqlDialect) -> String {
         let dims = config.embedding_dims;
         let collection = &config.collection_name;
         let emb_type = dialect.embedding_column_type(dims);
@@ -309,8 +306,10 @@ impl Storage {
     pub(crate) fn reset(&self) -> Result<()> {
         self.backend.execute_batch("DELETE FROM history")?;
         let collection = &self.config.collection_name;
-        self.backend.execute_batch(&format!("DELETE FROM relationships_{collection}"))?;
-        self.backend.execute_batch(&format!("DELETE FROM entities_{collection}"))?;
+        self.backend
+            .execute_batch(&format!("DELETE FROM relationships_{collection}"))?;
+        self.backend
+            .execute_batch(&format!("DELETE FROM entities_{collection}"))?;
         self.backend.execute_batch("DELETE FROM memory_entities")?;
         self.backend.execute_batch("DELETE FROM memories")?;
         self.backend.execute_batch("DELETE FROM procedures")?;
@@ -323,6 +322,55 @@ impl Storage {
         let _ = self.backend.execute_batch("DELETE FROM associations");
         let _ = self.backend.execute_batch("DELETE FROM meditations");
         let _ = self.backend.execute_batch("DELETE FROM recalls");
+        Ok(())
+    }
+}
+
+impl Storage {
+    /// Delete ALL data for a single user across every table.
+    pub(crate) fn delete_user_data(&self, user_id: &str) -> Result<()> {
+        use crate::types::SqlParam;
+        let collection = &self.config.collection_name;
+        let p = &[SqlParam::Text(user_id.to_string())];
+        let _ = self.backend.execute("DELETE FROM vec_memories WHERE memory_id IN (SELECT id FROM memories WHERE user_id = $1)", p);
+        let _ = self.backend.execute("DELETE FROM vec_events WHERE event_id IN (SELECT event_id FROM events WHERE user_id = $1)", p);
+        let _ = self.backend.execute(
+            "DELETE FROM memories_fts WHERE id IN (SELECT id FROM memories WHERE user_id = $1)",
+            p,
+        );
+        let _ = self.backend.execute("DELETE FROM episodes_fts WHERE episode_id IN (SELECT episode_id FROM episodes WHERE user_id = $1)", p);
+        self.backend
+            .execute("DELETE FROM memory_entities WHERE user_id = $1", p)?;
+        self.backend.execute(
+            &format!("DELETE FROM relationships_{collection} WHERE user_id = $1"),
+            p,
+        )?;
+        self.backend.execute(
+            &format!("DELETE FROM entities_{collection} WHERE user_id = $1"),
+            p,
+        )?;
+        self.backend
+            .execute("DELETE FROM history WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM memories WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM events WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM sessions WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM episodes WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM identity WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM meditations WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM recalls WHERE user_id = $1", p)?;
+        self.backend
+            .execute("DELETE FROM procedures WHERE user_id = $1", p)?;
+        let _ = self
+            .backend
+            .execute("DELETE FROM sources WHERE user_id = $1", p);
+        let _ = self.backend.execute("DELETE FROM associations WHERE from_id IN (SELECT id FROM memories WHERE user_id = $1) OR to_id IN (SELECT id FROM memories WHERE user_id = $1)", p);
         Ok(())
     }
 }

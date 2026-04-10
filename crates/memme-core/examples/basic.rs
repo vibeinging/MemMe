@@ -15,14 +15,7 @@ fn main() {
     println!("=== MemMe Basic Example ===\n");
 
     // ── 1. Create an in-memory store with MockEmbedder ──────────────────
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "demo".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        ..Default::default()
-    };
+    let config = MemoryConfig::new(":memory:", 384);
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder).expect("Failed to create MemoryStore");
     println!("[1] MemoryStore created (in-memory, 384-dim embeddings)\n");

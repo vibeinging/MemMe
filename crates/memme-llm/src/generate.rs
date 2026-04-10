@@ -128,7 +128,6 @@ pub fn generate_structured<T>(
     )))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

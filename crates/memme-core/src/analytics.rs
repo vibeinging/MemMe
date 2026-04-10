@@ -50,14 +50,7 @@ mod tests {
     use crate::types::AddOptions;
 
     fn make_store() -> MemoryStore {
-        let config = MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 384,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        };
+        let config = MemoryConfig::new(":memory:", 384);
         let embedder = Arc::new(MockEmbedder::new(384));
         MemoryStore::new(config, embedder).unwrap()
     }

@@ -36,12 +36,7 @@ pub(crate) trait SqlDialect: Send + Sync {
     // ── HNSW index ──
 
     /// SQL to create an HNSW vector index, or `None` if not supported.
-    fn create_hnsw_index_sql(
-        &self,
-        index_name: &str,
-        table: &str,
-        column: &str,
-    ) -> Option<String>;
+    fn create_hnsw_index_sql(&self, index_name: &str, table: &str, column: &str) -> Option<String>;
 
     // ── Full-text search ──
 
@@ -134,6 +129,26 @@ pub(crate) trait SqlDialect: Send + Sync {
         None
     }
 
+    /// SQL to insert a row into the vec_events table.
+    fn vec0_event_insert_sql(&self, _id_param: &str, _embedding_literal: &str) -> Option<String> {
+        None
+    }
+
+    /// SQL to delete a row from the vec_events table.
+    fn vec0_event_delete_sql(&self) -> Option<&str> {
+        None
+    }
+
+    /// Generate a vec0 MATCH-based KNN query on vec_events.
+    fn vec0_event_knn_sql(
+        &self,
+        _embedding_param: &str,
+        _user_id_param: &str,
+        _limit: usize,
+    ) -> Option<String> {
+        None
+    }
+
     // ── String functions ──
 
     /// SQL expression for LEFT(str, n) — take first n characters.
@@ -148,7 +163,9 @@ pub(crate) trait SqlDialect: Send + Sync {
 /// Validate that an embedding contains no NaN or Infinity values.
 pub(crate) fn validate_embedding(embedding: &[f32]) -> Result<()> {
     if embedding.iter().any(|v| v.is_nan() || v.is_infinite()) {
-        return Err(MemoryError::Config("embedding contains NaN or Infinity".into()));
+        return Err(MemoryError::Config(
+            "embedding contains NaN or Infinity".into(),
+        ));
     }
     Ok(())
 }
@@ -156,7 +173,10 @@ pub(crate) fn validate_embedding(embedding: &[f32]) -> Result<()> {
 /// Validate category names (alphanumeric, underscore, hyphen, space only).
 pub(crate) fn validate_categories(categories: &[String]) -> Result<()> {
     for cat in categories {
-        if !cat.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ') {
+        if !cat
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ')
+        {
             return Err(MemoryError::Config(format!(
                 "Invalid category name '{}': only alphanumeric, underscore, hyphen, and space allowed", cat
             )));

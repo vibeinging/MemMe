@@ -7,10 +7,9 @@ use super::Storage;
 impl Storage {
     /// Get the maximum sync_version across all memories.
     pub(crate) fn get_max_sync_version(&self) -> Result<u64> {
-        let version = self.backend.query_count(
-            "SELECT COALESCE(MAX(sync_version), 0) FROM memories",
-            &[],
-        )?;
+        let version = self
+            .backend
+            .query_count("SELECT COALESCE(MAX(sync_version), 0) FROM memories", &[])?;
         Ok(version as u64)
     }
 
@@ -39,10 +38,9 @@ impl Storage {
             ORDER BY m.sync_version ASC
         "#;
 
-        let rows = self.backend.query_read(
-            sql,
-            &[SqlParam::Int(since_version as i64)],
-            |row| {
+        let rows = self
+            .backend
+            .query_read(sql, &[SqlParam::Int(since_version as i64)], |row| {
                 Ok((
                     row.get_string(0)?,
                     row.get_string(1)?,
@@ -52,8 +50,7 @@ impl Storage {
                     row.get_opt_string(5)?,
                     row.get_string(6)?,
                 ))
-            },
-        )?;
+            })?;
 
         let mut changes: Vec<crate::sync::SyncChange> = rows
             .into_iter()
@@ -94,17 +91,15 @@ impl Storage {
               AND NOT EXISTS (SELECT 1 FROM memories m3 WHERE m3.id = h.memory_id)
         "#;
 
-        let del_rows = self.backend.query_read(
-            delete_sql,
-            &[SqlParam::Int(since_version as i64)],
-            |row| {
-                Ok((
-                    row.get_string(0)?,
-                    row.get_opt_string(1)?,
-                    row.get_string(2)?,
-                ))
-            },
-        )?;
+        let del_rows =
+            self.backend
+                .query_read(delete_sql, &[SqlParam::Int(since_version as i64)], |row| {
+                    Ok((
+                        row.get_string(0)?,
+                        row.get_opt_string(1)?,
+                        row.get_string(2)?,
+                    ))
+                })?;
 
         // Use the max sync_version + 1 for tombstone entries
         let max_version = changes
@@ -132,7 +127,9 @@ impl Storage {
     pub(crate) fn get_storage_stats(&self) -> Result<crate::sync::StorageStats> {
         let collection = &self.config.collection_name;
 
-        let mem_count = self.backend.query_count("SELECT COUNT(*) FROM memories", &[])?;
+        let mem_count = self
+            .backend
+            .query_count("SELECT COUNT(*) FROM memories", &[])?;
 
         let entity_sql = format!("SELECT COUNT(*) FROM entities_{collection}");
         let entity_count = self.backend.query_count(&entity_sql, &[])?;
@@ -169,10 +166,9 @@ impl Storage {
         memory_id: &str,
         device_id: Option<&str>,
     ) -> Result<u64> {
-        let max_version = self.backend.query_count(
-            "SELECT COALESCE(MAX(sync_version), 0) FROM memories",
-            &[],
-        )?;
+        let max_version = self
+            .backend
+            .query_count("SELECT COALESCE(MAX(sync_version), 0) FROM memories", &[])?;
         let next_version = (max_version as u64) + 1;
         let dev_val = opt_text(device_id);
         self.backend.execute(
@@ -196,14 +192,7 @@ mod tests {
     use super::Storage;
 
     fn test_config(dims: usize) -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: dims,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", dims)
     }
 
     fn open_storage(dims: usize) -> Storage {
@@ -339,16 +328,19 @@ mod tests {
             )
             .unwrap();
 
-        let rows = storage.backend.query_read(
-            "SELECT sync_version, device_id, sync_status FROM memories WHERE id = $1",
-            &[SqlParam::Text("id1".to_string())],
-            |row| {
-                let version = row.get_i64(0)?;
-                let device_id = row.get_opt_string(1)?;
-                let status = row.get_string(2)?;
-                Ok((version, device_id, status))
-            },
-        ).unwrap();
+        let rows = storage
+            .backend
+            .query_read(
+                "SELECT sync_version, device_id, sync_status FROM memories WHERE id = $1",
+                &[SqlParam::Text("id1".to_string())],
+                |row| {
+                    let version = row.get_i64(0)?;
+                    let device_id = row.get_opt_string(1)?;
+                    let status = row.get_string(2)?;
+                    Ok((version, device_id, status))
+                },
+            )
+            .unwrap();
         let (version, device_id, status) = rows.into_iter().next().unwrap();
         assert_eq!(version, 0);
         assert!(device_id.is_none());

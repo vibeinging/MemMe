@@ -161,25 +161,21 @@ impl Storage {
                       s.structured_notes
                FROM sessions s
                ORDER BY s.started_at DESC"#;
-        self.backend.query_read(
-            sql,
-            &[],
-            |row| {
-                Ok(Session {
-                    session_id: row.get_string(0)?,
-                    user_id: row.get_string(1)?,
-                    source_id: row.get_opt_string(2)?,
-                    started_at: row.get_string(3)?,
-                    ended_at: row.get_opt_string(4)?,
-                    metadata: row
-                        .get_opt_string(5)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    created_at: row.get_string(6)?,
-                    event_count: row.get_opt_i64(7)?.unwrap_or(0) as u32,
-                    structured_notes: row.get_opt_string(8)?,
-                })
-            },
-        )
+        self.backend.query_read(sql, &[], |row| {
+            Ok(Session {
+                session_id: row.get_string(0)?,
+                user_id: row.get_string(1)?,
+                source_id: row.get_opt_string(2)?,
+                started_at: row.get_string(3)?,
+                ended_at: row.get_opt_string(4)?,
+                metadata: row
+                    .get_opt_string(5)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+                created_at: row.get_string(6)?,
+                event_count: row.get_opt_i64(7)?.unwrap_or(0) as u32,
+                structured_notes: row.get_opt_string(8)?,
+            })
+        })
     }
 
     /// List all events without user_id filter.
@@ -189,33 +185,27 @@ impl Storage {
                       processed, processed_at,
                       purified_content, purified, event_time, location
                FROM events ORDER BY timestamp DESC"#;
-        self.backend.query_read(
-            sql,
-            &[],
-            |row| {
-                Ok(Event {
-                    event_id: row.get_string(0)?,
-                    source_id: row.get_opt_string(1)?,
-                    session_id: row.get_opt_string(2)?,
-                    timestamp: row.get_string(3)?,
-                    event_type: EventType::parse(
-                        &row.get_opt_string(4)?.unwrap_or_default(),
-                    ),
-                    content: row.get_string(5)?,
-                    parent_id: row.get_opt_string(6)?,
-                    metadata: row
-                        .get_opt_string(7)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    user_id: row.get_string(8)?,
-                    processed: row.get_opt_bool(9)?.unwrap_or(false),
-                    processed_at: row.get_opt_string(10)?,
-                    purified_content: row.get_opt_string(11)?,
-                    purified: row.get_opt_bool(12)?.unwrap_or(false),
-                    event_time: row.get_opt_string(13)?,
-                    location: row.get_opt_string(14)?,
-                })
-            },
-        )
+        self.backend.query_read(sql, &[], |row| {
+            Ok(Event {
+                event_id: row.get_string(0)?,
+                source_id: row.get_opt_string(1)?,
+                session_id: row.get_opt_string(2)?,
+                timestamp: row.get_string(3)?,
+                event_type: EventType::parse(&row.get_opt_string(4)?.unwrap_or_default()),
+                content: row.get_string(5)?,
+                parent_id: row.get_opt_string(6)?,
+                metadata: row
+                    .get_opt_string(7)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+                user_id: row.get_string(8)?,
+                processed: row.get_opt_bool(9)?.unwrap_or(false),
+                processed_at: row.get_opt_string(10)?,
+                purified_content: row.get_opt_string(11)?,
+                purified: row.get_opt_bool(12)?.unwrap_or(false),
+                event_time: row.get_opt_string(13)?,
+                location: row.get_opt_string(14)?,
+            })
+        })
     }
 
     /// List all episodes without user_id filter.
@@ -227,89 +217,76 @@ impl Storage {
                       recall_count, storage_strength, retrieval_strength,
                       session_ids, last_meditated_at
                FROM episodes ORDER BY started_at DESC"#;
-        self.backend.query_read(
-            sql,
-            &[],
-            |row| {
-                let event_ids_raw: Option<String> = row.get_opt_string(8)?;
-                let event_ids: Vec<String> = event_ids_raw
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                let session_ids_raw: Option<String> = row.get_opt_string(15)?;
-                let session_ids: Vec<String> = session_ids_raw
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                Ok(Episode {
-                    episode_id: row.get_string(0)?,
-                    title: row.get_string(1)?,
-                    summary: row.get_string(2)?,
-                    started_at: row.get_string(3)?,
-                    ended_at: row.get_opt_string(4)?,
-                    significance: row.get_opt_f64(5)?.unwrap_or(0.5) as f32,
-                    outcome: row.get_opt_string(6)?,
-                    source_id: row.get_opt_string(7)?,
-                    event_ids,
-                    session_ids,
-                    user_id: row.get_string(9)?,
-                    created_at: row.get_string(10)?,
-                    last_recalled: row.get_opt_string(11)?,
-                    recall_count: row.get_opt_i64(12)?.unwrap_or(0) as u32,
-                    storage_strength: row.get_opt_f64(13)?.unwrap_or(1.0) as f32,
-                    retrieval_strength: row.get_opt_f64(14)?.unwrap_or(1.0) as f32,
-                    last_meditated_at: row.get_opt_string(16)?,
-                    score: None,
-                })
-            },
-        )
+        self.backend.query_read(sql, &[], |row| {
+            let event_ids_raw: Option<String> = row.get_opt_string(8)?;
+            let event_ids: Vec<String> = event_ids_raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let session_ids_raw: Option<String> = row.get_opt_string(15)?;
+            let session_ids: Vec<String> = session_ids_raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            Ok(Episode {
+                episode_id: row.get_string(0)?,
+                title: row.get_string(1)?,
+                summary: row.get_string(2)?,
+                started_at: row.get_string(3)?,
+                ended_at: row.get_opt_string(4)?,
+                significance: row.get_opt_f64(5)?.unwrap_or(0.5) as f32,
+                outcome: row.get_opt_string(6)?,
+                source_id: row.get_opt_string(7)?,
+                event_ids,
+                session_ids,
+                user_id: row.get_string(9)?,
+                created_at: row.get_string(10)?,
+                last_recalled: row.get_opt_string(11)?,
+                recall_count: row.get_opt_i64(12)?.unwrap_or(0) as u32,
+                storage_strength: row.get_opt_f64(13)?.unwrap_or(1.0) as f32,
+                retrieval_strength: row.get_opt_f64(14)?.unwrap_or(1.0) as f32,
+                last_meditated_at: row.get_opt_string(16)?,
+                score: None,
+            })
+        })
     }
 
     /// List all identity traits without user_id filter.
     fn list_all_identity_traits(&self) -> Result<Vec<IdentityTrait>> {
-        let sql =
-            r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
+        let sql = r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
                       created_at, updated_at
                FROM identity ORDER BY confidence DESC"#;
-        self.backend.query_read(
-            sql,
-            &[],
-            |row| {
-                let evidence_raw: Option<String> = row.get_opt_string(4)?;
-                let evidence_ids: Vec<String> = evidence_raw
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                Ok(IdentityTrait {
-                    trait_id: row.get_string(0)?,
-                    trait_type: TraitType::parse(&row.get_string(1).unwrap_or_default()),
-                    content: row.get_string(2)?,
-                    confidence: row.get_opt_f64(3)?.unwrap_or(0.5) as f32,
-                    evidence_ids,
-                    user_id: row.get_string(5)?,
-                    created_at: row.get_string(6)?,
-                    updated_at: row.get_opt_string(7)?,
-                })
-            },
-        )
+        self.backend.query_read(sql, &[], |row| {
+            let evidence_raw: Option<String> = row.get_opt_string(4)?;
+            let evidence_ids: Vec<String> = evidence_raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            Ok(IdentityTrait {
+                trait_id: row.get_string(0)?,
+                trait_type: TraitType::parse(&row.get_string(1).unwrap_or_default()),
+                content: row.get_string(2)?,
+                confidence: row.get_opt_f64(3)?.unwrap_or(0.5) as f32,
+                evidence_ids,
+                user_id: row.get_string(5)?,
+                created_at: row.get_string(6)?,
+                updated_at: row.get_opt_string(7)?,
+            })
+        })
     }
 
     /// List all sources without user_id filter.
     fn list_all_sources(&self) -> Result<Vec<Source>> {
         let sql =
             "SELECT source_id, source_type, name, registered_at, metadata FROM sources ORDER BY registered_at DESC";
-        self.backend.query_read(
-            sql,
-            &[],
-            |row| {
-                Ok(Source {
-                    source_id: row.get_string(0)?,
-                    source_type: row.get_string(1)?,
-                    name: row.get_opt_string(2)?,
-                    registered_at: row.get_string(3)?,
-                    metadata: row
-                        .get_opt_string(4)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                })
-            },
-        )
+        self.backend.query_read(sql, &[], |row| {
+            Ok(Source {
+                source_id: row.get_string(0)?,
+                source_type: row.get_string(1)?,
+                name: row.get_opt_string(2)?,
+                registered_at: row.get_string(3)?,
+                metadata: row
+                    .get_opt_string(4)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+            })
+        })
     }
 
     // ── Export entities and relations as typed structs ──
@@ -706,14 +683,7 @@ mod tests {
     use super::Storage;
 
     fn test_config(dims: usize) -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: dims,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", dims)
     }
 
     fn open_storage(dims: usize) -> Storage {

@@ -29,7 +29,7 @@ impl super::MemoryStore {
             return false;
         }
         let level = self.battery_level.load(Ordering::Relaxed) as f32 / 100.0;
-        if let Some(ref pc) = self.config.power_config {
+        if let Some(ref pc) = self.config.tuning.power_config {
             level < pc.full_power_threshold
         } else {
             false
@@ -42,7 +42,7 @@ impl super::MemoryStore {
             return false;
         }
         let level = self.battery_level.load(Ordering::Relaxed) as f32 / 100.0;
-        if let Some(ref pc) = self.config.power_config {
+        if let Some(ref pc) = self.config.tuning.power_config {
             level < pc.power_save_threshold
         } else {
             false
@@ -98,7 +98,7 @@ impl super::MemoryStore {
             content,
             &options.user_id,
             options.agent_id.as_deref(),
-            self.config.dedup_threshold,
+            self.config.tuning.dedup_threshold,
         )?;
         match dedup_result {
             DedupResult::Duplicate { existing_id, .. } => {

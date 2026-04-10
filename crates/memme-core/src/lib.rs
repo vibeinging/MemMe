@@ -34,11 +34,13 @@
 
 pub mod analytics;
 pub mod config;
+pub(crate) mod contradiction;
 pub(crate) mod dedup;
 pub(crate) mod entity_index;
 pub mod error;
 pub(crate) mod graph;
 pub mod import;
+pub(crate) mod locale;
 pub mod memory;
 pub mod procedural;
 pub mod rerank;
@@ -46,11 +48,13 @@ pub(crate) mod search;
 pub(crate) mod storage;
 pub mod sync;
 pub(crate) mod text_utils;
+pub(crate) mod time_parser;
+pub(crate) mod tokenizer;
 pub mod types;
 #[cfg(feature = "webhooks")]
 pub mod webhook;
 
-pub use config::{MemoryConfig, PowerConfig};
+pub use config::{MemoryConfig, PowerConfig, TuningConfig};
 pub use error::{MemoryError, Result};
 pub use import::{ImportConversationsResult, ImportedConversation};
 pub use memme_llm::prompts::FeedbackItem;

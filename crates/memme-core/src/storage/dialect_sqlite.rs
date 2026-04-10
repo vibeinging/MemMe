@@ -64,9 +64,15 @@ impl SqlDialect for SqliteDialect {
     }
 
     fn create_fts_index_sql(&self, table: &str, id_col: &str, content_cols: &[&str]) -> String {
-        let all_cols: Vec<&str> = std::iter::once(id_col).chain(content_cols.iter().copied()).collect();
+        let all_cols: Vec<&str> = std::iter::once(id_col)
+            .chain(content_cols.iter().copied())
+            .collect();
         let cols_def = all_cols.join(", ");
-        let cols_select = all_cols.iter().map(|c| format!("{table}.{c}")).collect::<Vec<_>>().join(", ");
+        let cols_select = all_cols
+            .iter()
+            .map(|c| format!("{table}.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         // Standalone FTS5 table (not external content) — rebuilt from source table
         format!(
             "DROP TABLE IF EXISTS {table}_fts;\n\
@@ -96,9 +102,7 @@ impl SqlDialect for SqliteDialect {
 
     fn list_contains_expr(&self, column: &str, param: &str) -> String {
         // column stores JSON array like '["cat1","cat2"]'
-        format!(
-            "EXISTS (SELECT 1 FROM json_each({column}) WHERE value = {param})"
-        )
+        format!("EXISTS (SELECT 1 FROM json_each({column}) WHERE value = {param})")
     }
 
     fn array_icontains_expr(&self, column: &str, param: &str) -> String {
@@ -110,8 +114,9 @@ impl SqlDialect for SqliteDialect {
     fn format_categories_literal(&self, categories: &[String]) -> Result<String> {
         super::dialect::validate_categories(categories)?;
         // Store as JSON array string
-        let json = serde_json::to_string(categories)
-            .map_err(|e| crate::error::MemoryError::Config(format!("Failed to serialize categories: {e}")))?;
+        let json = serde_json::to_string(categories).map_err(|e| {
+            crate::error::MemoryError::Config(format!("Failed to serialize categories: {e}"))
+        })?;
         Ok(format!("'{json}'"))
     }
 
@@ -160,6 +165,11 @@ impl SqlDialect for SqliteDialect {
                 memory_id TEXT PRIMARY KEY,
                 embedding float[{dims}] distance_metric=cosine,
                 user_id TEXT partition_key
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_events USING vec0(
+                event_id TEXT PRIMARY KEY,
+                content_vec float[{dims}] distance_metric=cosine,
+                user_id TEXT partition_key
             )"#
         ))
     }
@@ -187,6 +197,32 @@ impl SqlDialect for SqliteDialect {
             r#"SELECT memory_id, distance
                FROM vec_memories
                WHERE embedding MATCH {embedding_param}
+                 AND k = {limit}
+                 AND user_id = {user_id_param}"#
+        ))
+    }
+
+    fn vec0_event_insert_sql(&self, id_param: &str, embedding_literal: &str) -> Option<String> {
+        Some(format!(
+            "INSERT INTO vec_events(event_id, content_vec, user_id) \
+             VALUES ({id_param}, {embedding_literal}, $2)"
+        ))
+    }
+
+    fn vec0_event_delete_sql(&self) -> Option<&str> {
+        Some("DELETE FROM vec_events WHERE event_id = $1")
+    }
+
+    fn vec0_event_knn_sql(
+        &self,
+        embedding_param: &str,
+        user_id_param: &str,
+        limit: usize,
+    ) -> Option<String> {
+        Some(format!(
+            r#"SELECT event_id, distance
+               FROM vec_events
+               WHERE content_vec MATCH {embedding_param}
                  AND k = {limit}
                  AND user_id = {user_id_param}"#
         ))

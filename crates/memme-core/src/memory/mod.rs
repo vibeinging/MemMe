@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +11,7 @@ use crate::config::MemoryConfig;
 use crate::dedup::{self, DedupResult};
 use crate::error::{MemoryError, Result};
 use crate::storage::{InsertMemoryParams, Storage};
+use crate::tokenizer::{self, Tokenizer};
 use crate::types::*;
 #[cfg(feature = "webhooks")]
 use crate::webhook::{WebhookEvent, WebhookManager};
@@ -18,6 +20,7 @@ mod helpers;
 pub(crate) use helpers::{content_hash, recover_lock, row_to_result};
 
 mod analytics;
+pub(crate) mod background;
 mod battery;
 mod compact_ops;
 mod episode_ops;
@@ -110,6 +113,10 @@ pub struct MemoryStore {
     last_flush_millis: AtomicU64,
     /// Optional reranker for post-fusion re-scoring.
     reranker: Option<Arc<dyn crate::rerank::Reranker>>,
+    /// Background task queue for deferred LLM operations (compact, meditate).
+    background_queue: Mutex<VecDeque<background::BackgroundTask>>,
+    /// Locale-aware tokenizer for word overlap search channel.
+    tokenizer: Box<dyn Tokenizer>,
 }
 
 impl MemoryStore {
@@ -139,9 +146,12 @@ impl MemoryStore {
 
         #[cfg(feature = "webhooks")]
         let webhook_manager = config
+            .tuning
             .webhooks
             .as_ref()
             .map(|hooks| WebhookManager::from_configs(hooks.clone()));
+
+        let tok = tokenizer::select_tokenizer(&config.locale);
 
         Ok(Self {
             storage,
@@ -156,6 +166,8 @@ impl MemoryStore {
             deferred_writes: Mutex::new(Vec::new()),
             last_flush_millis: AtomicU64::new(now_millis()),
             reranker: None,
+            background_queue: Mutex::new(VecDeque::new()),
+            tokenizer: tok,
         })
     }
 
@@ -188,7 +200,7 @@ impl MemoryStore {
 
     /// Check whether enough time has elapsed to warrant a deferred write flush.
     fn should_time_flush(&self) -> bool {
-        let interval_secs = self.config.deferred_flush_interval_secs;
+        let interval_secs = self.config.tuning.deferred_flush_interval_secs;
         if interval_secs == 0 {
             return false;
         }
@@ -281,7 +293,7 @@ impl MemoryStore {
 
         // Battery-aware: defer if critical power
         if self.is_critical_power() {
-            if let Some(ref pc) = self.config.power_config {
+            if let Some(ref pc) = self.config.tuning.power_config {
                 if pc.defer_when_critical {
                     let mut queue = recover_lock(&self.deferred_ops, "deferred_ops");
                     queue.push(DeferredOp {
@@ -331,10 +343,8 @@ impl MemoryStore {
                 debug!(id = %existing_id, "Exact hash match — skipping embedding computation");
 
                 // Update metadata and timestamp only — no embedding recomputation needed
-                self.storage.update_metadata_on_dedup(
-                    &existing_id,
-                    options.metadata.as_ref(),
-                )?;
+                self.storage
+                    .update_metadata_on_dedup(&existing_id, options.metadata.as_ref())?;
 
                 let history_id = Uuid::new_v4().to_string();
                 self.storage.record_history(
@@ -353,6 +363,11 @@ impl MemoryStore {
                     &existing_id,
                     serde_json::json!({"content": content, "dedup": true}),
                 );
+
+                // Process one background task opportunistically (non-blocking).
+                if self.has_llm() {
+                    let _ = self.process_background();
+                }
 
                 return self
                     .get_trace(&existing_id)?
@@ -373,7 +388,7 @@ impl MemoryStore {
             content,
             &options.user_id,
             options.agent_id.as_deref(),
-            self.config.dedup_threshold,
+            self.config.tuning.dedup_threshold,
         )?;
 
         match dedup {
@@ -416,6 +431,11 @@ impl MemoryStore {
                     serde_json::json!({"content": content, "dedup": true}),
                 );
 
+                // Process one background task opportunistically (non-blocking).
+                if self.has_llm() {
+                    let _ = self.process_background();
+                }
+
                 // Return updated memory
                 self.get_trace(&existing_id)?
                     .ok_or_else(|| MemoryError::NotFound(existing_id))
@@ -430,7 +450,7 @@ impl MemoryStore {
 
                 debug!(id = %id, user_id = %options.user_id, "Inserting new memory");
 
-                let initial_stability = if self.config.enable_forgetting_curve {
+                let initial_stability = if self.config.tuning.enable_forgetting_curve {
                     let imp = options.importance.unwrap_or(0.5);
                     Some(initial_stability_for_tier(imp, 0))
                 } else {
@@ -487,21 +507,73 @@ impl MemoryStore {
 
                 let result = self
                     .get_trace(&id)?
-                    .ok_or_else(|| MemoryError::NotFound(id))?;
+                    .ok_or_else(|| MemoryError::NotFound(id.clone()))?;
+
+                // Contradiction detection: find top-3 most similar existing
+                // memories and check for rule-based contradiction signals.
+                // If a contradiction is found, mark the old memory as superseded.
+                {
+                    // cosine distance <= 0.40 corresponds to similarity >= 0.80
+                    const CONTRADICTION_DISTANCE_THRESHOLD: f32 = 0.40;
+                    let candidates = self.storage.vector_search(
+                        &embedding,
+                        &options.user_id,
+                        options.agent_id.as_deref(),
+                        None,
+                        None,
+                        None,
+                        // top-4: one will be the memory we just inserted, skip it
+                        4,
+                    );
+                    if let Ok(rows) = candidates {
+                        for row in rows.iter().take(4) {
+                            // Skip the memory we just inserted
+                            if row.id == id {
+                                continue;
+                            }
+                            // Only consider high-similarity memories
+                            if let Some(distance) = row.score {
+                                if distance > CONTRADICTION_DISTANCE_THRESHOLD {
+                                    continue;
+                                }
+                            }
+                            let cr = crate::contradiction::detect_contradiction(
+                                &row.content,
+                                content,
+                                true, // new memory is always newer
+                            );
+                            if cr.is_contradiction {
+                                debug!(
+                                    old_id = %row.id,
+                                    new_id = %id,
+                                    score = cr.score,
+                                    signals = ?cr.signals,
+                                    "Contradiction detected — marking old memory as superseded"
+                                );
+                                let _ = self.storage.mark_superseded(&row.id, &id);
+                            }
+                        }
+                    }
+                }
 
                 // Auto-prune if enabled and over limit
-                if self.config.auto_prune {
-                    if let Some(max) = self.config.max_memories_per_user {
+                if self.config.tuning.auto_prune {
+                    if let Some(max) = self.config.tuning.max_memories_per_user {
                         let count = self.storage.count_user_memories(&options.user_id)?;
                         if count > max {
                             let to_remove = count - max;
                             let _ = self.storage.prune_memories(
                                 &options.user_id,
-                                &self.config.pruning_strategy,
+                                &self.config.tuning.pruning_strategy,
                                 to_remove,
                             );
                         }
                     }
+                }
+
+                // Process one background task opportunistically (non-blocking).
+                if self.has_llm() {
+                    let _ = self.process_background();
                 }
 
                 Ok(result)
@@ -517,10 +589,7 @@ impl MemoryStore {
     ///
     /// Returns results for successfully added/updated memories.
     /// Failures for individual items are logged and skipped.
-    pub fn add_batch(
-        &self,
-        items: &[(String, AddOptions)],
-    ) -> Result<Vec<MemoryResult>> {
+    pub fn add_batch(&self, items: &[(String, AddOptions)]) -> Result<Vec<MemoryResult>> {
         self.flush_deferred_writes();
 
         if items.is_empty() {
@@ -558,7 +627,7 @@ impl MemoryStore {
                 content,
                 &options.user_id,
                 options.agent_id.as_deref(),
-                self.config.dedup_threshold,
+                self.config.tuning.dedup_threshold,
             )?;
 
             match dedup {
@@ -599,7 +668,7 @@ impl MemoryStore {
                         .map(serde_json::to_string)
                         .transpose()?;
 
-                    let initial_stability = if self.config.enable_forgetting_curve {
+                    let initial_stability = if self.config.tuning.enable_forgetting_curve {
                         let imp = options.importance.unwrap_or(0.5);
                         Some(initial_stability_for_tier(imp, 0))
                     } else {
@@ -637,7 +706,11 @@ impl MemoryStore {
 
                     let history_id = Uuid::new_v4().to_string();
                     let _ = self.storage.record_history(
-                        &history_id, &id, &options.user_id, None, content,
+                        &history_id,
+                        &id,
+                        &options.user_id,
+                        None,
+                        content,
                         HistoryEvent::Add.as_str(),
                     );
                     let _ = self.storage.bump_sync_version(&id, None);
@@ -665,10 +738,10 @@ impl MemoryStore {
         if row.is_some() {
             // Defer access tracking to avoid acquiring write lock during read
             let mut queue = recover_lock(&self.deferred_writes, "deferred_writes");
-            if self.config.enable_forgetting_curve {
+            if self.config.tuning.enable_forgetting_curve {
                 queue.push(DeferredWrite::ReinforceStability(
                     id.to_string(),
-                    self.config.stability_growth_factor,
+                    self.config.tuning.stability_growth_factor,
                 ));
             } else {
                 queue.push(DeferredWrite::IncrementAccess(id.to_string()));
@@ -680,7 +753,7 @@ impl MemoryStore {
         }
         Ok(row.map(|r| {
             let mut result = row_to_result(r);
-            if self.config.enable_forgetting_curve {
+            if self.config.tuning.enable_forgetting_curve {
                 let stability = result.stability.unwrap_or(1.0);
                 result.retention = Some(compute_retention(&result.updated_at, stability));
             }
@@ -812,6 +885,18 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// GDPR: Delete ALL data for a specific user across every table.
+    ///
+    /// Removes memories, events, sessions, episodes, entities, relationships,
+    /// identity traits, history, meditations, recalls, procedures, and
+    /// corresponding entries in vec0 and FTS indexes.
+    pub fn delete_user_data(&self, user_id: &str) -> Result<()> {
+        self.flush_deferred_writes();
+        self.storage.delete_user_data(user_id)?;
+        info!(user_id, "All user data deleted (GDPR)");
+        Ok(())
+    }
+
     /// Expose storage reference for tests.
     #[cfg(test)]
     pub(crate) fn storage(&self) -> &Storage {
@@ -822,6 +907,17 @@ impl MemoryStore {
     fn fire_webhook(&self, event: WebhookEvent, memory_id: &str, data: serde_json::Value) {
         if let Some(ref manager) = self.webhook_manager {
             manager.fire(event, memory_id, data);
+        }
+    }
+}
+
+impl Drop for MemoryStore {
+    fn drop(&mut self) {
+        // Flush any pending deferred writes (access counts, stability reinforcement).
+        self.flush_deferred_writes();
+        // Drain background queue (best-effort, don't panic on failure).
+        if self.has_llm() {
+            while self.process_background() {}
         }
     }
 }

@@ -33,16 +33,17 @@ impl Storage {
     /// Get change history for a specific memory.
     pub(crate) fn get_history(&self, memory_id: &str) -> Result<Vec<crate::types::HistoryRecord>> {
         let sql = "SELECT id, memory_id, old_memory, new_memory, event, created_at FROM history WHERE memory_id = $1 ORDER BY created_at";
-        self.backend.query_read(sql, &[SqlParam::Text(memory_id.to_string())], |row| {
-            Ok(crate::types::HistoryRecord {
-                id: row.get_string(0)?,
-                memory_id: row.get_string(1)?,
-                old_memory: row.get_opt_string(2)?,
-                new_memory: row.get_string(3)?,
-                event: row.get_string(4)?,
-                created_at: row.get_string(5)?,
+        self.backend
+            .query_read(sql, &[SqlParam::Text(memory_id.to_string())], |row| {
+                Ok(crate::types::HistoryRecord {
+                    id: row.get_string(0)?,
+                    memory_id: row.get_string(1)?,
+                    old_memory: row.get_opt_string(2)?,
+                    new_memory: row.get_string(3)?,
+                    event: row.get_string(4)?,
+                    created_at: row.get_string(5)?,
+                })
             })
-        })
     }
 
     /// Delete all memories for a user (optionally scoped by agent_id/run_id/app_id).
@@ -56,8 +57,7 @@ impl Storage {
     ) -> Result<u64> {
         // Build WHERE clause dynamically
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
@@ -85,11 +85,11 @@ impl Storage {
         let select_sql = format!("SELECT id, content FROM memories WHERE {where_clause}");
         let delete_sql = format!("DELETE FROM memories WHERE {where_clause}");
 
-        let rows: Vec<(String, String)> = self.backend.query_read(
-            &select_sql,
-            &dynamic_params,
-            |row| Ok((row.get_string(0)?, row.get_string(1)?)),
-        )?;
+        let rows: Vec<(String, String)> =
+            self.backend
+                .query_read(&select_sql, &dynamic_params, |row| {
+                    Ok((row.get_string(0)?, row.get_string(1)?))
+                })?;
 
         let count = rows.len() as u64;
 
@@ -134,14 +134,7 @@ mod tests {
     use super::Storage;
 
     fn open_storage() -> Storage {
-        let config = MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 384,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        };
+        let config = MemoryConfig::new(":memory:", 384);
         Storage::open(config).unwrap()
     }
 
@@ -163,11 +156,14 @@ mod tests {
             .unwrap();
 
         // Verify history entries exist by querying
-        let count: Vec<i64> = storage.backend.query_read(
-            "SELECT COUNT(*) FROM history WHERE memory_id = $1",
-            &[SqlParam::Text("mem1".to_string())],
-            |row| row.get_i64(0),
-        ).unwrap();
+        let count: Vec<i64> = storage
+            .backend
+            .query_read(
+                "SELECT COUNT(*) FROM history WHERE memory_id = $1",
+                &[SqlParam::Text("mem1".to_string())],
+                |row| row.get_i64(0),
+            )
+            .unwrap();
         assert_eq!(count[0], 2);
     }
 }

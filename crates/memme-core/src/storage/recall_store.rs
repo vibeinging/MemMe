@@ -59,10 +59,8 @@ impl Storage {
                ORDER BY timestamp DESC
                LIMIT {limit}"#
         );
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            |row| {
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
                 let results_str = row.get_opt_string(5)?;
                 Ok(RecallRecord {
                     recall_id: row.get_string(0)?,
@@ -73,7 +71,6 @@ impl Storage {
                     results: results_str.and_then(|s| serde_json::from_str(&s).ok()),
                     feedback: row.get_opt_string(6)?,
                 })
-            },
-        )
+            })
     }
 }

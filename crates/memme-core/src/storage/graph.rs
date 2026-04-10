@@ -83,17 +83,14 @@ impl Storage {
                WHERE user_id = $1
                ORDER BY created_at"#
         );
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            |row| {
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
                 Ok((
                     row.get_string(0)?,
                     row.get_string(1)?,
                     row.get_opt_string(2)?,
                 ))
-            },
-        )
+            })
     }
 
     /// Delete an entity by ID, also removing all its relationships atomically.
@@ -134,16 +131,19 @@ impl Storage {
         let check_sql = format!(
             "SELECT 1 FROM relationships_{collection} WHERE source_id = $1 AND target_id = $2 AND relation_type = $3 AND user_id = $4 LIMIT 1"
         );
-        let exists = self.backend.query_one(
-            &check_sql,
-            &[
-                SqlParam::Text(source_id.to_string()),
-                SqlParam::Text(target_id.to_string()),
-                SqlParam::Text(relation_type.to_string()),
-                SqlParam::Text(user_id.to_string()),
-            ],
-            |_| Ok(()),
-        )?.is_some();
+        let exists = self
+            .backend
+            .query_one(
+                &check_sql,
+                &[
+                    SqlParam::Text(source_id.to_string()),
+                    SqlParam::Text(target_id.to_string()),
+                    SqlParam::Text(relation_type.to_string()),
+                    SqlParam::Text(user_id.to_string()),
+                ],
+                |_| Ok(()),
+            )?
+            .is_some();
         if exists {
             return Ok(());
         }
@@ -212,10 +212,8 @@ impl Storage {
         let sql = format!(
             "DELETE FROM relationships_{collection} WHERE source_id = $1 OR target_id = $1"
         );
-        self.backend.execute(
-            &sql,
-            &[SqlParam::Text(entity_id.to_string())],
-        )?;
+        self.backend
+            .execute(&sql, &[SqlParam::Text(entity_id.to_string())])?;
         Ok(())
     }
 
@@ -232,10 +230,8 @@ impl Storage {
             &format!("DELETE FROM entities_{collection} WHERE user_id = $1"),
             user_param,
         )?;
-        self.backend.execute(
-            "DELETE FROM memory_entities WHERE user_id = $1",
-            user_param,
-        )?;
+        self.backend
+            .execute("DELETE FROM memory_entities WHERE user_id = $1", user_param)?;
         Ok(())
     }
 
@@ -259,10 +255,7 @@ impl Storage {
         );
         self.backend.query_read(
             &sql,
-            &[
-                SqlParam::Text(pattern),
-                SqlParam::Text(user_id.to_string()),
-            ],
+            &[SqlParam::Text(pattern), SqlParam::Text(user_id.to_string())],
             |row| {
                 Ok((
                     row.get_string(0)?,

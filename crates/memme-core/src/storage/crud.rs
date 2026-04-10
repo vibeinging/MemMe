@@ -111,6 +111,8 @@ impl Storage {
                 ],
             )?;
         }
+        // Incrementally update FTS index
+        self.fts_insert_memory(id, content);
         Ok(())
     }
 
@@ -342,6 +344,8 @@ impl Storage {
                 )?;
             }
         }
+        // Incrementally update FTS index with new content
+        self.fts_insert_memory(id, content);
         Ok(())
     }
 
@@ -363,21 +367,34 @@ impl Storage {
                     &format!(
                         "UPDATE memories SET metadata = $1, updated_at = {now_ts} WHERE id = $2"
                     ),
-                    &[
-                        SqlParam::Text(json_str),
-                        SqlParam::Text(id.to_string()),
-                    ],
+                    &[SqlParam::Text(json_str), SqlParam::Text(id.to_string())],
                 )?;
             }
             None => {
                 self.backend.execute(
-                    &format!(
-                        "UPDATE memories SET updated_at = {now_ts} WHERE id = $1"
-                    ),
+                    &format!("UPDATE memories SET updated_at = {now_ts} WHERE id = $1"),
                     &[SqlParam::Text(id.to_string())],
                 )?;
             }
         }
+        Ok(())
+    }
+
+    // ── Mark superseded ──
+
+    /// Mark an old memory as superseded by a new memory.
+    /// Sets `superseded_by` to the new memory's ID and `valid_until` to the current timestamp.
+    pub(crate) fn mark_superseded(&self, old_id: &str, new_id: &str) -> Result<()> {
+        let now_ts = self.dialect().current_timestamp_expr();
+        self.backend.execute(
+            &format!(
+                "UPDATE memories SET superseded_by = $1, valid_until = {now_ts} WHERE id = $2"
+            ),
+            &[
+                SqlParam::Text(new_id.to_string()),
+                SqlParam::Text(old_id.to_string()),
+            ],
+        )?;
         Ok(())
     }
 
@@ -403,9 +420,12 @@ impl Storage {
         // Check immutable flag
         self.check_immutable(id)?;
 
-        // Delete from vec0 first
+        // Delete from FTS before removing from memories
+        self.fts_delete_memory(id);
+        // Delete from vec0
         if let Some(vec0_sql) = self.dialect().vec0_delete_sql() {
-            self.backend.execute(vec0_sql, &[SqlParam::Text(id.to_string())])?;
+            self.backend
+                .execute(vec0_sql, &[SqlParam::Text(id.to_string())])?;
         }
         self.backend.execute(
             "DELETE FROM memories WHERE id = $1",
@@ -419,7 +439,11 @@ impl Storage {
     pub(crate) fn get_memory(&self, id: &str) -> Result<Option<MemoryRow>> {
         let cols = super::query::memory_select_cols(None, "");
         let sql = format!("SELECT {cols} FROM memories WHERE id = $1");
-        self.backend.query_one(&sql, &[SqlParam::Text(id.to_string())], super::query::map_memory_row)
+        self.backend.query_one(
+            &sql,
+            &[SqlParam::Text(id.to_string())],
+            super::query::map_memory_row,
+        )
     }
 
     // ── Get content by ID (for history recording) ──
@@ -442,14 +466,7 @@ mod tests {
     use super::{InsertMemoryParams, Storage};
 
     fn test_config(dims: usize) -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: dims,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", dims)
     }
 
     fn open_storage(dims: usize) -> Storage {

@@ -1100,14 +1100,15 @@ fn test_full_pipeline_e2e() {
     // ── Setup: store with graph enabled + LLM ──
     let embedder = make_embedder();
     let llm = make_llm();
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "e2e_test".into(),
-        embedding_dims: embedding_dims(),
-        enable_graph: true,
-        meditation_cooldown_hours: 0, // disable cooldown for testing
-        compact_fallback_token_threshold: 0, // always use LLM for compact
-        ..Default::default()
+    let config = {
+        let mut c = MemoryConfig {
+            enable_graph: true,
+            ..MemoryConfig::new(":memory:", embedding_dims())
+        };
+        c.collection_name = "e2e_test".into();
+        c.tuning.meditation_cooldown_hours = 0;
+        c.tuning.compact_fallback_token_threshold = 0;
+        c
     };
     let store = MemoryStore::new(config, embedder).unwrap().with_llm(llm);
 

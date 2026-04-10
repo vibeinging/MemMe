@@ -1,5 +1,6 @@
 use crate::entity_index::EntityIndex;
 use crate::error::Result;
+use crate::time_parser::{self, TimeRange};
 use crate::types::*;
 
 use super::helpers::{
@@ -38,7 +39,7 @@ impl super::MemoryStore {
 
         // Step 2: Spreading activation — find connected entities (configurable depth)
         let seed_refs: Vec<&str> = matched_entities.iter().map(|s| s.as_str()).collect();
-        let depth = self.config.graph_spreading_depth;
+        let depth = self.config.tuning.graph_spreading_depth;
         let expanded_entities = self
             .storage
             .spread_entity_names(&seed_refs, user_id, depth)?;
@@ -58,12 +59,20 @@ impl super::MemoryStore {
     }
 
     /// Detect whether a query has temporal intent (asks about time or contains date references).
-    fn has_temporal_intent(query: &str) -> bool {
+    /// Also returns parsed time ranges when detected, so the caller can skip re-parsing.
+    fn detect_temporal_intent(query: &str) -> (bool, Vec<TimeRange>) {
         let q = query.to_lowercase();
 
+        // First, try the time parser — if it finds concrete ranges, that's definitive.
+        let ranges = time_parser::parse_time_references(query);
+        if !ranges.is_empty() {
+            return (true, ranges);
+        }
+
+        // Fallback heuristics for queries that ask *about* time without a concrete range.
         // "When did...", "When is...", "When was..."
         if q.starts_with("when ") {
-            return true;
+            return (true, Vec::new());
         }
 
         // "How long ago...", "How many years/months/weeks..."
@@ -72,10 +81,10 @@ impl super::MemoryStore {
             || q.starts_with("how many month")
             || q.starts_with("how many week")
         {
-            return true;
+            return (true, Vec::new());
         }
 
-        // Contains month names
+        // Contains month names (English)
         let months = [
             "january",
             "february",
@@ -91,7 +100,7 @@ impl super::MemoryStore {
             "december",
         ];
         if months.iter().any(|m| q.contains(m)) {
-            return true;
+            return (true, Vec::new());
         }
 
         // Contains year patterns (4 digits starting with 19 or 20)
@@ -102,11 +111,11 @@ impl super::MemoryStore {
                 && bytes[i + 2].is_ascii_digit()
                 && bytes[i + 3].is_ascii_digit()
             {
-                return true;
+                return (true, Vec::new());
             }
         }
 
-        // Relative time references
+        // Relative time references (English)
         let time_refs = [
             "yesterday",
             "last week",
@@ -118,7 +127,34 @@ impl super::MemoryStore {
             "during",
             "recently",
         ];
-        time_refs.iter().any(|t| q.contains(t))
+        if time_refs.iter().any(|t| q.contains(t)) {
+            return (true, Vec::new());
+        }
+
+        // Chinese temporal keywords
+        let cn_refs = [
+            "昨天",
+            "今天",
+            "上周",
+            "上个星期",
+            "上个月",
+            "上月",
+            "去年",
+            "本周",
+            "这周",
+            "本月",
+            "这个月",
+            "天前",
+            "周前",
+            "月前",
+            "年前",
+            "最近",
+        ];
+        if cn_refs.iter().any(|t| q.contains(t)) {
+            return (true, Vec::new());
+        }
+
+        (false, Vec::new())
     }
 
     /// # Core API — Primary search method
@@ -137,12 +173,12 @@ impl super::MemoryStore {
             .embed(query)
             .map_err(crate::error::MemoryError::Embedding)?;
 
-        let limit = options.limit.unwrap_or(self.config.default_limit);
+        let limit = options.limit.unwrap_or(self.config.tuning.default_limit);
         let threshold = options.threshold;
 
-        let has_reranker = self.reranker.is_some() && self.config.enable_rerank;
+        let has_reranker = self.reranker.is_some() && self.config.tuning.enable_rerank;
         let rerank_mult = if has_reranker {
-            self.config.rerank_candidate_multiplier.max(1)
+            self.config.tuning.rerank_candidate_multiplier.max(1)
         } else {
             1
         };
@@ -152,25 +188,14 @@ impl super::MemoryStore {
             // Four-channel retrieval — execute channels in parallel using thread::scope.
             // Each channel acquires its own read connection from the pool (Multi mode
             // has 4 read connections by default), so they can run concurrently.
-            let candidate_limit = limit * self.config.rrf_candidate_multiplier.max(1) * rerank_mult;
+            let candidate_limit =
+                limit * self.config.tuning.rrf_candidate_multiplier.max(1) * rerank_mult;
 
             let do_fts = options.keyword_search;
             let do_graph = self.config.enable_graph;
-            let do_temporal = Self::has_temporal_intent(query);
+            let (do_temporal, temporal_ranges) = Self::detect_temporal_intent(query);
 
-            // Channel 5 (event) is adaptive: only enabled when the user has
-            // few memories, so raw events provide retrieval coverage.  Once the
-            // full pipeline has produced enough memories the event channel is
-            // skipped to avoid noise competing with the memory-based channels.
-            let do_event = {
-                let mem_count = self
-                    .storage
-                    .count_user_memories(&options.user_id)
-                    .unwrap_or(0);
-                mem_count < self.config.event_memory_threshold
-            };
-
-            let (vector_results, fts_results, entity_results, temporal_results, event_results) =
+            let (vector_results, fts_results, entity_results, temporal_results) =
                 std::thread::scope(|s| {
                     // Channel 1: Vector search
                     let h_vector = s.spawn(|| {
@@ -232,46 +257,27 @@ impl super::MemoryStore {
                         }
                     });
 
-                    // Channel 4: Temporal retrieval
+                    // Channel 4: Temporal retrieval (range-based when time ranges detected)
                     let h_temporal = s.spawn(|| {
                         if !do_temporal {
                             return Vec::new();
                         }
-                        match self.storage.temporal_search(&options.user_id, candidate_limit) {
+                        let result = if temporal_ranges.is_empty() {
+                            // No concrete ranges — fall back to recency ordering
+                            self.storage
+                                .temporal_search(&options.user_id, candidate_limit)
+                        } else {
+                            // Concrete date ranges extracted from query
+                            self.storage.temporal_range_search(
+                                &options.user_id,
+                                &temporal_ranges,
+                                candidate_limit,
+                            )
+                        };
+                        match result {
                             Ok(rows) => rows.into_iter().map(row_to_result).collect(),
                             Err(e) => {
                                 tracing::warn!("Temporal search failed: {e}");
-                                Vec::new()
-                            }
-                        }
-                    });
-
-                    // Channel 5: Event-level vector search (raw conversation fragments)
-                    let h_event = s.spawn(|| {
-                        if !do_event {
-                            return Vec::new();
-                        }
-                        let rows = self.storage.search_events_by_vector_for_user(
-                            &embedding,
-                            &options.user_id,
-                            candidate_limit,
-                        );
-                        match rows {
-                            Ok(events) => events
-                                .into_iter()
-                                .map(|(e, distance)| {
-                                    let content = e.purified_content.unwrap_or(e.content);
-                                    MemoryResult {
-                                        id: e.event_id,
-                                        content,
-                                        score: Some(distance),
-                                        resolution: Resolution::Granular,
-                                        ..Default::default()
-                                    }
-                                })
-                                .collect::<Vec<_>>(),
-                            Err(e) => {
-                                tracing::warn!("Event channel search failed: {e}");
                                 Vec::new()
                             }
                         }
@@ -282,12 +288,35 @@ impl super::MemoryStore {
                         h_fts.join().unwrap_or_default(),
                         h_entity.join().unwrap_or_default(),
                         h_temporal.join().unwrap_or_default(),
-                        h_event.join().unwrap_or_default(),
                     )
                 });
 
+            // Channel 5: Word overlap re-scoring on vector candidates
+            // Pure string matching — no embedding or FTS needed.
+            // Uses all vector candidates as the pool for overlap scoring.
+            let word_overlap_results = {
+                // Merge all available candidates as pool for word overlap
+                let mut pool = vector_results.clone();
+                for r in &fts_results {
+                    if !pool.iter().any(|p| p.id == r.id) {
+                        pool.push(r.clone());
+                    }
+                }
+                for r in &entity_results {
+                    if !pool.iter().any(|p| p.id == r.id) {
+                        pool.push(r.clone());
+                    }
+                }
+                for r in &temporal_results {
+                    if !pool.iter().any(|p| p.id == r.id) {
+                        pool.push(r.clone());
+                    }
+                }
+                crate::search::word_overlap_rank_with(query, &pool, self.tokenizer.as_ref())
+            };
+
             // Build ranked lists with weights (optionally adaptive)
-            let alpha = self.config.adaptive_rrf_alpha as f64;
+            let alpha = self.config.tuning.adaptive_rrf_alpha as f64;
             let adapt = |base_weight: f64, confidence: f64| -> f64 {
                 base_weight * (1.0 - alpha + alpha * confidence)
             };
@@ -295,11 +324,19 @@ impl super::MemoryStore {
 
             // (results, base_weight, is_distance_score)
             let channels: [(&[MemoryResult], f64, bool); 5] = [
-                (&vector_results, self.config.rrf_vector_weight, true),
-                (&fts_results, self.config.rrf_fts_weight, false),
-                (&entity_results, self.config.rrf_entity_weight, true),
-                (&temporal_results, self.config.rrf_temporal_weight, false),
-                (&event_results, self.config.rrf_event_weight, true),
+                (&vector_results, self.config.tuning.rrf_vector_weight, true),
+                (&fts_results, self.config.tuning.rrf_fts_weight, false),
+                (&entity_results, self.config.tuning.rrf_entity_weight, true),
+                (
+                    &temporal_results,
+                    self.config.tuning.rrf_temporal_weight,
+                    false,
+                ),
+                (
+                    &word_overlap_results,
+                    self.config.tuning.rrf_word_overlap_weight,
+                    false,
+                ),
             ];
 
             let ranked_lists: Vec<(&[MemoryResult], f64)> = channels
@@ -328,7 +365,7 @@ impl super::MemoryStore {
             } else {
                 rrf_fused = true;
                 let fuse_limit = limit * rerank_mult;
-                crate::search::rrf_fuse(&ranked_lists, self.config.rrf_k, fuse_limit)
+                crate::search::rrf_fuse(&ranked_lists, self.config.tuning.rrf_k, fuse_limit)
             }
         } else {
             // Pure vector search (no FTS or graph configured)
@@ -354,7 +391,7 @@ impl super::MemoryStore {
         // Apply cross-encoder reranking if configured
         let mut was_reranked = false;
         let results = if let Some(ref reranker) = self.reranker {
-            if self.config.enable_rerank {
+            if self.config.tuning.enable_rerank {
                 let fallback = results; // keep original
                 match reranker.rerank(query, fallback.clone(), limit) {
                     Ok(reranked) => {
@@ -379,7 +416,7 @@ impl super::MemoryStore {
         };
 
         // Apply forgetting curve scoring if enabled
-        let mut results = if self.config.enable_forgetting_curve {
+        let mut results = if self.config.tuning.enable_forgetting_curve {
             // Compute dynamic normalization from actual max score (for RRF and reranker paths)
             let max_score = if rrf_fused || was_reranked {
                 results
@@ -404,8 +441,7 @@ impl super::MemoryStore {
                 .into_iter()
                 .map(|mut r| {
                     let stability = r.stability.unwrap_or(1.0);
-                    let retention =
-                        compute_retention(&r.updated_at, stability) * i_discount;
+                    let retention = compute_retention(&r.updated_at, stability) * i_discount;
                     r.retention = Some(retention);
 
                     if let Some(raw_score) = r.score {
@@ -421,7 +457,7 @@ impl super::MemoryStore {
                             1.0 - (raw_score / 2.0)
                         };
                         let imp = r.importance.unwrap_or(0.5);
-                        let w = self.config.retention_weight;
+                        let w = self.config.tuning.retention_weight;
                         let weighted = similarity * (w * retention + (1.0 - w) * imp);
                         r.score = Some(weighted);
                     }
@@ -432,7 +468,7 @@ impl super::MemoryStore {
             results
         };
 
-        if self.config.enable_forgetting_curve {
+        if self.config.tuning.enable_forgetting_curve {
             results.sort_by(|a, b| {
                 b.score
                     .partial_cmp(&a.score)
@@ -448,9 +484,9 @@ impl super::MemoryStore {
             .map(|mut r| {
                 if let Some(score) = r.score {
                     let res_mult = match r.resolution {
-                        Resolution::Granular => self.config.resolution_weight_granular,
-                        Resolution::Narrative => self.config.resolution_weight_narrative,
-                        Resolution::Identity => self.config.resolution_weight_identity,
+                        Resolution::Granular => self.config.tuning.resolution_weight_granular,
+                        Resolution::Narrative => self.config.tuning.resolution_weight_narrative,
+                        Resolution::Identity => self.config.tuning.resolution_weight_identity,
                     };
                     r.score = Some(score * res_mult);
                 }
@@ -486,10 +522,10 @@ impl super::MemoryStore {
             // Collect unique session_ids to mark as queried (feedback-driven consolidation).
             let mut seen_sessions = std::collections::HashSet::new();
             for r in &results {
-                if self.config.enable_forgetting_curve {
+                if self.config.tuning.enable_forgetting_curve {
                     queue.push(super::DeferredWrite::ReinforceStability(
                         r.id.clone(),
-                        self.config.stability_growth_factor,
+                        self.config.tuning.stability_growth_factor,
                     ));
                 } else {
                     queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
@@ -502,12 +538,60 @@ impl super::MemoryStore {
             }
         }
 
+        // Feedback-driven compact: if a session has been queried >= 3 times
+        // and hasn't been compacted yet, enqueue a background CompactSession task.
+        // This ensures only frequently-accessed sessions consume LLM resources.
+        {
+            let mut seen_sessions = std::collections::HashSet::new();
+            for r in &results {
+                if let Some(ref sid) = r.session_id {
+                    if !seen_sessions.insert(sid.clone()) {
+                        continue;
+                    }
+                    // The mark_session_queried write hasn't been flushed yet,
+                    // so read the stored count (will be +1 after next flush).
+                    // Threshold of 3 means the session has been searched at least
+                    // 3 times, indicating it's worth investing LLM resources.
+                    const COMPACT_QUERY_THRESHOLD: u32 = 3;
+                    match self.storage.get_session_queried_count(sid) {
+                        Ok(count) if count >= COMPACT_QUERY_THRESHOLD => {
+                            match self.storage.session_has_episode(sid) {
+                                Ok(false) => {
+                                    self.enqueue_background(
+                                        super::background::BackgroundTask::CompactSession(
+                                            sid.clone(),
+                                        ),
+                                    );
+                                }
+                                Ok(true) => {} // already compacted
+                                Err(e) => {
+                                    tracing::debug!(
+                                        session_id = sid.as_str(),
+                                        error = %e,
+                                        "Failed to check session episode status"
+                                    );
+                                }
+                            }
+                        }
+                        Ok(_) => {} // not enough queries yet
+                        Err(e) => {
+                            tracing::debug!(
+                                session_id = sid.as_str(),
+                                error = %e,
+                                "Failed to read session queried_count"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Enforce limit — earlier stages may return more candidates than requested
         let results: Vec<MemoryResult> = results.into_iter().take(limit).collect();
 
         // Apply threshold filter (works in all paths: vector distance, RRF, or weighted score)
         let results = if let Some(t) = threshold {
-            if rrf_fused || was_reranked || self.config.enable_forgetting_curve {
+            if rrf_fused || was_reranked || self.config.tuning.enable_forgetting_curve {
                 // Score is a relevance/weighted score (higher = better): keep if >= threshold
                 results
                     .into_iter()
@@ -524,6 +608,11 @@ impl super::MemoryStore {
             results
         };
 
+        // Process one background task opportunistically (non-blocking).
+        if self.has_llm() {
+            let _ = self.process_background();
+        }
+
         // Apply field filtering if specified
         if let Some(ref fields) = options.fields {
             Ok(results
@@ -539,14 +628,15 @@ impl super::MemoryStore {
     ///
     /// Search with reranking.
     /// First performs vector search for candidates, then reranks with the provided reranker.
-    pub fn search_reranked(
+    #[allow(dead_code)]
+    pub(crate) fn search_reranked(
         &self,
         query: &str,
         options: SearchOptions,
         reranker: &dyn crate::rerank::Reranker,
         candidate_multiplier: usize,
     ) -> Result<Vec<MemoryResult>> {
-        let limit = options.limit.unwrap_or(self.config.default_limit);
+        let limit = options.limit.unwrap_or(self.config.tuning.default_limit);
         let candidate_limit = limit * candidate_multiplier.max(1);
 
         let mut expanded_opts = SearchOptions::new(&options.user_id).limit(candidate_limit);
@@ -587,7 +677,7 @@ impl super::MemoryStore {
     /// Returns None if memory not found or forgetting curve is disabled.
     #[allow(dead_code)] // planned API: forgetting curve inspection
     pub(crate) fn get_retention(&self, id: &str) -> Result<Option<f32>> {
-        if !self.config.enable_forgetting_curve {
+        if !self.config.tuning.enable_forgetting_curve {
             return Ok(None);
         }
         let row = self.storage.get_memory(id)?;

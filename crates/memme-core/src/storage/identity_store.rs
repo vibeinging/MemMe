@@ -113,7 +113,9 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<IdentityTrait>> {
         let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
-        let distance_expr = self.dialect().cosine_distance_expr("content_vec", &emb_literal);
+        let distance_expr = self
+            .dialect()
+            .cosine_distance_expr("content_vec", &emb_literal);
         let sql = format!(
             r#"SELECT trait_id, trait_type, content, confidence, evidence_ids, user_id,
                       created_at, updated_at

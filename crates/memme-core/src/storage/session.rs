@@ -50,8 +50,7 @@ impl Storage {
     /// List sessions with filters and pagination.
     pub(crate) fn list_sessions(&self, options: &ListSessionsOptions) -> Result<Vec<Session>> {
         let mut conditions = vec!["s.user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref source_id) = options.source_id {
@@ -86,7 +85,8 @@ impl Storage {
                LIMIT {limit} OFFSET {offset}"#
         );
 
-        self.backend.query_read(&sql, &dynamic_params, |row| map_session_row(row))
+        self.backend
+            .query_read(&sql, &dynamic_params, |row| map_session_row(row))
     }
 
     /// Set ended_at on a session (close it).
@@ -130,11 +130,15 @@ impl Storage {
     }
     /// Append a line to a session's structured notes, capped at 2000 chars.
     pub(crate) fn append_structured_note(&self, session_id: &str, note: &str) -> Result<()> {
-        let left = self.dialect().left_expr("COALESCE(structured_notes, '') || $1", "2000");
+        let left = self
+            .dialect()
+            .left_expr("COALESCE(structured_notes, '') || $1", "2000");
         self.backend.execute(
-            &format!(r#"UPDATE sessions
+            &format!(
+                r#"UPDATE sessions
                SET structured_notes = {left}
-               WHERE session_id = $2"#),
+               WHERE session_id = $2"#
+            ),
             &[
                 SqlParam::Text(note.to_string()),
                 SqlParam::Text(session_id.to_string()),
@@ -165,6 +169,29 @@ impl Storage {
             &[SqlParam::Text(session_id.to_string())],
         )?;
         Ok(())
+    }
+
+    /// Get the queried_count for a session. Returns 0 if session not found.
+    pub(crate) fn get_session_queried_count(&self, session_id: &str) -> Result<u32> {
+        let count = self.backend.query_one(
+            "SELECT COALESCE(queried_count, 0) FROM sessions WHERE session_id = $1",
+            &[SqlParam::Text(session_id.to_string())],
+            |row| row.get_opt_i64(0),
+        )?;
+        Ok(count.flatten().unwrap_or(0) as u32)
+    }
+
+    /// Check if a session has already been compacted (has a corresponding episode).
+    pub(crate) fn session_has_episode(&self, session_id: &str) -> Result<bool> {
+        // Episodes store session_ids as a JSON array. Check if any episode
+        // contains this session_id in its session_ids column.
+        let count = self.backend.query_one(
+            r#"SELECT COUNT(*) FROM episodes e, json_each(e.session_ids) j
+               WHERE j.value = $1"#,
+            &[SqlParam::Text(session_id.to_string())],
+            |row| row.get_opt_i64(0),
+        )?;
+        Ok(count.flatten().unwrap_or(0) > 0)
     }
 
     /// Delete all sessions for a user.

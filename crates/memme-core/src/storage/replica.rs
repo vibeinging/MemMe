@@ -28,7 +28,8 @@ impl Storage {
     fn checkpoint_and_copy(&self, dst: &str) -> Result<u64> {
         let primary = &self.config.db_path;
         // Flush WAL via the backend abstraction
-        self.backend.execute_batch(self.dialect().checkpoint_sql())?;
+        self.backend
+            .execute_batch(self.dialect().checkpoint_sql())?;
         // File copy does not block reads/writes
         atomic_copy(primary, dst)?;
         Ok(fs::metadata(dst).map(|m| m.len()).unwrap_or(0))
@@ -104,10 +105,9 @@ impl Storage {
         let primary = &self.config.db_path;
 
         // Gather metadata via Backend API
-        let memory_count = self.backend.query_count(
-            "SELECT COUNT(*) FROM memories",
-            &[],
-        )? as u64;
+        let memory_count = self
+            .backend
+            .query_count("SELECT COUNT(*) FROM memories", &[])? as u64;
         let schema_version = Self::SCHEMA_VERSION.to_string();
 
         let size_bytes = self.checkpoint_and_copy(backup_path)?;

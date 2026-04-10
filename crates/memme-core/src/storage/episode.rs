@@ -1,5 +1,7 @@
 use crate::error::Result;
-use crate::types::{CreateEpisodeOptions, Episode, ListEpisodesOptions, SearchEpisodesOptions, SqlParam};
+use crate::types::{
+    CreateEpisodeOptions, Episode, ListEpisodesOptions, SearchEpisodesOptions, SqlParam,
+};
 
 use super::backend::RowAccess;
 use super::util::opt_text;
@@ -60,11 +62,10 @@ impl Storage {
     pub(crate) fn get_episode(&self, episode_id: &str) -> Result<Option<Episode>> {
         let cols = episode_cols();
         let sql = format!("SELECT {cols} FROM episodes WHERE episode_id = $1");
-        self.backend.query_one(
-            &sql,
-            &[SqlParam::Text(episode_id.to_string())],
-            |row| map_episode_row(row),
-        )
+        self.backend
+            .query_one(&sql, &[SqlParam::Text(episode_id.to_string())], |row| {
+                map_episode_row(row)
+            })
     }
 
     /// Search episodes by vector similarity.
@@ -76,7 +77,9 @@ impl Storage {
     ) -> Result<Vec<Episode>> {
         let emb_literal = self.format_embedding(query_vec, self.config.embedding_dims)?;
         let cols = episode_cols();
-        let distance_expr = self.dialect().cosine_distance_expr("summary_vec", &emb_literal);
+        let distance_expr = self
+            .dialect()
+            .cosine_distance_expr("summary_vec", &emb_literal);
         let sql = format!(
             r#"SELECT {cols},
                       {distance_expr} AS distance
@@ -85,23 +88,19 @@ impl Storage {
                ORDER BY distance ASC
                LIMIT {limit}"#
         );
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            |row| {
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
                 let mut ep = map_episode_row(row)?;
                 ep.score = row.get_opt_f64(17)?.map(|d| d as f32);
                 Ok(ep)
-            },
-        )
+            })
     }
 
     /// List episodes with filters.
     #[allow(dead_code)] // used by list_episodes_for_user and list_episodes_paged
     pub(crate) fn list_episodes(&self, options: &SearchEpisodesOptions) -> Result<Vec<Episode>> {
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref since) = options.since {
@@ -128,7 +127,8 @@ impl Storage {
             "SELECT {cols} FROM episodes WHERE {where_clause} ORDER BY started_at DESC LIMIT {limit}"
         );
 
-        self.backend.query_read(&sql, &dynamic_params, |row| map_episode_row(row))
+        self.backend
+            .query_read(&sql, &dynamic_params, |row| map_episode_row(row))
     }
 
     /// List episodes with pagination (limit + offset).
@@ -137,8 +137,7 @@ impl Storage {
         options: &ListEpisodesOptions,
     ) -> Result<Vec<Episode>> {
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(options.user_id.clone())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(options.user_id.clone())];
         let mut param_idx: usize = 1;
 
         if let Some(ref since) = options.since {
@@ -166,7 +165,8 @@ impl Storage {
             "SELECT {cols} FROM episodes WHERE {where_clause} ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
         );
 
-        self.backend.query_read(&sql, &dynamic_params, |row| map_episode_row(row))
+        self.backend
+            .query_read(&sql, &dynamic_params, |row| map_episode_row(row))
     }
 
     /// Reinforce an episode (bump recall_count, update last_recalled, increase storage_strength).
@@ -180,7 +180,8 @@ impl Storage {
                    storage_strength = {least_expr}
                WHERE episode_id = $1"#
         );
-        self.backend.execute(&sql, &[SqlParam::Text(episode_id.to_string())])?;
+        self.backend
+            .execute(&sql, &[SqlParam::Text(episode_id.to_string())])?;
         Ok(())
     }
 
@@ -239,14 +240,16 @@ impl Storage {
         new_event_ids: &[String],
     ) -> Result<()> {
         // Only fetch event_ids column, not the full episode
-        let existing_ids: Vec<String> = self.backend.query_one(
-            "SELECT event_ids FROM episodes WHERE episode_id = $1",
-            &[SqlParam::Text(episode_id.to_string())],
-            |row| row.get_opt_string(0),
-        )?
-        .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+        let existing_ids: Vec<String> = self
+            .backend
+            .query_one(
+                "SELECT event_ids FROM episodes WHERE episode_id = $1",
+                &[SqlParam::Text(episode_id.to_string())],
+                |row| row.get_opt_string(0),
+            )?
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
 
         let mut all_ids = existing_ids;
         all_ids.extend(new_event_ids.iter().cloned());
@@ -322,7 +325,9 @@ impl Storage {
     ) -> Result<Vec<Episode>> {
         // For FTS we need table-qualified column names
         let fts_cols = episode_cols_qualified("e");
-        let fts_score = self.dialect().fts_match_score_expr("episodes", "e.episode_id", "$1");
+        let fts_score = self
+            .dialect()
+            .fts_match_score_expr("episodes", "e.episode_id", "$1");
         let sql = format!(
             r#"SELECT {fts_cols},
                       {fts_score} AS score

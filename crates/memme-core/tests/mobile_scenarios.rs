@@ -15,7 +15,7 @@ fn make_store() -> MemoryStore {
 
 fn make_store_with_power() -> MemoryStore {
     let mut config = MemoryConfig::new(":memory:", 384);
-    config.power_config = Some(PowerConfig {
+    config.tuning.power_config = Some(PowerConfig {
         full_power_threshold: 0.5,
         power_save_threshold: 0.2,
         defer_when_critical: true,
@@ -26,8 +26,8 @@ fn make_store_with_power() -> MemoryStore {
 
 fn make_store_with_prune(max: usize) -> MemoryStore {
     let mut config = MemoryConfig::new(":memory:", 384);
-    config.max_memories_per_user = Some(max);
-    config.auto_prune = true;
+    config.tuning.max_memories_per_user = Some(max);
+    config.tuning.auto_prune = true;
     let embedder = Arc::new(MockEmbedder::new(384));
     MemoryStore::new(config, embedder).unwrap()
 }

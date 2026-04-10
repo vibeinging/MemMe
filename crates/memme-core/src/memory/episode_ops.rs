@@ -67,7 +67,7 @@ impl super::MemoryStore {
                 Vec::new()
             } else {
                 let seed_refs: Vec<&str> = matched.iter().map(|s: &String| s.as_str()).collect();
-                let depth = self.config.graph_spreading_depth;
+                let depth = self.config.tuning.graph_spreading_depth;
                 let expanded =
                     self.storage
                         .spread_entity_names(&seed_refs, &options.user_id, depth)?;

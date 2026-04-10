@@ -22,14 +22,14 @@ impl super::MemoryStore {
     }
 
     /// Ingest a raw event into the stream layer.
-    /// Content embedding is deferred to compact() where it runs on purified content.
+    /// Note: `append_events()` batch-embeds before calling this. Direct callers
+    /// should provide embedding via `insert_event` if search is needed.
     pub fn ingest_event(&self, content: &str, options: IngestEventOptions) -> Result<Event> {
         let event_id = Uuid::new_v4().to_string();
 
         self.storage
             .insert_event(&event_id, content, &[], &options)?;
 
-        // Return the event
         self.storage
             .get_event(&event_id)?
             .ok_or_else(|| MemoryError::NotFound(event_id))

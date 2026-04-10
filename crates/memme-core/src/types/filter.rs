@@ -381,7 +381,10 @@ mod tests {
         let f = FilterExpression::contains("categories", "finance");
         let mut offset = 0;
         let (sql, params) = f.to_sql(&mut offset);
-        assert_eq!(sql, "EXISTS (SELECT 1 FROM json_each(categories) WHERE value = $1)");
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM json_each(categories) WHERE value = $1)"
+        );
         assert_eq!(params.len(), 1);
     }
 

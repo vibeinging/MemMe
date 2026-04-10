@@ -12,6 +12,7 @@ pub(crate) fn recover_lock<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuar
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn procedure_row_to_result(row: crate::storage::ProcedureRow) -> Procedure {
     let steps: Vec<crate::procedural::ProcedureStep> = row
         .steps
@@ -280,6 +281,7 @@ pub(crate) fn content_hash(content: &str) -> String {
 }
 
 /// Simple timestamp string using std::time (no chrono dependency).
+#[allow(dead_code)]
 pub(crate) fn chrono_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

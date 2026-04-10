@@ -27,15 +27,13 @@ impl Storage {
     /// Get all config key-value pairs.
     #[allow(dead_code)] // planned API: config inspection
     pub(crate) fn get_all_config(&self) -> Result<std::collections::HashMap<String, String>> {
-        let pairs = self.backend.query_read(
-            "SELECT key, value FROM memme_config",
-            &[],
-            |row| {
+        let pairs = self
+            .backend
+            .query_read("SELECT key, value FROM memme_config", &[], |row| {
                 let k = row.get_string(0)?;
                 let v = row.get_string(1)?;
                 Ok((k, v))
-            },
-        )?;
+            })?;
         Ok(pairs.into_iter().collect())
     }
 }

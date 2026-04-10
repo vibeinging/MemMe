@@ -390,9 +390,9 @@ fn test_expiration_cleanup() {
 #[test]
 fn test_max_memories_pruning_lru() {
     let mut config = MemoryConfig::new(":memory:", 384);
-    config.max_memories_per_user = Some(3);
-    config.auto_prune = true;
-    config.pruning_strategy = PruningStrategy::LRU;
+    config.tuning.max_memories_per_user = Some(3);
+    config.tuning.auto_prune = true;
+    config.tuning.pruning_strategy = PruningStrategy::LRU;
     let store = make_store_with_config(config);
 
     // Add 5 unique memories
@@ -417,9 +417,9 @@ fn test_max_memories_pruning_lru() {
 #[test]
 fn test_max_memories_pruning_importance() {
     let mut config = MemoryConfig::new(":memory:", 384);
-    config.max_memories_per_user = Some(3);
-    config.auto_prune = true;
-    config.pruning_strategy = PruningStrategy::Importance;
+    config.tuning.max_memories_per_user = Some(3);
+    config.tuning.auto_prune = true;
+    config.tuning.pruning_strategy = PruningStrategy::Importance;
     let store = make_store_with_config(config);
 
     // Add 5 memories with varying importance (lower importance should be pruned)

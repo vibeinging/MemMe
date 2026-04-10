@@ -13,7 +13,8 @@ impl super::MemoryStore {
     /// extract memories.
     ///
     /// The `user_id` parameter assigns ownership of all imported data.
-    pub fn import_conversations(
+    #[allow(dead_code)]
+    pub(crate) fn import_conversations(
         &self,
         conversations: &[ImportedConversation],
         user_id: &str,

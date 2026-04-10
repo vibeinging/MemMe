@@ -58,7 +58,7 @@ impl MemoryStore {
     ///     llm_model: LLM model name (default depends on provider).
     ///     llm_base_url: Custom LLM API base URL.
     #[new]
-    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rrf_event_weight=None, event_memory_threshold=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None))]
+    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None))]
     fn new(
         db_path: &str,
         embedder: &str,
@@ -78,8 +78,6 @@ impl MemoryStore {
         rrf_entity_weight: Option<f64>,
         rrf_k: Option<usize>,
         rrf_temporal_weight: Option<f64>,
-        rrf_event_weight: Option<f64>,
-        event_memory_threshold: Option<usize>,
         rerank_api_key: Option<&str>,
         rerank_base_url: Option<&str>,
         rerank_model: Option<&str>,
@@ -130,37 +128,31 @@ impl MemoryStore {
         let mut config = memme_core::config::MemoryConfig::new(db_path, final_dims);
         config.enable_graph = true;
         if let Some(mt) = llm_max_tokens {
-            config.llm_max_tokens = mt;
+            config.tuning.llm_max_tokens = mt;
         }
         if let Some(t) = llm_temperature {
-            config.llm_temperature = if t < 0.0 { None } else { Some(t) };
+            config.tuning.llm_temperature = if t < 0.0 { None } else { Some(t) };
         }
         if let Some(fc) = enable_forgetting_curve {
-            config.enable_forgetting_curve = fc;
+            config.tuning.enable_forgetting_curve = fc;
         }
         if let Some(w) = rrf_vector_weight {
-            config.rrf_vector_weight = w;
+            config.tuning.rrf_vector_weight = w;
         }
         if let Some(w) = rrf_fts_weight {
-            config.rrf_fts_weight = w;
+            config.tuning.rrf_fts_weight = w;
         }
         if let Some(w) = rrf_entity_weight {
-            config.rrf_entity_weight = w;
+            config.tuning.rrf_entity_weight = w;
         }
         if let Some(k) = rrf_k {
-            config.rrf_k = k;
+            config.tuning.rrf_k = k;
         }
         if let Some(w) = rrf_temporal_weight {
-            config.rrf_temporal_weight = w;
-        }
-        if let Some(w) = rrf_event_weight {
-            config.rrf_event_weight = w;
-        }
-        if let Some(t) = event_memory_threshold {
-            config.event_memory_threshold = t;
+            config.tuning.rrf_temporal_weight = w;
         }
         if rerank_api_key.is_some() {
-            config.enable_rerank = true;
+            config.tuning.enable_rerank = true;
         }
 
         let mut store = memme_core::memory::MemoryStore::new(config, emb)

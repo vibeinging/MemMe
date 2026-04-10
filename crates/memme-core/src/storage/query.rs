@@ -7,11 +7,9 @@ use super::{MemoryRow, Storage};
 // ── Unified memory column definitions ──
 
 /// Base columns for MemoryRow (without score). Used to build SELECT clauses.
-const MEMORY_COLS_BASE: &str =
-    "id, content, user_id, created_at, updated_at, metadata";
+const MEMORY_COLS_BASE: &str = "id, content, user_id, created_at, updated_at, metadata";
 
-const MEMORY_COLS_AFTER_SCORE: &str =
-    "importance, access_count, agent_id, app_id, run_id, \
+const MEMORY_COLS_AFTER_SCORE: &str = "importance, access_count, agent_id, app_id, run_id, \
      immutable, expiration_date, categories, memory_type, \
      stability, privacy, event_time, episode_id, session_id, resolution";
 
@@ -81,8 +79,7 @@ impl Storage {
     ) -> Result<Vec<MemoryRow>> {
         // We use dynamic params via SqlParam for flexibility
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
@@ -118,7 +115,9 @@ impl Storage {
             "SELECT {cols} FROM memories WHERE {where_clause} ORDER BY updated_at DESC LIMIT {limit}"
         );
 
-        let rows = self.backend.query_read(&sql, &dynamic_params, map_memory_row)?;
+        let rows = self
+            .backend
+            .query_read(&sql, &dynamic_params, map_memory_row)?;
 
         Ok(rows)
     }
@@ -141,7 +140,8 @@ impl Storage {
     ) -> Result<Vec<MemoryRow>> {
         let d = self.dialect();
         let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
-        let has_extra_filters = agent_id.is_some() || run_id.is_some() || app_id.is_some() || filter.is_some();
+        let has_extra_filters =
+            agent_id.is_some() || run_id.is_some() || app_id.is_some() || filter.is_some();
 
         // Use vec0 MATCH for simple user_id-only queries (fast KNN path).
         // Fall back to brute-force scan when extra filters are present,
@@ -151,8 +151,7 @@ impl Storage {
         }
 
         let mut conditions = vec!["user_id = $1".to_string()];
-        let mut dynamic_params: Vec<SqlParam> =
-            vec![SqlParam::Text(user_id.to_string())];
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
@@ -189,13 +188,15 @@ impl Storage {
             "SELECT {cols} FROM memories WHERE {where_clause} ORDER BY score ASC LIMIT {limit}"
         );
 
-        let rows = self.backend.query_read(&sql, &dynamic_params, map_memory_row)?;
+        let rows = self
+            .backend
+            .query_read(&sql, &dynamic_params, map_memory_row)?;
 
         Ok(rows)
     }
 
     /// vec0 MATCH-based vector search (SQLite with sqlite-vec).
-    /// Uses the vec0 virtual table for KNN, then JOINs back to memories for full data.
+    /// Queries both vec_memories and vec_events, merging results by distance.
     fn vector_search_vec0(
         &self,
         embedding: &[f32],
@@ -205,13 +206,50 @@ impl Storage {
         let d = self.dialect();
         let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
 
-        let knn_sql = d.vec0_knn_sql(&emb_literal, "$1", limit)
+        let knn_sql = d
+            .vec0_knn_sql(&emb_literal, "$1", limit)
             .expect("vec0_knn_sql should be available when has_vec0_table() is true");
 
-        let cols = memory_select_cols(Some("knn.distance"), "m.");
-        let sql = format!(
-            "WITH knn AS ({knn_sql}) SELECT {cols} FROM knn JOIN memories m ON m.id = knn.memory_id ORDER BY knn.distance ASC"
-        );
+        let mem_cols = memory_select_cols(Some("knn.distance"), "m.");
+        let event_knn_sql = d.vec0_event_knn_sql(&emb_literal, "$1", limit);
+
+        let sql = if let Some(ref evt_knn) = event_knn_sql {
+            format!(
+                r#"WITH mem_knn AS ({knn_sql}),
+                     evt_knn AS ({evt_knn})
+                SELECT * FROM (
+                    SELECT {mem_cols} FROM mem_knn knn JOIN memories m ON m.id = knn.memory_id
+                    UNION ALL
+                    SELECT e.event_id AS id,
+                           COALESCE(e.purified_content, e.content) AS content,
+                           e.user_id,
+                           e.timestamp AS created_at,
+                           e.timestamp AS updated_at,
+                           e.metadata,
+                           eknn.distance AS score,
+                           0.5 AS importance,
+                           0 AS access_count,
+                           NULL AS agent_id,
+                           NULL AS app_id,
+                           NULL AS run_id,
+                           0 AS immutable,
+                           NULL AS expiration_date,
+                           NULL AS categories,
+                           NULL AS memory_type,
+                           1.0 AS stability,
+                           'syncable' AS privacy,
+                           e.event_time,
+                           NULL AS episode_id,
+                           e.session_id,
+                           'granular' AS resolution
+                    FROM evt_knn eknn JOIN events e ON e.event_id = eknn.event_id
+                ) ORDER BY score ASC LIMIT {limit}"#
+            )
+        } else {
+            format!(
+                "WITH knn AS ({knn_sql}) SELECT {mem_cols} FROM knn JOIN memories m ON m.id = knn.memory_id ORDER BY knn.distance ASC"
+            )
+        };
 
         let params = &[SqlParam::Text(user_id.to_string())];
         self.backend.query_read(&sql, params, map_memory_row)
@@ -265,14 +303,57 @@ impl Storage {
         let _ = param_idx;
 
         let where_clause = conditions.join(" AND ");
-        // FTS5: JOIN on id column, rank is negative (lower = better match)
         let cols = memory_select_cols(Some("memories_fts.rank"), "m.");
+        let has_extra_filters = agent_id.is_some() || run_id.is_some() || app_id.is_some();
+
+        // UNION with events_fts when no agent/run/app filters
+        if !has_extra_filters {
+            let unified_sql = format!(
+                r#"SELECT * FROM (
+                    SELECT {cols} FROM memories_fts JOIN memories m ON m.id = memories_fts.id
+                        WHERE {where_clause}
+                    UNION ALL
+                    SELECT e.event_id AS id,
+                           COALESCE(e.purified_content, e.content) AS content,
+                           e.user_id,
+                           e.timestamp AS created_at,
+                           e.timestamp AS updated_at,
+                           e.metadata,
+                           events_fts.rank AS score,
+                           0.5 AS importance,
+                           0 AS access_count,
+                           NULL AS agent_id,
+                           NULL AS app_id,
+                           NULL AS run_id,
+                           0 AS immutable,
+                           NULL AS expiration_date,
+                           NULL AS categories,
+                           NULL AS memory_type,
+                           1.0 AS stability,
+                           'syncable' AS privacy,
+                           e.event_time,
+                           NULL AS episode_id,
+                           e.session_id,
+                           'granular' AS resolution
+                    FROM events_fts JOIN events e ON e.event_id = events_fts.event_id
+                        WHERE events_fts MATCH $1 AND e.user_id = $2
+                ) ORDER BY score LIMIT {limit}"#
+            );
+            let result = self
+                .backend
+                .query_read(&unified_sql, &dynamic_params, map_memory_row);
+            if result.is_ok() {
+                return result;
+            }
+        }
+
         let sql = format!(
             "SELECT {cols} FROM memories_fts JOIN memories m ON m.id = memories_fts.id \
              WHERE {where_clause} ORDER BY memories_fts.rank LIMIT {limit}"
         );
 
-        self.backend.query_read(&sql, &dynamic_params, map_memory_row)
+        self.backend
+            .query_read(&sql, &dynamic_params, map_memory_row)
     }
 
     // ── Temporal search ──
@@ -291,6 +372,102 @@ impl Storage {
             SqlParam::Int(limit as i64),
         ];
         self.backend.query_read(&sql, params, map_memory_row)
+    }
+
+    /// Search memories + events whose `event_time` falls within any of the given
+    /// date ranges. Results are ordered by event_time DESC.
+    ///
+    /// This is the upgraded temporal channel: instead of "recent N", it filters
+    /// by the concrete date ranges extracted from the user's query.
+    pub(crate) fn temporal_range_search(
+        &self,
+        user_id: &str,
+        ranges: &[crate::time_parser::TimeRange],
+        limit: usize,
+    ) -> Result<Vec<MemoryRow>> {
+        if ranges.is_empty() {
+            return self.temporal_search(user_id, limit);
+        }
+
+        // Build OR clauses: one `event_time BETWEEN $start AND $end` per range.
+        // Append "T23:59:59" to end dates so that timestamps within that day match.
+        let mut range_conditions = Vec::new();
+        let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
+        let mut param_idx: usize = 1;
+
+        for range in ranges {
+            let start_idx = param_idx + 1;
+            let end_idx = param_idx + 2;
+            range_conditions.push(format!(
+                "(event_time >= ${start_idx} AND event_time <= ${end_idx})"
+            ));
+            dynamic_params.push(SqlParam::Text(range.start.clone()));
+            dynamic_params.push(SqlParam::Text(format!("{}T23:59:59", range.end)));
+            param_idx += 2;
+        }
+
+        let range_where = range_conditions.join(" OR ");
+
+        // Search memories table
+        let mem_cols = memory_select_cols(None, "");
+        let mem_sql = format!(
+            "SELECT {mem_cols} FROM memories \
+             WHERE user_id = $1 AND event_time IS NOT NULL AND ({range_where}) \
+             ORDER BY event_time DESC LIMIT {limit}"
+        );
+
+        let mut results = self
+            .backend
+            .query_read(&mem_sql, &dynamic_params, map_memory_row)?;
+
+        // Also search events table — map events to MemoryRow for uniform handling.
+        // Reuse the same params (user_id + range pairs).
+        let evt_sql = format!(
+            r#"SELECT
+                e.event_id AS id,
+                COALESCE(e.purified_content, e.content) AS content,
+                e.user_id,
+                e.timestamp AS created_at,
+                e.timestamp AS updated_at,
+                e.metadata,
+                NULL AS score,
+                0.5 AS importance,
+                0 AS access_count,
+                NULL AS agent_id,
+                NULL AS app_id,
+                NULL AS run_id,
+                0 AS immutable,
+                NULL AS expiration_date,
+                NULL AS categories,
+                NULL AS memory_type,
+                1.0 AS stability,
+                'syncable' AS privacy,
+                e.event_time,
+                NULL AS episode_id,
+                e.session_id,
+                'granular' AS resolution
+            FROM events e
+            WHERE e.user_id = $1 AND e.event_time IS NOT NULL AND ({range_where})
+            ORDER BY e.event_time DESC LIMIT {limit}"#
+        );
+
+        if let Ok(event_rows) = self
+            .backend
+            .query_read(&evt_sql, &dynamic_params, map_memory_row)
+        {
+            results.extend(event_rows);
+        }
+
+        // Sort combined results by event_time DESC and truncate
+        results.sort_by(|a, b| {
+            b.event_time
+                .as_deref()
+                .unwrap_or("")
+                .cmp(a.event_time.as_deref().unwrap_or(""))
+        });
+        results.truncate(limit);
+
+        Ok(results)
     }
 
     // ── Find by content hash ──
@@ -352,14 +529,7 @@ mod tests {
     use super::Storage;
 
     fn test_config(dims: usize) -> MemoryConfig {
-        MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: dims,
-            dedup_threshold: 0.15,
-            default_limit: 10,
-            ..Default::default()
-        }
+        MemoryConfig::new(":memory:", dims)
     }
 
     fn open_storage(dims: usize) -> Storage {

@@ -19,14 +19,10 @@ fn main() {
     println!("=== MemMe Session/Episode Workflow Example ===\n");
 
     // ── 1. Create an in-memory store ────────────────────────────────
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "session_demo".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        compact_threshold: 10, // compact after 10 unprocessed events
-        ..Default::default()
+    let config = {
+        let mut c = MemoryConfig::new(":memory:", 384);
+        c.collection_name = "session_demo".into();
+        c
     };
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder).expect("Failed to create MemoryStore");

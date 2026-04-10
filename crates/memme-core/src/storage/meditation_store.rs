@@ -109,11 +109,10 @@ impl Storage {
                ORDER BY started_at DESC
                LIMIT {limit}"#
         );
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            |row| map_meditation_row(row),
-        )
+        self.backend
+            .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
+                map_meditation_row(row)
+            })
     }
 
     /// Get the last meditation record for a user.

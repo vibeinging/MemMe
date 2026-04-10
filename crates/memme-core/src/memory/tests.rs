@@ -1,16 +1,10 @@
 use super::helpers::content_hash;
 use super::*;
+use crate::config::TuningConfig;
 use memme_embeddings::mock::MockEmbedder;
 
 fn make_store(dims: usize) -> MemoryStore {
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: dims,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        ..Default::default()
-    };
+    let config = MemoryConfig::new(":memory:", dims);
     let embedder = Arc::new(MockEmbedder::new(dims));
     MemoryStore::new(config, embedder).unwrap()
 }
@@ -209,14 +203,7 @@ fn test_list_by_agent() {
 
 #[test]
 fn test_dimension_mismatch() {
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        ..Default::default()
-    };
+    let config = MemoryConfig::new(":memory:", 384);
     // MockEmbedder with 128 dims, config expects 384
     let embedder = Arc::new(MockEmbedder::new(128));
     let result = MemoryStore::new(config, embedder);
@@ -822,13 +809,11 @@ fn test_append_events_and_compact() {
 
     // Use compact_fallback_token_threshold: 0 to always use LLM for compact in this test
     let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        compact_fallback_token_threshold: 0,
-        ..Default::default()
+        tuning: TuningConfig {
+            compact_fallback_token_threshold: 0,
+            ..Default::default()
+        },
+        ..MemoryConfig::new(":memory:", 384)
     };
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder).unwrap();
@@ -905,13 +890,8 @@ mod smart_graph_tests {
 
     fn make_store_with_graph(enable_graph: bool) -> MemoryStore {
         let config = MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 384,
-            dedup_threshold: 0.15,
-            default_limit: 10,
             enable_graph,
-            ..Default::default()
+            ..MemoryConfig::new(":memory:", 384)
         };
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(384));
         MemoryStore::new(config, embedder).unwrap()
@@ -1984,50 +1964,43 @@ fn test_export_json_serialization() {
 
 #[test]
 fn test_config_with_inclusion_exclusion_prompts() {
-    let config = MemoryConfig {
+    let mut config = MemoryConfig {
         db_path: ":memory:".into(),
         collection_name: "test".into(),
         embedding_dims: 384,
-        inclusion_prompt: Some("Extract work-related tasks and deadlines".into()),
-        exclusion_prompt: Some("Do not extract passwords or financial data".into()),
         ..Default::default()
     };
+    config.tuning.inclusion_prompt = Some("Extract work-related tasks and deadlines".into());
+    config.tuning.exclusion_prompt = Some("Do not extract passwords or financial data".into());
     assert!(config.validate().is_ok());
     assert_eq!(
-        config.inclusion_prompt.as_deref(),
+        config.tuning.inclusion_prompt.as_deref(),
         Some("Extract work-related tasks and deadlines")
     );
     assert_eq!(
-        config.exclusion_prompt.as_deref(),
+        config.tuning.exclusion_prompt.as_deref(),
         Some("Do not extract passwords or financial data")
     );
 }
 
 #[test]
 fn test_config_without_prompts_validates() {
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        inclusion_prompt: None,
-        exclusion_prompt: None,
-        ..Default::default()
-    };
+    let config = MemoryConfig::new(":memory:", 384);
     assert!(config.validate().is_ok());
-    assert!(config.inclusion_prompt.is_none());
-    assert!(config.exclusion_prompt.is_none());
+    assert!(config.tuning.inclusion_prompt.is_none());
+    assert!(config.tuning.exclusion_prompt.is_none());
 }
 
 #[test]
 fn test_store_creation_with_prompts() {
-    let config = MemoryConfig {
+    let mut config = MemoryConfig {
         db_path: ":memory:".into(),
         collection_name: "test".into(),
         embedding_dims: 384,
-        inclusion_prompt: Some("Only extract cooking recipes".into()),
-        exclusion_prompt: Some("Ignore small talk".into()),
         ..Default::default()
     };
+    config.tuning.inclusion_prompt = Some("Only extract cooking recipes".into());
+    config.tuning.exclusion_prompt = Some("Ignore small talk".into());
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder);
     assert!(
@@ -2275,33 +2248,33 @@ mod webhook_tests {
     fn test_webhook_config_in_memory_config() {
         use crate::webhook::{WebhookConfig as WC, WebhookEvent as WE};
         let config = MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 384,
-            webhooks: Some(vec![WC {
-                url: "https://example.com/hook".to_string(),
-                events: vec![WE::MemoryAdd],
-                active: true,
-            }]),
-            ..Default::default()
+            tuning: TuningConfig {
+                webhooks: Some(vec![WC {
+                    url: "https://example.com/hook".to_string(),
+                    events: vec![WE::MemoryAdd],
+                    active: true,
+                }]),
+                ..Default::default()
+            },
+            ..MemoryConfig::new(":memory:", 384)
         };
         assert!(config.validate().is_ok());
-        assert!(config.webhooks.is_some());
+        assert!(config.tuning.webhooks.is_some());
     }
 
     #[test]
     fn test_store_with_webhook_config() {
         use crate::webhook::{WebhookConfig as WC, WebhookEvent as WE};
         let config = MemoryConfig {
-            db_path: ":memory:".into(),
-            collection_name: "test".into(),
-            embedding_dims: 384,
-            webhooks: Some(vec![WC {
-                url: "https://example.com/hook".to_string(),
-                events: vec![WE::MemoryAdd, WE::MemoryUpdate, WE::MemoryDelete],
-                active: true,
-            }]),
-            ..Default::default()
+            tuning: TuningConfig {
+                webhooks: Some(vec![WC {
+                    url: "https://example.com/hook".to_string(),
+                    events: vec![WE::MemoryAdd, WE::MemoryUpdate, WE::MemoryDelete],
+                    active: true,
+                }]),
+                ..Default::default()
+            },
+            ..MemoryConfig::new(":memory:", 384)
         };
         let embedder = Arc::new(MockEmbedder::new(384));
         let store = MemoryStore::new(config, embedder);
@@ -2322,15 +2295,13 @@ mod webhook_tests {
 
 fn make_store_with_limits(max_memories: usize) -> MemoryStore {
     let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        max_memories_per_user: Some(max_memories),
-        auto_prune: true,
-        pruning_strategy: PruningStrategy::LRU,
-        ..Default::default()
+        tuning: TuningConfig {
+            max_memories_per_user: Some(max_memories),
+            auto_prune: true,
+            pruning_strategy: PruningStrategy::LRU,
+            ..Default::default()
+        },
+        ..MemoryConfig::new(":memory:", 384)
     };
     let embedder = Arc::new(MockEmbedder::new(384));
     MemoryStore::new(config, embedder).unwrap()
@@ -2378,13 +2349,11 @@ fn test_auto_prune_lru() {
 #[test]
 fn test_prune_importance_strategy() {
     let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        pruning_strategy: PruningStrategy::Importance,
-        ..Default::default()
+        tuning: TuningConfig {
+            pruning_strategy: PruningStrategy::Importance,
+            ..Default::default()
+        },
+        ..MemoryConfig::new(":memory:", 384)
     };
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder).unwrap();
@@ -2535,17 +2504,15 @@ fn test_privacy_string_conversion() {
 
 fn make_store_with_power() -> MemoryStore {
     let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "test".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        power_config: Some(crate::config::PowerConfig {
-            full_power_threshold: 0.5,
-            power_save_threshold: 0.2,
-            defer_when_critical: true,
-        }),
-        ..Default::default()
+        tuning: TuningConfig {
+            power_config: Some(crate::config::PowerConfig {
+                full_power_threshold: 0.5,
+                power_save_threshold: 0.2,
+                defer_when_critical: true,
+            }),
+            ..Default::default()
+        },
+        ..MemoryConfig::new(":memory:", 384)
     };
     let embedder = Arc::new(MockEmbedder::new(384));
     MemoryStore::new(config, embedder).unwrap()

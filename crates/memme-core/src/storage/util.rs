@@ -31,10 +31,7 @@ impl Storage {
 
     /// Format categories as a SQL list literal string.
     /// Delegates validation and formatting to the configured SQL dialect.
-    pub(crate) fn format_categories(
-        &self,
-        categories: Option<&[String]>,
-    ) -> Result<String> {
+    pub(crate) fn format_categories(&self, categories: Option<&[String]>) -> Result<String> {
         match categories {
             Some(cats) if !cats.is_empty() => self.dialect().format_categories_literal(cats),
             _ => Ok("NULL".to_string()),
@@ -92,10 +89,9 @@ impl Storage {
     pub(crate) fn db_size_bytes(&self) -> Result<u64> {
         if self.config.db_path == ":memory:" {
             // For in-memory, estimate from row count
-            let count = self.backend.query_count(
-                "SELECT COUNT(*) FROM memories",
-                &[],
-            )?;
+            let count = self
+                .backend
+                .query_count("SELECT COUNT(*) FROM memories", &[])?;
             // Rough estimate: ~1KB per memory
             return Ok(count as u64 * 1024);
         }
@@ -135,17 +131,18 @@ impl Storage {
                 LIMIT {count_to_remove}
             )"
         );
-        let count = self.backend.execute(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-        )? as u64;
+        let count = self
+            .backend
+            .execute(&sql, &[SqlParam::Text(user_id.to_string())])? as u64;
         Ok(count)
     }
 
     /// Delete memories past their expiration_date. Returns the number of deleted memories.
     pub(crate) fn cleanup_expired(&self) -> Result<u64> {
         let now_ts = self.dialect().current_timestamp_expr();
-        let sql = format!("DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < {now_ts}");
+        let sql = format!(
+            "DELETE FROM memories WHERE expiration_date IS NOT NULL AND expiration_date < {now_ts}"
+        );
         let count = self.backend.execute(&sql, &[])? as u64;
         Ok(count)
     }
@@ -160,15 +157,15 @@ impl Storage {
         delete_below: bool,
     ) -> Result<crate::types::ConsolidateResult> {
         // 1. Decay importance based on days since last access (updated_at)
-        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let now_epoch = self
+            .dialect()
+            .epoch_seconds_expr(self.dialect().current_timestamp_expr());
         let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
         let greatest = self.dialect().greatest_expr(
             "0.0",
             &format!("importance - $1 * ({now_epoch} - {updated_epoch}) / 86400.0"),
         );
-        let decay_sql = format!(
-            "UPDATE memories SET importance = {greatest} WHERE user_id = $2"
-        );
+        let decay_sql = format!("UPDATE memories SET importance = {greatest} WHERE user_id = $2");
         let decay_params = vec![
             SqlParam::Float(decay_rate as f64),
             SqlParam::Text(user_id.to_string()),
@@ -219,20 +216,20 @@ impl Storage {
         // Note: updated_at is NOT reset here — it reflects last content update, not access.
         // Retention is computed from updated_at, so resetting it would make R≈1 always,
         // defeating the forgetting curve.
-        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let now_epoch = self
+            .dialect()
+            .epoch_seconds_expr(self.dialect().current_timestamp_expr());
         let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
-        let stability_floor = self.dialect().greatest_expr("COALESCE(stability, 1.0)", "0.01");
+        let stability_floor = self
+            .dialect()
+            .greatest_expr("COALESCE(stability, 1.0)", "0.01");
         let power = self.dialect().power_expr(
-            &format!(
-                "1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"
-            ),
+            &format!("1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"),
             "-0.5",
         );
         let least = self.dialect().least_expr(
             "365.0",
-            &format!(
-                "COALESCE(stability, 1.0) * (1.0 + $1 * (1.0 - {power}))"
-            ),
+            &format!("COALESCE(stability, 1.0) * (1.0 + $1 * (1.0 - {power}))"),
         );
         let sql = format!(
             "UPDATE memories \
@@ -242,7 +239,10 @@ impl Storage {
         );
         self.backend.execute(
             &sql,
-            &[SqlParam::Float(growth_factor as f64), SqlParam::Text(id.to_string())],
+            &[
+                SqlParam::Float(growth_factor as f64),
+                SqlParam::Text(id.to_string()),
+            ],
         )?;
         Ok(())
     }
@@ -255,13 +255,15 @@ impl Storage {
         retention_threshold: f32,
         min_age_days: f32,
     ) -> Result<u64> {
-        let now_epoch = self.dialect().epoch_seconds_expr(self.dialect().current_timestamp_expr());
+        let now_epoch = self
+            .dialect()
+            .epoch_seconds_expr(self.dialect().current_timestamp_expr());
         let updated_epoch = self.dialect().epoch_seconds_expr("updated_at");
-        let stability_floor = self.dialect().greatest_expr("COALESCE(stability, 1.0)", "0.01");
+        let stability_floor = self
+            .dialect()
+            .greatest_expr("COALESCE(stability, 1.0)", "0.01");
         let power = self.dialect().power_expr(
-            &format!(
-                "1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"
-            ),
+            &format!("1.0 + ({now_epoch} - {updated_epoch}) / 86400.0 / (5.0 * {stability_floor})"),
             "-0.5",
         );
         let sql = format!(
@@ -281,6 +283,36 @@ impl Storage {
         Ok(count)
     }
 
+    /// Incrementally insert a single memory into the memories_fts index.
+    pub(crate) fn fts_insert_memory(&self, id: &str, content: &str) {
+        let _ = self.backend.execute(
+            "INSERT OR REPLACE INTO memories_fts(id, content) VALUES ($1, $2)",
+            &[
+                SqlParam::Text(id.to_string()),
+                SqlParam::Text(content.to_string()),
+            ],
+        );
+    }
+
+    /// Incrementally insert a single event into the events_fts index.
+    pub(crate) fn fts_insert_event(&self, event_id: &str, purified_content: &str) {
+        let _ = self.backend.execute(
+            "INSERT OR REPLACE INTO events_fts(event_id, purified_content) VALUES ($1, $2)",
+            &[
+                SqlParam::Text(event_id.to_string()),
+                SqlParam::Text(purified_content.to_string()),
+            ],
+        );
+    }
+
+    /// Incrementally delete a memory from the memories_fts index.
+    pub(crate) fn fts_delete_memory(&self, id: &str) {
+        let _ = self.backend.execute(
+            "INSERT INTO memories_fts(memories_fts, id, content) VALUES ('delete', $1, (SELECT content FROM memories WHERE id = $1))",
+            &[SqlParam::Text(id.to_string())],
+        );
+    }
+
     /// Create or rebuild the FTS index on the memories table.
     pub(crate) fn create_fts_index(&self) -> Result<()> {
         // Ensure FTS extension is loaded
@@ -289,7 +321,9 @@ impl Storage {
         }
 
         // Create FTS index with overwrite to handle existing index
-        let fts_sql = self.dialect().create_fts_index_sql("memories", "id", &["content"]);
+        let fts_sql = self
+            .dialect()
+            .create_fts_index_sql("memories", "id", &["content"]);
         self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on memories table");
         Ok(())
@@ -301,7 +335,9 @@ impl Storage {
         for sql in self.dialect().load_fts_extension_sql() {
             self.execute_ignore_error(sql);
         }
-        let fts_sql = self.dialect().create_fts_index_sql("episodes", "episode_id", &["title", "summary"]);
+        let fts_sql =
+            self.dialect()
+                .create_fts_index_sql("episodes", "episode_id", &["title", "summary"]);
         self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on episodes table");
         Ok(())
@@ -313,7 +349,9 @@ impl Storage {
         for sql in self.dialect().load_fts_extension_sql() {
             self.execute_ignore_error(sql);
         }
-        let fts_sql = self.dialect().create_fts_index_sql("events", "event_id", &["purified_content"]);
+        let fts_sql =
+            self.dialect()
+                .create_fts_index_sql("events", "event_id", &["purified_content"]);
         // FTS on purified_content (not raw content) for better keyword matching
         self.backend.execute_batch(&fts_sql)?;
         debug!("Created/rebuilt FTS index on events.purified_content");

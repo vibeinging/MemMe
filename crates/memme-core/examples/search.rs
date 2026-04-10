@@ -16,14 +16,7 @@ fn main() {
     println!("=== MemMe Hybrid Search Example ===\n");
 
     // ── 1. Create store and populate with diverse memories ──────────
-    let config = MemoryConfig {
-        db_path: ":memory:".into(),
-        collection_name: "search_demo".into(),
-        embedding_dims: 384,
-        dedup_threshold: 0.15,
-        default_limit: 10,
-        ..Default::default()
-    };
+    let config = MemoryConfig::new(":memory:", 384);
     let embedder = Arc::new(MockEmbedder::new(384));
     let store = MemoryStore::new(config, embedder).expect("Failed to create MemoryStore");
     println!("[1] MemoryStore created.\n");

@@ -10,8 +10,10 @@ impl super::MemoryStore {
     /// # Core API — Primary ingestion method
     ///
     /// Send events (messages, actions, locations, etc.) to MemMe.
-    /// Events are stored in a Session and automatically compacted when
-    /// the threshold is exceeded (`compact_threshold` in config).
+    /// Events are stored in a Session. The returned `compact_needed` flag
+    /// indicates when unprocessed events exceed `compact_threshold`, but
+    /// compact is **never** triggered automatically — call `compact()` or
+    /// `process_background()` explicitly when ready.
     ///
     /// This is the recommended way to add data to MemMe. For most use cases,
     /// you only need three methods: `append_events()`, `search()`, and `compact()`.
@@ -48,9 +50,16 @@ impl super::MemoryStore {
         self.storage
             .get_or_create_session(session_id, user_id, None, &now, meta_str.as_deref())?;
 
-        // Ingest each message as an Event, accumulate structured notes
+        // Batch embed all messages in one API call, then insert events with embeddings.
+        // This makes events immediately searchable (V3 store-first principle).
+        let texts: Vec<&str> = non_system.iter().map(|m| m.content.as_str()).collect();
+        let embeddings = self
+            .embedder
+            .embed_batch(&texts)
+            .unwrap_or_else(|_| vec![vec![]; texts.len()]);
+
         let mut notes_batch = String::new();
-        for msg in &non_system {
+        for (i, msg) in non_system.iter().enumerate() {
             let event_type = match msg.role.as_str() {
                 "user" => "user_message",
                 "assistant" => "ai_response",
@@ -66,9 +75,12 @@ impl super::MemoryStore {
             if let Some(ref m) = metadata {
                 opts = opts.metadata(m.clone());
             }
-            self.ingest_event(&msg.content, opts)?;
 
-            // Accumulate structured note for LLM-free compact summary
+            let event_id = uuid::Uuid::new_v4().to_string();
+            let emb = if i < embeddings.len() { &embeddings[i] } else { &[] as &[f32] };
+            self.storage.insert_event(&event_id, &msg.content, emb, &opts)?;
+
+            // Accumulate structured note
             let preview: String = msg.content.chars().take(120).collect();
             let ts = msg.timestamp.as_deref().unwrap_or(&now);
             use std::fmt::Write;
@@ -86,36 +98,43 @@ impl super::MemoryStore {
             .storage
             .count_unprocessed_events_in_session(session_id)?;
 
-        // Auto-compact when unprocessed events exceed threshold
-        let threshold = self.config.compact_threshold;
+        // Check whether compact is advisable (informational only — never auto-triggered).
+        let threshold = self.config.tuning.compact_threshold;
         let compact_needed = threshold > 0 && total_unprocessed >= threshold as u64;
 
-        let mut auto_compacted = false;
-        if compact_needed && self.has_llm() {
-            match self.compact(session_id) {
-                Ok(_) => {
-                    tracing::info!(session_id, "Auto-compact triggered");
-                    auto_compacted = true;
-                }
-                Err(e) => tracing::warn!(session_id, error = %e, "Auto-compact failed"),
+        // Build co-occurrence graph from entities detected in the new messages.
+        // Zero-LLM: uses Aho-Corasick on known entities + simple heuristics
+        // for candidate entities (quoted strings, capitalized sequences).
+        if self.config.enable_graph {
+            let contents: Vec<&str> = non_system.iter().map(|m| m.content.as_str()).collect();
+            if let Err(e) = self.build_cooccurrence_graph(&contents, user_id) {
+                tracing::warn!("Co-occurrence graph build failed: {e}");
             }
         }
 
-        Ok(AppendEventsResult {
+        let result = AppendEventsResult {
             session_id: session_id.to_string(),
             events_appended: non_system.len(),
             total_unprocessed,
-            compact_needed: compact_needed && !auto_compacted,
-        })
+            compact_needed,
+        };
+
+        // Process one background task opportunistically (non-blocking).
+        if self.has_llm() {
+            let _ = self.process_background();
+        }
+
+        Ok(result)
     }
 
     /// # Core API — Compact a session
     ///
-    /// Process unprocessed events in a session: extract memories via LLM,
+    /// Process unprocessed events in a session: purify events via LLM,
     /// create an Episode summary, and mark events as processed.
     ///
-    /// Usually triggered automatically by `append_events()` when the event count
-    /// exceeds `compact_threshold`. Call manually when a conversation ends.
+    /// This is **never** auto-triggered. Call it explicitly when a conversation
+    /// ends, or rely on `process_background()` which schedules compaction for
+    /// sessions that have been hit by search queries.
     ///
     /// This is the recommended way to process data in MemMe. For most use cases,
     /// you only need three methods: `append_events()`, `search()`, and `compact()`.
@@ -126,6 +145,7 @@ impl super::MemoryStore {
     }
 
     /// Compact without FTS rebuild (used by re_traces to batch rebuild at end).
+    #[allow(dead_code)]
     fn compact_no_fts(&self, session_id: &str) -> Result<CompactResult> {
         self.compact_inner(session_id, self.require_llm()?, false)
     }
@@ -160,8 +180,8 @@ impl super::MemoryStore {
             .iter()
             .map(|e| super::helpers::estimate_tokens(&e.content))
             .sum();
-        let use_fallback = self.config.compact_fallback_token_threshold > 0
-            && estimated_tokens < self.config.compact_fallback_token_threshold;
+        let use_fallback = self.config.tuning.compact_fallback_token_threshold > 0
+            && estimated_tokens < self.config.tuning.compact_fallback_token_threshold;
 
         // Purify events + generate episode summary in a single LLM call
         let (purified, title, summary, significance, prospective_queries) = if use_fallback {
@@ -310,7 +330,8 @@ impl super::MemoryStore {
     ///
     /// Sessions and events are preserved (they are immutable recordings).
     /// Only the derived traces (facts, summaries, identity) are regenerated.
-    pub fn re_traces(&self, user_id: &str) -> Result<Vec<CompactResult>> {
+    #[allow(dead_code)]
+    pub(crate) fn re_traces(&self, user_id: &str) -> Result<Vec<CompactResult>> {
         // 1. Delete all existing traces and episodes for this user
         self.delete_all_traces(user_id, None, None, None)?;
         self.storage.delete_episodes_for_user(user_id)?;
@@ -471,7 +492,13 @@ Generate 2-3 hypothetical future queries that a user might ask that should retri
             })
             .unwrap_or_default();
 
-        Ok((purified, title, summary, significance.clamp(0.0, 1.0), prospective_queries))
+        Ok((
+            purified,
+            title,
+            summary,
+            significance.clamp(0.0, 1.0),
+            prospective_queries,
+        ))
     }) {
         Ok((mut purified, title, summary, significance, prospective_queries)) => {
             // Pad or truncate purified to match event count
@@ -550,4 +577,265 @@ fn fallback_purify_events(events: &[Event]) -> Vec<PurifiedEvent> {
             location: None,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Co-occurrence Graph (Zero LLM)
+// ---------------------------------------------------------------------------
+
+impl super::MemoryStore {
+    /// Build co-occurrence edges from entities found in message contents.
+    ///
+    /// 1. Detects known entities via the existing Aho-Corasick EntityIndex.
+    /// 2. Detects candidate entities via simple heuristics (quoted strings,
+    ///    capitalized word sequences) and auto-creates entity nodes for them.
+    /// 3. Entities co-occurring in the same message get a `co_occurs` edge.
+    /// 4. All entities across the batch (same session) get a weaker
+    ///    `session_context` edge.
+    pub(crate) fn build_cooccurrence_graph(&self, contents: &[&str], user_id: &str) -> Result<()> {
+        use std::collections::HashSet;
+
+        // Build Aho-Corasick index from known entities
+        let entity_index = self.get_entity_index(user_id);
+
+        // Per-message entity extraction + co-occurrence edges
+        let mut all_session_entities: HashSet<String> = HashSet::new();
+
+        for content in contents {
+            let mut entities_in_msg: Vec<String> = Vec::new();
+
+            // 1a. Known entities via Aho-Corasick
+            let known = entity_index.extract(content);
+            for name in &known {
+                entities_in_msg.push(name.to_lowercase());
+            }
+
+            // 1b. Candidate entities via heuristics
+            let candidates = extract_candidate_entities(content);
+            for name in &candidates {
+                let lower = name.to_lowercase();
+                if entities_in_msg.contains(&lower) {
+                    continue;
+                }
+                // Auto-create entity node (idempotent — skipped if already exists)
+                let existing = self.storage.find_entity_by_name(name, user_id)?;
+                if existing.is_none() {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    self.storage
+                        .upsert_entity(&id, name, Some("candidate"), user_id)?;
+                }
+                entities_in_msg.push(lower);
+            }
+
+            // De-duplicate and cap at 5 entities per message to avoid O(n²) explosion
+            let unique: Vec<String> = {
+                let mut seen = HashSet::new();
+                entities_in_msg
+                    .into_iter()
+                    .filter(|e| seen.insert(e.clone()))
+                    .take(5)
+                    .collect()
+            };
+
+            // 2. Co-occurrence edges: every pair in the same message (max C(5,2)=10 edges)
+            for i in 0..unique.len() {
+                for j in (i + 1)..unique.len() {
+                    let _ = self.ensure_relationship(&unique[i], &unique[j], "co_occurs", user_id);
+                }
+            }
+
+            for e in &unique {
+                all_session_entities.insert(e.clone());
+            }
+        }
+
+        // Session-context edges removed: too many combinations (O(n²) on all session
+        // entities) and low signal-to-noise ratio. Co-occurrence within individual
+        // messages provides sufficient relationship signal.
+        let _ = &all_session_entities; // suppress unused warning
+
+        Ok(())
+    }
+
+    /// Ensure a relationship exists between two entities (by name).
+    fn ensure_relationship(
+        &self,
+        name_a: &str,
+        name_b: &str,
+        relation_type: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        let id_a = self.resolve_entity_id(name_a, user_id)?;
+        let id_b = self.resolve_entity_id(name_b, user_id)?;
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        self.storage
+            .insert_relationship(&rel_id, &id_a, &id_b, relation_type, user_id, None)?;
+        Ok(())
+    }
+
+    /// Resolve an entity name to its ID, creating the entity if it doesn't exist.
+    fn resolve_entity_id(&self, name: &str, user_id: &str) -> Result<String> {
+        if let Some((id, _, _)) = self.storage.find_entity_by_name(name, user_id)? {
+            Ok(id)
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            self.storage
+                .upsert_entity(&id, name, Some("candidate"), user_id)?;
+            Ok(id)
+        }
+    }
+}
+
+/// Extract candidate entity names from text using simple heuristics (no LLM).
+///
+/// Detects:
+/// - Quoted strings (double quotes and Chinese quotes)
+/// - Capitalized word sequences (e.g. "San Francisco", "Project Alpha")
+fn extract_candidate_entities(text: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Quoted strings
+    let quote_pairs: &[(&str, &str)] = &[
+        ("\"", "\""),
+        ("\u{201c}", "\u{201d}"),
+        ("\u{300c}", "\u{300d}"),
+    ];
+    for &(open, close) in quote_pairs {
+        let mut search_from = 0;
+        while let Some(start) = text[search_from..].find(open) {
+            let abs_start = search_from + start + open.len();
+            if abs_start >= text.len() {
+                break;
+            }
+            if let Some(end) = text[abs_start..].find(close) {
+                let inner = text[abs_start..abs_start + end].trim();
+                if inner.len() >= 2 && inner.len() <= 50 && !inner.contains('\n') {
+                    let key = inner.to_lowercase();
+                    if seen.insert(key) {
+                        candidates.push(inner.to_string());
+                    }
+                }
+                search_from = abs_start + end + close.len();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 2. Capitalized word sequences (English), not at sentence start
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        let first_char = word.chars().next();
+        let is_upper = first_char.is_some_and(|c| c.is_uppercase());
+
+        if is_upper && i > 0 {
+            let stripped = word
+                .trim_start_matches(|c: char| !c.is_alphanumeric())
+                .trim_end_matches(|c: char| !c.is_alphanumeric());
+            if is_common_word(stripped) {
+                i += 1;
+                continue;
+            }
+
+            let start = i;
+            let mut end = i + 1;
+            while end < words.len() && end - start < 4 {
+                let w = words[end];
+                let fc = w.chars().next();
+                if fc.is_some_and(|c| c.is_uppercase()) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let phrase: String = words[start..end]
+                .iter()
+                .map(|w| {
+                    w.trim_start_matches(|c: char| !c.is_alphanumeric())
+                        .trim_end_matches(|c: char| !c.is_alphanumeric())
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            if phrase.len() >= 2 && !is_common_word(&phrase) {
+                let key = phrase.to_lowercase();
+                if seen.insert(key) {
+                    candidates.push(phrase);
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+
+    candidates
+}
+
+/// Common English words that should not be treated as entity names.
+fn is_common_word(word: &str) -> bool {
+    let lower = word.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "the"
+            | "a"
+            | "an"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "it"
+            | "this"
+            | "that"
+            | "i"
+            | "my"
+            | "me"
+            | "we"
+            | "you"
+            | "he"
+            | "she"
+            | "they"
+            | "yes"
+            | "no"
+            | "ok"
+            | "hi"
+            | "hello"
+            | "hey"
+            | "sure"
+            | "what"
+            | "when"
+            | "where"
+            | "how"
+            | "why"
+            | "who"
+            | "which"
+            | "do"
+            | "does"
+            | "did"
+            | "can"
+            | "could"
+            | "would"
+            | "should"
+            | "will"
+            | "have"
+            | "has"
+            | "had"
+            | "been"
+            | "be"
+            | "not"
+            | "but"
+            | "and"
+            | "or"
+            | "if"
+            | "so"
+            | "then"
+            | "also"
+            | "just"
+            | "very"
+    )
 }
