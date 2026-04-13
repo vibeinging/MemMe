@@ -58,7 +58,7 @@ impl MemoryStore {
     ///     llm_model: LLM model name (default depends on provider).
     ///     llm_base_url: Custom LLM API base URL.
     #[new]
-    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None))]
+    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None, rerank_onnx=false))]
     fn new(
         db_path: &str,
         embedder: &str,
@@ -81,6 +81,7 @@ impl MemoryStore {
         rerank_api_key: Option<&str>,
         rerank_base_url: Option<&str>,
         rerank_model: Option<&str>,
+        rerank_onnx: bool,
     ) -> PyResult<Self> {
         let _rt_guard = shared_runtime().enter();
 
@@ -151,7 +152,7 @@ impl MemoryStore {
         if let Some(w) = rrf_temporal_weight {
             config.tuning.rrf_temporal_weight = w;
         }
-        if rerank_api_key.is_some() {
+        if rerank_api_key.is_some() || rerank_onnx {
             config.tuning.enable_rerank = true;
         }
 
@@ -215,8 +216,19 @@ impl MemoryStore {
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         }
 
-        // Configure reranker if provided
-        if let Some(key) = rerank_api_key {
+        // Configure reranker: ONNX (local cross-encoder) or API
+        if rerank_onnx {
+            let model_name = rerank_model.unwrap_or("cross-encoder/ms-marco-MiniLM-L-6-v2");
+            let reranker = memme_core::rerank::OnnxReranker::new(model_name, 100);
+            if reranker.is_available() {
+                store.set_reranker(Arc::new(reranker));
+                // enable_rerank was already set above via the config
+            } else {
+                return Err(PyRuntimeError::new_err(
+                    "ONNX reranker model not available. The model will be downloaded on first use.",
+                ));
+            }
+        } else if let Some(key) = rerank_api_key {
             let mut rc = memme_core::rerank::RerankConfig::new(key);
             if let Some(url) = rerank_base_url {
                 rc.base_url = url.to_string();

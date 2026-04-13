@@ -4,6 +4,27 @@ use crate::types::{FilterExpression, SqlParam};
 use super::backend::RowAccess;
 use super::{MemoryRow, Storage};
 
+// ── FTS query sanitization ──
+
+/// Sanitize a query string for FTS5 MATCH: remove special characters that
+/// cause syntax errors (?, *, ^, ", :, etc.) while preserving OR keywords
+/// for graph-expanded queries.
+fn sanitize_fts_query(query: &str) -> String {
+    let mut result = String::with_capacity(query.len());
+    for ch in query.chars() {
+        match ch {
+            // FTS5 special chars that cause syntax errors
+            '?' | '*' | '^' | '"' | ':' | '{' | '}' | '(' | ')' | '!' | '~' => {
+                result.push(' ');
+            }
+            _ => result.push(ch),
+        }
+    }
+    // Collapse multiple spaces
+    let parts: Vec<&str> = result.split_whitespace().collect();
+    parts.join(" ")
+}
+
 // ── Unified memory column definitions ──
 
 /// Base columns for MemoryRow (without score). Used to build SELECT clauses.
@@ -255,6 +276,35 @@ impl Storage {
         self.backend.query_read(&sql, params, map_memory_row)
     }
 
+    /// Find distinct session IDs from events matching a vector query.
+    /// Used by lazy compact to scope compaction to relevant sessions only.
+    /// Returns session IDs ordered by best match distance.
+    pub(crate) fn find_relevant_event_sessions(
+        &self,
+        embedding: &[f32],
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let d = self.dialect();
+        let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
+        let event_knn = d.vec0_event_knn_sql(&emb_literal, "$1", limit * 3);
+        match event_knn {
+            Some(knn_sql) => self.backend.query_read(
+                &format!(
+                    r#"WITH eknn AS ({knn_sql})
+                       SELECT DISTINCT e.session_id
+                       FROM eknn JOIN events e ON e.event_id = eknn.event_id
+                       WHERE e.session_id IS NOT NULL
+                       ORDER BY MIN(eknn.distance)
+                       LIMIT {limit}"#
+                ),
+                &[SqlParam::Text(user_id.to_string())],
+                |row| row.get_string(0),
+            ),
+            None => Ok(Vec::new()),
+        }
+    }
+
     // ── FTS search ──
 
     /// Full-text search using BM25 scoring.
@@ -272,13 +322,20 @@ impl Storage {
         app_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
+        // Sanitize query for FTS5: remove characters that are FTS5 operators or
+        // cause syntax errors (?, *, ^, ", :, {, }, etc.)
+        let sanitized_query = sanitize_fts_query(query);
+        if sanitized_query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
         // Build WHERE clause dynamically. $1 = query, $2 = user_id, then agent/run/app
         let mut conditions = vec![
             "memories_fts MATCH $1".to_string(),
             "m.user_id = $2".to_string(),
         ];
         let mut dynamic_params: Vec<SqlParam> = vec![
-            SqlParam::Text(query.to_string()),
+            SqlParam::Text(sanitized_query.clone()),
             SqlParam::Text(user_id.to_string()),
         ];
         let mut param_idx: usize = 2;
@@ -360,6 +417,7 @@ impl Storage {
 
     /// Search memories by event_time proximity, ordered by closeness to reference time.
     /// Only returns memories that have a non-NULL event_time.
+    #[allow(dead_code)] // V4 uses temporal as a filter, not a channel; kept for direct use
     pub(crate) fn temporal_search(&self, user_id: &str, limit: usize) -> Result<Vec<MemoryRow>> {
         let cols = memory_select_cols(None, "");
         let sql = format!(
@@ -379,6 +437,7 @@ impl Storage {
     ///
     /// This is the upgraded temporal channel: instead of "recent N", it filters
     /// by the concrete date ranges extracted from the user's query.
+    #[allow(dead_code)] // V4 uses temporal as a post-fusion filter; kept for direct use
     pub(crate) fn temporal_range_search(
         &self,
         user_id: &str,

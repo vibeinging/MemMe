@@ -194,6 +194,28 @@ impl Storage {
         Ok(count.flatten().unwrap_or(0) > 0)
     }
 
+    /// Get session IDs for a user that have unprocessed events and no episode yet.
+    /// These are sessions that need compact before search can find their content effectively.
+    pub(crate) fn get_uncompacted_session_ids(&self, user_id: &str) -> Result<Vec<String>> {
+        // A session is "uncompacted" if:
+        // 1. It belongs to this user
+        // 2. It has at least one unprocessed event
+        // 3. No episode references it yet
+        self.backend.query_read(
+            r#"SELECT DISTINCT s.session_id
+               FROM sessions s
+               JOIN events e ON e.session_id = s.session_id AND e.processed = 0
+               WHERE s.user_id = $1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM episodes ep, json_each(ep.session_ids) j
+                     WHERE j.value = s.session_id
+                 )
+               ORDER BY s.started_at DESC"#,
+            &[SqlParam::Text(user_id.to_string())],
+            |row| row.get_string(0),
+        )
+    }
+
     /// Delete all sessions for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_sessions(&self, user_id: &str) -> Result<()> {

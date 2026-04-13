@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module"] }
-memme-core = { workspace = true, features = ["webhooks", "api-rerank"] }
+memme-core = { workspace = true, features = ["webhooks", "api-rerank", "onnx-rerank"] }
 memme-embeddings = { workspace = true, features = ["onnx", "openai"] }
 memme-llm = { workspace = true, features = ["openai", "ollama", "anthropic", "gemini"] }
 serde_json = { workspace = true }

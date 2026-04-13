@@ -343,18 +343,24 @@ impl Storage {
         Ok(())
     }
 
-    /// Create or rebuild the FTS index on the events table (purified_content).
-    /// Note: This should only be called after compact() has populated purified_content.
+    /// Create or rebuild the FTS index on the events table.
+    /// Uses COALESCE(purified_content, content) so events are searchable
+    /// even before compact() populates purified_content.
     pub(crate) fn create_fts_index_events(&self) -> Result<()> {
         for sql in self.dialect().load_fts_extension_sql() {
             self.execute_ignore_error(sql);
         }
-        let fts_sql =
-            self.dialect()
-                .create_fts_index_sql("events", "event_id", &["purified_content"]);
-        // FTS on purified_content (not raw content) for better keyword matching
-        self.backend.execute_batch(&fts_sql)?;
-        debug!("Created/rebuilt FTS index on events.purified_content");
+        // Build events_fts using content (falling back from purified when not available).
+        // We use a custom INSERT to COALESCE purified_content with content.
+        let d = self.dialect();
+        let drop_sql = "DROP TABLE IF EXISTS events_fts";
+        self.backend.execute(drop_sql, &[])?;
+        let create_sql = "CREATE VIRTUAL TABLE events_fts USING fts5(event_id UNINDEXED, content, tokenize='unicode61')";
+        self.backend.execute(create_sql, &[])?;
+        let insert_sql = "INSERT INTO events_fts(event_id, content) SELECT event_id, COALESCE(NULLIF(purified_content, ''), content) FROM events";
+        self.backend.execute(insert_sql, &[])?;
+        let _ = d; // suppress unused
+        debug!("Created/rebuilt FTS index on events (COALESCE purified_content/content)");
         Ok(())
     }
 }

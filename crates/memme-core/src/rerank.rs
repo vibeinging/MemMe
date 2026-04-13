@@ -413,7 +413,17 @@ impl OnnxReranker {
     /// `top_n` controls how many results to return from the reranker.
     /// If model initialization fails, the reranker degrades gracefully to NoOp behavior.
     pub fn new(model_name: &str, top_n: usize) -> Self {
-        let model = fastembed::TextRerank::try_new(Default::default())
+        // Auto-detect CoreML on Apple Silicon for hardware acceleration.
+        let mut options = fastembed::RerankInitOptions::default();
+
+        #[cfg(feature = "onnx-rerank-coreml")]
+        {
+            let coreml_ep = ort::execution_providers::CoreMLExecutionProvider::default().build();
+            options = options.with_execution_providers(vec![coreml_ep]);
+            tracing::info!("OnnxReranker: CoreML execution provider enabled");
+        }
+
+        let model = fastembed::TextRerank::try_new(options)
             .map_err(|e| format!("Failed to load rerank model '{}': {}", model_name, e));
 
         if model.is_err() {

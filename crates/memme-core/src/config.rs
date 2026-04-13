@@ -61,6 +61,12 @@ pub struct TuningConfig {
     pub enable_rerank: bool,
     pub rerank_candidate_multiplier: usize,
     pub reader_pool_size: Option<usize>,
+    /// Max results from the same session in final output (0 = unlimited).
+    /// Ensures cross-session diversity for multi-session queries.
+    pub max_per_session: usize,
+    /// Number of graph-augmented results to add after initial recall.
+    /// Set to 0 to disable post-recall graph augmentation.
+    pub graph_augmentation_limit: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +110,7 @@ impl Default for TuningConfig {
             rrf_k: 30,
             rrf_candidate_multiplier: 3,
             rrf_temporal_weight: 0.15,
-            rrf_word_overlap_weight: 0.3,
+            rrf_word_overlap_weight: 0.15,
             rrf_event_weight: 0.35,
             event_memory_threshold: 100,
             llm_max_tokens: 2048,
@@ -117,6 +123,8 @@ impl Default for TuningConfig {
             enable_rerank: false,
             rerank_candidate_multiplier: 3,
             reader_pool_size: None,
+            max_per_session: 0,
+            graph_augmentation_limit: 10,
         }
     }
 }

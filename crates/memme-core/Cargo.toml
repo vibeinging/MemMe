@@ -14,7 +14,9 @@ default = []
 # Webhook delivery (requires HTTP runtime). Off for mobile FFI.
 webhooks = ["reqwest", "tokio"]
 # ONNX cross-encoder reranker using fastembed for local offline reranking.
-onnx-rerank = ["fastembed"]
+onnx-rerank = ["fastembed", "ort"]
+# ONNX reranker with CoreML acceleration on Apple Silicon.
+onnx-rerank-coreml = ["onnx-rerank", "ort/coreml"]
 # API-based reranker (Jina/Cohere compatible). Lightweight HTTP client only.
 api-rerank = ["reqwest"]
 
@@ -28,6 +30,7 @@ tracing.workspace = true
 memme-embeddings = { workspace = true, default-features = false }
 memme-llm = { workspace = true }
 fastembed = { version = "4", optional = true }
+ort = { version = "2.0.0-rc.9", optional = true, default-features = false }
 rusqlite = { version = "0.32", features = ["bundled", "vtab", "functions"] }
 sqlite-vec = "0.1"
 tokio = { workspace = true, optional = true }

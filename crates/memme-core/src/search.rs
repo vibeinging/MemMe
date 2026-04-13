@@ -11,6 +11,7 @@ use crate::types::{Episode, Event, MemoryResult};
 /// - `is_distance`: true if scores are cosine distances (lower = better),
 ///   false if scores are relevance (higher = better).
 /// - Returns 1.0 if no scores are available (no adjustment).
+#[allow(dead_code)] // available for adaptive RRF when enabled
 pub(crate) fn compute_channel_confidence(
     results: &[MemoryResult],
     is_distance: bool,
@@ -68,6 +69,44 @@ pub fn rrf_fuse(
                 .entry(result.id.clone())
                 .and_modify(|(s, _)| *s += rrf_score)
                 .or_insert((rrf_score, result.clone()));
+        }
+    }
+
+    let mut fused: Vec<(f64, MemoryResult)> = scores.into_values().collect();
+    fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(limit);
+
+    fused
+        .into_iter()
+        .map(|(score, mut result)| {
+            result.score = Some(score as f32);
+            result
+        })
+        .collect()
+}
+
+#[allow(dead_code)] // available for inference-mode queries (semantic disconnect)
+/// CombMAX fusion: for each document, take the max score across all channels.
+/// "Strong signals should not be diluted" (Kumiho philosophy).
+/// Best for queries where only one channel finds the relevant result (semantic disconnect).
+pub fn combmax_fuse(
+    ranked_lists: &[(&[MemoryResult], f64)], // (results, weight) pairs
+    limit: usize,
+) -> Vec<MemoryResult> {
+    let mut scores: HashMap<String, (f64, MemoryResult)> = HashMap::new();
+
+    for (results, weight) in ranked_lists {
+        for (rank, result) in results.iter().enumerate() {
+            // Normalize: higher weight + lower rank = higher score
+            let channel_score = weight / (1.0 + rank as f64);
+            scores
+                .entry(result.id.clone())
+                .and_modify(|(s, _)| {
+                    if channel_score > *s {
+                        *s = channel_score;
+                    }
+                })
+                .or_insert((channel_score, result.clone()));
         }
     }
 
