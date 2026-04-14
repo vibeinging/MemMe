@@ -99,12 +99,15 @@ results = store.search("user preferences", user_id="alice")
 
 ## Benchmark (LoCoMo)
 
+10 conversations, 1540 questions (excluding adversarial refusal), GPT-4o-mini judge:
+
 | Category | **MemMe** | mem0 | mem0-graph |
 |---|---|---|---|
-| **Single-hop** | **79.43** | 67.13 | 65.71 |
-| **Multi-hop** | **65.73** | 51.15 | 47.19 |
-| **Temporal** | **70.83** | 55.51 | 58.13 |
-| **Open-domain** | **82.28** | 72.93 | 75.71 |
+| **Single-hop** | **87.23** | 67.13 | 65.71 |
+| **Multi-hop** | **78.19** | 51.15 | 47.19 |
+| **Temporal** | **61.46** | 55.51 | 58.13 |
+| **Open-domain** | **90.49** | 72.93 | 75.71 |
+| **Overall** | **85.52** | — | — |
 
 ## Links
 

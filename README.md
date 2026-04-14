@@ -11,7 +11,7 @@ An embeddable AI memory engine. One file. Your device. Your rules.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-**Rust Core** · **SQLite Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 82.92%**
+**Rust Core** · **SQLite Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 85.52%**
 
 English | [中文](README_CN.md)
 
@@ -81,9 +81,9 @@ MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo)
 <img src="docs/images/benchmark.png" alt="MemMe Benchmark" width="720">
 </div>
 
-**Overall: 82.92%** · *Without reranking: 80.91 (still outperforms all baselines)*
+**Overall: 85.52%** (excluding adversarial refusal) · Single-hop 87.23 · Multi-hop 78.19 · Temporal 61.46 · Open-domain 90.49
 
-Pipeline: append_events → compact → meditate (per-episode fact extraction + vector dedup). 4-channel retrieval (vector + BM25 + entity spreading + temporal) with RRF fusion and cross-encoder reranking.
+Pipeline: append_events → compact → meditate (per-episode fact extraction + vector dedup). 5-channel retrieval (vector + BM25 + entity spreading + word overlap + temporal) with RRF fusion and cross-encoder reranking.
 
 ## Why MemMe
 
