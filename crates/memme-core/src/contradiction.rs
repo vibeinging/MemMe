@@ -22,9 +22,10 @@ pub(crate) struct ContradictionResult {
 }
 
 /// Weight allocation for each signal type (must sum to 1.0).
-const NEGATION_WEIGHT: f32 = 0.35;
-const ANTONYM_WEIGHT: f32 = 0.25;
-const PREFERENCE_WEIGHT: f32 = 0.25;
+const NEGATION_WEIGHT: f32 = 0.30;
+const ANTONYM_WEIGHT: f32 = 0.20;
+const PREFERENCE_WEIGHT: f32 = 0.20;
+const NUMERIC_WEIGHT: f32 = 0.15;
 const TEMPORAL_WEIGHT: f32 = 0.15;
 
 /// Default threshold above which a contradiction is flagged.
@@ -79,6 +80,75 @@ fn preference_signal(new_lower: &str, patterns: &LocalePatterns) -> (f32, Option
     }
 }
 
+/// Detect numeric value changes: same context but different numbers.
+/// Catches "37 coins" → "38 coins", "$350,000" → "$400,000", "7pm" → "6pm".
+fn numeric_change_signal(old_lower: &str, new_lower: &str) -> (f32, Option<String>) {
+    // Extract numbers from both texts
+    let old_nums: Vec<f64> = extract_numbers(old_lower);
+    let new_nums: Vec<f64> = extract_numbers(new_lower);
+
+    if old_nums.is_empty() || new_nums.is_empty() {
+        return (0.0, None);
+    }
+
+    // If both have numbers and they differ, it's a potential update
+    // Check if there's at least one number that changed
+    for &old_n in &old_nums {
+        for &new_n in &new_nums {
+            // Same order of magnitude but different value → likely an update
+            if old_n != new_n && old_n != 0.0 && new_n != 0.0 {
+                let ratio = if old_n > new_n {
+                    old_n / new_n
+                } else {
+                    new_n / old_n
+                };
+                // Within 10x of each other → plausible update (not random numbers)
+                if ratio < 10.0 {
+                    return (
+                        1.0,
+                        Some(format!("numeric_change({old_n}→{new_n})")),
+                    );
+                }
+            }
+        }
+    }
+
+    (0.0, None)
+}
+
+/// Extract numbers from text (integers and decimals, including currency).
+fn extract_numbers(text: &str) -> Vec<f64> {
+    let mut nums = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c == '$' || c == '¥' || c == '€' || c == '£' {
+            chars.next();
+            continue;
+        }
+        if c.is_ascii_digit() {
+            let mut num_str = String::new();
+            while let Some(&nc) = chars.peek() {
+                if nc.is_ascii_digit() || nc == '.' || nc == ',' {
+                    num_str.push(nc);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            // Remove commas (e.g., "400,000" → "400000")
+            let clean = num_str.replace(',', "");
+            if let Ok(n) = clean.parse::<f64>() {
+                if n > 0.0 {
+                    nums.push(n);
+                }
+            }
+        } else {
+            chars.next();
+        }
+    }
+    nums
+}
+
 /// Detect temporal override: both texts exist and the old one is semantically similar
 /// (assumed by the caller having already checked cosine similarity >= threshold),
 /// so a newer memory on the same topic is a potential override.
@@ -123,14 +193,21 @@ pub(crate) fn detect_contradiction(
         signals.push(d);
     }
 
-    // 3. Preference change (25%)
+    // 3. Preference change (20%)
     let (pref_s, pref_desc) = preference_signal(&new_lower, &patterns);
     total_score += pref_s * PREFERENCE_WEIGHT;
     if let Some(d) = pref_desc {
         signals.push(d);
     }
 
-    // 4. Temporal override (15%)
+    // 4. Numeric value change (15%)
+    let (num_s, num_desc) = numeric_change_signal(&old_lower, &new_lower);
+    total_score += num_s * NUMERIC_WEIGHT;
+    if let Some(d) = num_desc {
+        signals.push(d);
+    }
+
+    // 5. Temporal override (15%)
     let (temp_s, temp_desc) = temporal_signal(is_newer);
     total_score += temp_s * TEMPORAL_WEIGHT;
     if let Some(d) = temp_desc {
@@ -238,6 +315,32 @@ mod tests {
             r.score > DEFAULT_CONTRADICTION_THRESHOLD,
             "score={} signals={:?}",
             r.score,
+            r.signals
+        );
+    }
+
+    #[test]
+    fn test_numeric_change() {
+        let r = detect_contradiction(
+            "I have 37 pre-1920 American coins",
+            "I have 38 pre-1920 American coins",
+            true,
+        );
+        assert!(r.signals.iter().any(|s| s.contains("numeric_change")));
+        // numeric (0.15) + temporal (0.15) = 0.30, below threshold alone
+        // But with entity neighbor context this would be flagged
+    }
+
+    #[test]
+    fn test_numeric_change_currency() {
+        let r = detect_contradiction(
+            "Pre-approved for $350,000",
+            "Pre-approved for $400,000",
+            true,
+        );
+        assert!(
+            r.signals.iter().any(|s| s.contains("numeric_change")),
+            "signals: {:?}",
             r.signals
         );
     }
