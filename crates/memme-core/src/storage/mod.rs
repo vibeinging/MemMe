@@ -287,6 +287,7 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_rel_source_user ON relationships_{collection}(source_id, user_id);
             CREATE INDEX IF NOT EXISTS idx_rel_target_user ON relationships_{collection}(target_id, user_id);
             CREATE INDEX IF NOT EXISTS idx_mem_user_created ON memories(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_me_entity_lookup ON memory_entities(entity_name, memory_id);
             "#
         )
     }
@@ -401,6 +402,14 @@ pub(crate) struct MemoryRow {
     pub episode_id: Option<String>,
     pub session_id: Option<String>,
     pub resolution: Option<String>,
+}
+
+/// A memory that shares entities with another memory (for contradiction detection).
+#[derive(Debug, Clone)]
+pub(crate) struct EntityNeighborRow {
+    pub memory_id: String,
+    pub content: String,
+    pub shared_entities: usize,
 }
 
 #[derive(Debug, Clone)]

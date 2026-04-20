@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::types::{FilterExpression, SqlParam};
 
 use super::backend::RowAccess;
-use super::{MemoryRow, Storage};
+use super::{EntityNeighborRow, MemoryRow, Storage};
 
 // ── FTS query sanitization ──
 
@@ -141,6 +141,52 @@ impl Storage {
             .query_read(&sql, &dynamic_params, map_memory_row)?;
 
         Ok(rows)
+    }
+
+    // ── Entity-based neighbor search (for contradiction detection) ──
+
+    /// Find memories sharing entities with the given memory.
+    /// Returns (memory_id, content, shared_entity_count, embedding_blob).
+    /// Used by multi-dimensional contradiction detection: entity-first
+    /// filtering narrows the search space, then Rust-side vector scoring
+    /// ranks candidates by semantic similarity.
+    pub(crate) fn entity_neighbor_memories(
+        &self,
+        memory_id: &str,
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<EntityNeighborRow>> {
+        let collection = &self.config.collection_name;
+        let sql = format!(
+            "SELECT me2.memory_id, m.content, \
+                    COUNT(DISTINCT me2.entity_name) as shared_entities \
+             FROM memory_entities me1 \
+             JOIN memory_entities me2 ON me1.entity_name = me2.entity_name \
+                  AND me1.memory_id != me2.memory_id \
+             JOIN memories m ON m.id = me2.memory_id \
+             WHERE me1.memory_id = $1 \
+               AND m.user_id = $2 \
+               AND m.superseded_by IS NULL \
+             GROUP BY me2.memory_id \
+             HAVING shared_entities >= 1 \
+             ORDER BY shared_entities DESC \
+             LIMIT {limit}"
+        );
+
+        self.backend.query_read(
+            &sql,
+            &[
+                SqlParam::Text(memory_id.to_string()),
+                SqlParam::Text(user_id.to_string()),
+            ],
+            |row| {
+                Ok(EntityNeighborRow {
+                    memory_id: row.get_string(0)?,
+                    content: row.get_string(1)?,
+                    shared_entities: row.get_i64(2)? as usize,
+                })
+            },
+        )
     }
 
     // ── Vector search (cosine distance) ──

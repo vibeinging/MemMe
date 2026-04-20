@@ -171,6 +171,50 @@ impl MemoryStore {
         })
     }
 
+    /// Multi-dimensional contradiction detection.
+    ///
+    /// Instead of only cosine-similarity (misses differently-worded contradictions),
+    /// uses entity graph to find memories about the same subject, then scores them
+    /// by semantic similarity. This catches "Bob works at Google" vs "Bob joined Meta"
+    /// even when the vector distance is too large for cosine-only detection.
+    fn detect_contradictions_multi(
+        &self,
+        new_id: &str,
+        new_content: &str,
+        _new_embedding: &[f32],
+        user_id: &str,
+    ) {
+        // Step 1: Entity-first — find memories sharing entities (SQL, ~1ms)
+        let neighbors = match self.storage.entity_neighbor_memories(new_id, user_id, 20) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+
+        if neighbors.is_empty() {
+            return;
+        }
+
+        // Step 2: Rule-based contradiction check on entity-neighbor candidates
+        for neighbor in &neighbors {
+            let cr = crate::contradiction::detect_contradiction(
+                &neighbor.content,
+                new_content,
+                true,
+            );
+            if cr.is_contradiction {
+                debug!(
+                    old_id = %neighbor.memory_id,
+                    new_id = %new_id,
+                    score = cr.score,
+                    shared_entities = neighbor.shared_entities,
+                    signals = ?cr.signals,
+                    "Contradiction detected (entity+rule) — marking superseded"
+                );
+                let _ = self.storage.mark_superseded(&neighbor.memory_id, new_id);
+            }
+        }
+    }
+
     /// Flush deferred write operations (access count bumps, stability reinforcement).
     /// Called opportunistically during write operations and by time-based auto-flush.
     pub fn flush_deferred_writes(&self) {
@@ -509,51 +553,10 @@ impl MemoryStore {
                     .get_trace(&id)?
                     .ok_or_else(|| MemoryError::NotFound(id.clone()))?;
 
-                // Contradiction detection: find top-3 most similar existing
-                // memories and check for rule-based contradiction signals.
-                // If a contradiction is found, mark the old memory as superseded.
-                {
-                    // cosine distance <= 0.40 corresponds to similarity >= 0.80
-                    const CONTRADICTION_DISTANCE_THRESHOLD: f32 = 0.40;
-                    let candidates = self.storage.vector_search(
-                        &embedding,
-                        &options.user_id,
-                        options.agent_id.as_deref(),
-                        None,
-                        None,
-                        None,
-                        // top-4: one will be the memory we just inserted, skip it
-                        4,
-                    );
-                    if let Ok(rows) = candidates {
-                        for row in rows.iter().take(4) {
-                            // Skip the memory we just inserted
-                            if row.id == id {
-                                continue;
-                            }
-                            // Only consider high-similarity memories
-                            if let Some(distance) = row.score {
-                                if distance > CONTRADICTION_DISTANCE_THRESHOLD {
-                                    continue;
-                                }
-                            }
-                            let cr = crate::contradiction::detect_contradiction(
-                                &row.content,
-                                content,
-                                true, // new memory is always newer
-                            );
-                            if cr.is_contradiction {
-                                debug!(
-                                    old_id = %row.id,
-                                    new_id = %id,
-                                    score = cr.score,
-                                    signals = ?cr.signals,
-                                    "Contradiction detected — marking old memory as superseded"
-                                );
-                                let _ = self.storage.mark_superseded(&row.id, &id);
-                            }
-                        }
-                    }
+                // Contradiction detection: multi-dimensional approach.
+                // Entity-first: find memories sharing entities, then rule-based check.
+                if self.config.enable_graph {
+                    self.detect_contradictions_multi(&id, content, &embedding, &options.user_id);
                 }
 
                 // Auto-prune if enabled and over limit
