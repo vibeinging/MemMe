@@ -175,10 +175,31 @@ pub(crate) fn filter_fields(r: MemoryResult, fields: &[String]) -> MemoryResult 
 
 /// Compute retention using FSRS power-law forgetting curve.
 /// R(t, S) = (1 + t / (c * S))^(-p), where c = 5.0, p = 0.5
+///
+/// Resolution-aware: different memory types decay at different rates.
+/// - Identity: very slow (c=10) — core traits are stable
+/// - Granular: normal (c=5) — factual memories
+/// - Narrative: medium-fast (c=3) — summaries lose relevance faster
 pub(crate) fn compute_retention(updated_at: &str, stability: f32) -> f32 {
+    compute_retention_with_type(updated_at, stability, None)
+}
+
+/// Resolution-aware retention computation.
+pub(crate) fn compute_retention_with_type(
+    updated_at: &str,
+    stability: f32,
+    resolution: Option<&crate::types::Resolution>,
+) -> f32 {
     let days_elapsed = parse_days_since(updated_at);
     let s = stability.max(0.01);
-    let retention = (1.0 + days_elapsed / (5.0 * s)).powf(-0.5);
+    // Type-aware decay constant (higher = slower decay)
+    let c = match resolution {
+        Some(crate::types::Resolution::Identity) => 10.0, // very slow: core traits
+        Some(crate::types::Resolution::Granular) => 5.0,  // normal: facts
+        Some(crate::types::Resolution::Narrative) => 3.0,  // faster: summaries
+        None => 5.0,                                        // default
+    };
+    let retention = (1.0 + days_elapsed / (c * s)).powf(-0.5);
     retention.clamp(0.0, 1.0)
 }
 

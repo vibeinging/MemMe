@@ -4,7 +4,7 @@ use crate::time_parser::{self, TimeRange};
 use crate::types::*;
 
 use super::helpers::{
-    compute_retention, filter_fields, interference_discount, recover_lock, row_to_result,
+    compute_retention, compute_retention_with_type, filter_fields, interference_discount, recover_lock, row_to_result,
 };
 
 impl super::MemoryStore {
@@ -415,7 +415,7 @@ impl super::MemoryStore {
                 .into_iter()
                 .map(|mut r| {
                     let stability = r.stability.unwrap_or(1.0);
-                    let retention = compute_retention(&r.updated_at, stability) * i_discount;
+                    let retention = compute_retention_with_type(&r.updated_at, stability, Some(&r.resolution)) * i_discount;
                     r.retention = Some(retention);
                     if let Some(raw_score) = r.score {
                         let similarity = if was_reranked || fused {
