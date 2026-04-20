@@ -97,6 +97,9 @@ impl Storage {
         app_id: Option<&str>,
         filter: Option<&FilterExpression>,
         limit: usize,
+        min_importance: Option<f32>,
+        since: Option<&str>,
+        pinned_only: bool,
     ) -> Result<Vec<MemoryRow>> {
         // We use dynamic params via SqlParam for flexibility
         let mut conditions = vec!["user_id = $1".to_string()];
@@ -128,6 +131,23 @@ impl Storage {
             dynamic_params.extend(filter_params);
             param_idx = offset;
         }
+
+        if let Some(min_imp) = min_importance {
+            param_idx += 1;
+            conditions.push(format!("importance >= ${param_idx}"));
+            dynamic_params.push(SqlParam::Float(min_imp as f64));
+        }
+
+        if let Some(since_ts) = since {
+            param_idx += 1;
+            conditions.push(format!("created_at >= ${param_idx}"));
+            dynamic_params.push(SqlParam::Text(since_ts.to_string()));
+        }
+
+        if pinned_only {
+            conditions.push("pinned = 1".to_string());
+        }
+
         let _ = param_idx; // suppress unused warning
 
         let where_clause = conditions.join(" AND ");
@@ -701,26 +721,26 @@ mod tests {
 
         // List all for user1
         let rows = storage
-            .list_memories("user1", None, None, None, None, 10)
+            .list_memories("user1", None, None, None, None, 10, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 3);
 
         // List for user1 with agent_id filter
         let rows = storage
-            .list_memories("user1", Some("agent1"), None, None, None, 10)
+            .list_memories("user1", Some("agent1"), None, None, None, 10, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "id1");
 
         // List for user2
         let rows = storage
-            .list_memories("user2", None, None, None, None, 10)
+            .list_memories("user2", None, None, None, None, 10, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 1);
 
         // List with limit
         let rows = storage
-            .list_memories("user1", None, None, None, None, 2)
+            .list_memories("user1", None, None, None, None, 2, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 2);
     }
@@ -768,7 +788,7 @@ mod tests {
             .unwrap();
 
         let rows = storage
-            .list_memories("user1", None, None, Some("app1"), None, 10)
+            .list_memories("user1", None, None, Some("app1"), None, 10, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "id1");
@@ -821,7 +841,7 @@ mod tests {
 
         let filter = FilterExpression::gte("importance", serde_json::json!(0.5));
         let rows = storage
-            .list_memories("user1", None, None, None, Some(&filter), 10)
+            .list_memories("user1", None, None, None, Some(&filter), 10, None, None, false)
             .unwrap();
         assert_eq!(rows.len(), 2);
     }
@@ -1121,17 +1141,17 @@ mod tests {
         }
 
         let page1 = storage
-            .list_memories("user1", None, None, None, None, 3)
+            .list_memories("user1", None, None, None, None, 3, None, None, false)
             .unwrap();
         assert_eq!(page1.len(), 3);
 
         let page2 = storage
-            .list_memories("user1", None, None, None, None, 10)
+            .list_memories("user1", None, None, None, None, 10, None, None, false)
             .unwrap();
         assert_eq!(page2.len(), 5);
 
         let page3 = storage
-            .list_memories("user1", None, None, None, None, 1)
+            .list_memories("user1", None, None, None, None, 1, None, None, false)
             .unwrap();
         assert_eq!(page3.len(), 1);
     }

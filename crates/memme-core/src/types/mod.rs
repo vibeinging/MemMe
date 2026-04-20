@@ -273,6 +273,12 @@ pub struct ListOptions {
     pub limit: Option<usize>,
     /// Advanced filter expression for metadata, categories, importance, etc.
     pub filter: Option<FilterExpression>,
+    /// Minimum importance threshold (0.0–1.0). Only returns memories with importance >= this.
+    pub min_importance: Option<f32>,
+    /// Only return memories created after this ISO 8601 timestamp.
+    pub since: Option<String>,
+    /// Only return pinned memories.
+    pub pinned_only: bool,
 }
 
 impl ListOptions {
@@ -317,6 +323,24 @@ impl ListOptions {
     /// Legacy: simple key-value metadata filter (backwards compatibility).
     pub fn metadata_filter(mut self, filter: HashMap<String, serde_json::Value>) -> Self {
         self.filter = Some(FilterExpression::from_simple_map(filter));
+        self
+    }
+
+    /// Only return memories with importance >= this threshold.
+    pub fn min_importance(mut self, min: f32) -> Self {
+        self.min_importance = Some(min);
+        self
+    }
+
+    /// Only return memories created after this ISO 8601 timestamp.
+    pub fn since(mut self, since: impl Into<String>) -> Self {
+        self.since = Some(since.into());
+        self
+    }
+
+    /// Only return pinned memories.
+    pub fn pinned_only(mut self) -> Self {
+        self.pinned_only = true;
         self
     }
 }

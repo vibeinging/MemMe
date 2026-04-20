@@ -112,6 +112,9 @@ impl super::MemoryStore {
             options.app_id.as_deref(),
             options.filter.as_ref(),
             limit,
+            options.min_importance,
+            options.since.as_deref(),
+            options.pinned_only,
         )?;
 
         Ok(rows.into_iter().map(row_to_result).collect())
@@ -120,6 +123,56 @@ impl super::MemoryStore {
     /// Get count of traces for a user.
     pub fn count_traces(&self, user_id: &str) -> Result<usize> {
         self.storage.count_user_memories(user_id)
+    }
+
+    /// Pin or unpin a memory trace. Pinned memories are exempt from forgetting curve decay
+    /// and are prioritized in HOT-tier queries.
+    pub fn pin_trace(&self, memory_id: &str, pinned: bool) -> Result<()> {
+        let sql = "UPDATE memories SET pinned = ?1 WHERE id = ?2";
+        self.storage.backend.execute(
+            sql,
+            &[
+                crate::types::SqlParam::Int(if pinned { 1 } else { 0 }),
+                crate::types::SqlParam::Text(memory_id.to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List all pinned memories for a user.
+    pub fn list_pinned_traces(&self, user_id: &str) -> Result<Vec<MemoryResult>> {
+        self.list_traces(
+            ListOptions::new(user_id)
+                .pinned_only()
+                .limit(100),
+        )
+    }
+
+    /// Recall old memories for nostalgia / proactive bubbles ("还记得那天...").
+    /// Returns random memories older than `min_age_days` with importance >= `min_importance`.
+    pub fn recall_nostalgia(
+        &self,
+        user_id: &str,
+        min_age_days: u32,
+        min_importance: f32,
+        limit: usize,
+    ) -> Result<Vec<MemoryResult>> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(min_age_days as i64);
+        let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+        // Use storage query directly for RANDOM() ordering
+        let sql = format!(
+            "SELECT {} FROM memories WHERE user_id = ?1 AND created_at <= ?2 AND importance >= ?3 ORDER BY RANDOM() LIMIT ?4",
+            crate::storage::query::memory_select_cols(None, "")
+        );
+        let params = vec![
+            crate::types::SqlParam::Text(user_id.to_string()),
+            crate::types::SqlParam::Text(cutoff_str),
+            crate::types::SqlParam::Float(min_importance as f64),
+            crate::types::SqlParam::Int(limit as i64),
+        ];
+        let rows = self.storage.backend.query_read(&sql, &params, crate::storage::query::map_memory_row)?;
+        Ok(rows.into_iter().map(super::helpers::row_to_result).collect())
     }
 
     /// Get the approximate database size in bytes.

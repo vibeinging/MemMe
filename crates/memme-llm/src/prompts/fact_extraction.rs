@@ -51,9 +51,10 @@ RULES:
 - ALWAYS embed resolved dates in the fact text itself — the text must be self-contained and understandable without the happened_at field. Replace "yesterday", "last week", etc. with the actual date (e.g., "on 2023-05-07")
 
 OUTPUT FORMAT:
-Return a JSON object: {"facts": [{"text": "...", "happened_at": "YYYY-MM-DD"}, ...]}
+Return a JSON object: {"facts": [{"text": "...", "happened_at": "YYYY-MM-DD", "implications": ["...", "..."]}, ...]}
 - "text": the atomic fact as a self-contained sentence WITH resolved dates embedded in the text
 - "happened_at": ISO 8601 date when this fact/event occurred, or null if no temporal info
+- "implications": 3-4 SHORT phrases (3-8 words each) describing situations where this fact would be relevant in the future. Think about what someone might search for using COMPLETELY DIFFERENT words but needing this fact. Examples: for "learned to say no" → ["feeling overwhelmed with commitments", "setting boundaries at work", "declining requests assertively"]
 
 TEMPORAL RULES (when a conversation date is provided):
 - Use the conversation date as anchor to resolve relative time references
@@ -67,10 +68,10 @@ Input: Hi.
 Output: {"facts": []}
 
 Input: Hi, I am looking for a restaurant in San Francisco.
-Output: {"facts": [{"text": "Looking for a restaurant in San Francisco", "happened_at": null}]}
+Output: {"facts": [{"text": "Looking for a restaurant in San Francisco", "happened_at": null, "implications": ["dining recommendations Bay Area", "planning dinner out", "exploring San Francisco food scene"]}]}
 
 Input: (Conversation date: 2023-05-08) Yesterday, I had a meeting with John at 3pm.
-Output: {"facts": [{"text": "Had a meeting with John at 3pm on 2023-05-07", "happened_at": "2023-05-07"}]}
+Output: {"facts": [{"text": "Had a meeting with John at 3pm on 2023-05-07", "happened_at": "2023-05-07", "implications": ["following up after meeting with John", "scheduling next discussion", "work collaboration with John"]}]}
 
 Input: (Conversation date: 2022-04-15) Alice: Hey Jo, guess what? I dyed my hair last week! Bob: What color? Alice: Purple! Bright and bold.
 Output: {"facts": [{"text": "Alice dyed her hair purple on 2022-04-08", "happened_at": "2022-04-08"}, {"text": "Alice uses the nickname 'Jo' for Bob", "happened_at": null}, {"text": "Alice chose purple because it is bright and bold", "happened_at": null}]}
@@ -188,13 +189,13 @@ pub fn parse_fact_retrieval_response(raw: &str) -> Result<FactRetrievalResponse,
                 });
             }
             serde_json::Value::Object(obj) => {
-                // Try structured format: {"text": "...", "happened_at": "..."}
+                // Try structured format: {"text": "...", "happened_at": "...", "implications": [...]}
                 let text = obj
                     .get("text")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                if let Some(text) = text {
+                if let Some(mut text) = text {
                     if !text.is_empty() {
                         let happened_at = obj
                             .get("happened_at")
@@ -202,6 +203,19 @@ pub fn parse_fact_retrieval_response(raw: &str) -> Result<FactRetrievalResponse,
                             .or_else(|| obj.get("event_time"))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
+
+                        // Append implications as Prospective Indexing tags
+                        if let Some(impls) = obj.get("implications").and_then(|v| v.as_array()) {
+                            let impl_strs: Vec<&str> = impls
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if !impl_strs.is_empty() {
+                                text = format!("{} [Prospective: {}]", text, impl_strs.join(" "));
+                            }
+                        }
+
                         facts.push(ExtractedFact { text, happened_at });
                         continue;
                     }
@@ -306,6 +320,24 @@ mod tests {
         assert!(matches!(msgs[0].role, MessageRole::System));
         assert!(msgs[0].content.contains("Personal Information Organizer"));
         assert!(msgs[1].content.contains("Alice"));
+    }
+
+    #[test]
+    fn test_parse_with_implications() {
+        let raw = r#"{"facts": [{"text": "Jon learned to say no", "happened_at": null, "implications": ["feeling overwhelmed", "setting boundaries", "declining requests"]}]}"#;
+        let resp = parse_fact_retrieval_response(raw).unwrap();
+        assert_eq!(resp.facts.len(), 1);
+        assert!(resp.facts[0].text.contains("[Prospective:"));
+        assert!(resp.facts[0].text.contains("feeling overwhelmed"));
+        assert!(resp.facts[0].text.contains("setting boundaries"));
+    }
+
+    #[test]
+    fn test_parse_without_implications_still_works() {
+        let raw = r#"{"facts": [{"text": "Has a dog", "happened_at": null}]}"#;
+        let resp = parse_fact_retrieval_response(raw).unwrap();
+        assert_eq!(resp.facts[0].text, "Has a dog");
+        assert!(!resp.facts[0].text.contains("[Prospective:"));
     }
 
     #[test]

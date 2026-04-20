@@ -390,11 +390,11 @@ For each message, resolve coreferences (pronouns → names), ground temporal ref
 Summarize the entire conversation as a title, summary, and significance score.
 
 ## Section 3: Implication Queries (Prospective Indexing)
-Generate 3-5 queries that capture situations where this memory would be relevant. Go beyond literal questions — think about:
-- What life situations, emotions, or challenges would make this memory important to recall?
-- What implicit decisions, constraints, or preferences were established here?
-- What future scenarios would be affected by what was discussed?
-- If the user later faces a related but differently-worded situation, what would they search for?
+Generate 5 SHORT search queries (3-8 words each) that would help find this memory in the FUTURE when someone is in a related situation. Think BEYOND the literal content:
+- What implicit constraints or decisions were established?
+- What life situations or problems would this memory be relevant to?
+- What emotional states or challenges connect to this topic?
+- What would someone search for if they face a similar situation but use completely different words?
 
 **Input** ({count} messages):
 {context}
@@ -409,7 +409,7 @@ Generate 3-5 queries that capture situations where this memory would be relevant
   "title": "Brief title (max 60 chars)",
   "summary": "2-3 sentence summary of what was discussed",
   "significance": 0.7,
-  "prospective_queries": ["What restaurant did the user visit?", "Who did the user have dinner with?", "When feeling nostalgic about a special meal", "Looking for a place to celebrate an anniversary", "Recalling a meaningful evening with a close friend"]
+  "prospective_queries": ["nostalgic about a special dinner", "celebrating anniversary restaurant ideas", "meaningful evening with close friend", "favorite dining experiences", "romantic dinner spot recommendation"]
 }}
 ```
 
@@ -423,7 +423,7 @@ Generate 3-5 queries that capture situations where this memory would be relevant
   - 0.3-0.5: Mild personal context, routine activities, general preferences mentioned in passing
   - 0.6-0.8: Significant personal events, strong preferences, relationships, plans, goals
   - 0.9-1.0: Life-changing events, core identity revelations, deeply emotional moments
-- "prospective_queries": 3-5 implication queries. Include both direct questions AND situational triggers. Mix factual ("What restaurant?") with emotional/situational ("When feeling stressed about work-life balance", "When someone asks about learning to set boundaries"). The goal is to bridge the semantic gap between how the memory was stored and how it might be needed later.
+- "prospective_queries": exactly 5 short phrases (3-8 words each, NOT full questions). Each should describe a situation or scenario where this memory would be relevant. Use everyday language, not formal queries. Examples: "feeling overwhelmed with commitments", "struggling to say no to requests", "work-life balance tips". The goal: if someone searches with COMPLETELY DIFFERENT words but a RELATED situation, these phrases should bridge the gap.
 - Respond ONLY with JSON, no other text."#,
         conversation_time = conversation_time,
         context = context,

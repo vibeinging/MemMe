@@ -17,7 +17,7 @@ mod history;
 mod identity_store;
 mod meditation_store;
 mod procedural;
-mod query;
+pub(crate) mod query;
 mod recall_store;
 pub(crate) mod replica;
 mod session;
@@ -53,7 +53,23 @@ impl Storage {
         if let Some(vec0_sql) = dialect.create_vec0_table_sql(config.embedding_dims) {
             backend.execute_batch(&vec0_sql)?;
         }
-        Ok(Self { backend, config })
+        let storage = Self { backend, config };
+        storage.run_migrations()?;
+        Ok(storage)
+    }
+
+    /// Run incremental migrations for columns added after initial schema.
+    fn run_migrations(&self) -> Result<()> {
+        // Migration: add pinned column to memories (added in v0.2)
+        let has_pinned = self.backend.query_read(
+            "SELECT pinned FROM memories LIMIT 0", &[], |_| Ok(())
+        );
+        if has_pinned.is_err() {
+            let _ = self.backend.execute_batch(
+                "ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0;"
+            );
+        }
+        Ok(())
     }
 
     /// Generate SQLite schema DDL.
@@ -101,7 +117,8 @@ impl Storage {
                 ingestion_time TEXT,
                 sync_version INTEGER DEFAULT 0,
                 device_id TEXT,
-                sync_status TEXT DEFAULT 'pending'
+                sync_status TEXT DEFAULT 'pending',
+                pinned INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS history (
