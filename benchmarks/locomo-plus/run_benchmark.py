@@ -169,6 +169,10 @@ def process_one(si, plus_item, context, total, config, run_path, done_idxs):
             base_url=config.get("embed_base_url") or None,
             embed_model=config.get("embed_model", "text-embedding-3-small"),
             dims=config.get("embed_dims", 1536),
+            llm_provider=config.get("llm_provider", "openai"),
+            llm_api_key=config.get("llm_api_key") or config["api_key"],
+            llm_model=config.get("llm_model", "gpt-4o-mini"),
+            llm_base_url=config.get("llm_base_url") or None,
             enable_forgetting_curve=False,
             rerank_api_key=config.get("rerank_api_key") or None,
             rerank_base_url=config.get("rerank_base_url") or None,
@@ -278,6 +282,10 @@ def main():
     p.add_argument("--rerank-api-key", default="")
     p.add_argument("--rerank-base-url", default="")
     p.add_argument("--rerank-model", default="")
+    p.add_argument("--llm-provider", default="openai", help="LLM provider for engine (openai/ollama)")
+    p.add_argument("--llm-model", default=None, help="Engine LLM model name")
+    p.add_argument("--llm-api-key", default=None, help="Engine LLM API key")
+    p.add_argument("--llm-base-url", default=None, help="Engine LLM base URL")
     p.add_argument("--extra-providers", type=str, default=None)
     p.add_argument("--results-only", type=str, default=None)
     args = p.parse_args()
@@ -325,6 +333,10 @@ def main():
         top_k=args.top_k, cache_dir=args.cache_dir, reuse_cache=args.reuse_cache,
         rerank_api_key=args.rerank_api_key, rerank_base_url=args.rerank_base_url,
         rerank_model=args.rerank_model, chat_providers=chat_providers,
+        llm_provider=args.llm_provider,
+        llm_model=args.llm_model or args.chat_model,
+        llm_api_key=args.llm_api_key,
+        llm_base_url=args.llm_base_url,
     )
 
     os.makedirs(args.output_dir, exist_ok=True)

@@ -86,6 +86,7 @@ impl LlmProvider for OllamaProvider {
             "model": self.config.model,
             "messages": ollama_messages,
             "stream": false,
+            "think": false,
             "options": ollama_options,
         });
 
