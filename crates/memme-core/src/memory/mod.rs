@@ -707,6 +707,14 @@ impl MemoryStore {
                         continue;
                     }
 
+                    // Contradiction detection in batch path
+                    if self.config.enable_graph {
+                        self.detect_contradictions_multi(
+                            &id, content, embedding, &options.user_id,
+                        );
+                    }
+
+
                     let history_id = Uuid::new_v4().to_string();
                     let _ = self.storage.record_history(
                         &history_id,
