@@ -13,6 +13,16 @@ pub enum OnnxModel {
     BgeBaseEnV15,
     /// BGE-large-en-v1.5 — 1024 dimensions.
     BgeLargeEnV15,
+    /// BGE-small-zh-v1.5 — 512 dimensions, Chinese.
+    BgeSmallZhV15,
+    /// BGE-large-zh-v1.5 — 1024 dimensions, Chinese.
+    BgeLargeZhV15,
+    /// multilingual-e5-small — 384 dimensions, 100+ languages.
+    MultilingualE5Small,
+    /// multilingual-e5-base — 768 dimensions, 100+ languages.
+    MultilingualE5Base,
+    /// multilingual-e5-large — 1024 dimensions, 100+ languages.
+    MultilingualE5Large,
 }
 
 impl OnnxModel {
@@ -22,6 +32,11 @@ impl OnnxModel {
             OnnxModel::BgeSmallEnV15 => EmbeddingModel::BGESmallENV15,
             OnnxModel::BgeBaseEnV15 => EmbeddingModel::BGEBaseENV15,
             OnnxModel::BgeLargeEnV15 => EmbeddingModel::BGELargeENV15,
+            OnnxModel::BgeSmallZhV15 => EmbeddingModel::BGESmallZHV15,
+            OnnxModel::BgeLargeZhV15 => EmbeddingModel::BGELargeZHV15,
+            OnnxModel::MultilingualE5Small => EmbeddingModel::MultilingualE5Small,
+            OnnxModel::MultilingualE5Base => EmbeddingModel::MultilingualE5Base,
+            OnnxModel::MultilingualE5Large => EmbeddingModel::MultilingualE5Large,
         }
     }
 
@@ -31,6 +46,11 @@ impl OnnxModel {
             OnnxModel::BgeSmallEnV15 => 384,
             OnnxModel::BgeBaseEnV15 => 768,
             OnnxModel::BgeLargeEnV15 => 1024,
+            OnnxModel::BgeSmallZhV15 => 512,
+            OnnxModel::BgeLargeZhV15 => 1024,
+            OnnxModel::MultilingualE5Small => 384,
+            OnnxModel::MultilingualE5Base => 768,
+            OnnxModel::MultilingualE5Large => 1024,
         }
     }
 
@@ -40,6 +60,11 @@ impl OnnxModel {
             OnnxModel::BgeSmallEnV15 => "bge-small-en-v1.5",
             OnnxModel::BgeBaseEnV15 => "bge-base-en-v1.5",
             OnnxModel::BgeLargeEnV15 => "bge-large-en-v1.5",
+            OnnxModel::BgeSmallZhV15 => "bge-small-zh-v1.5",
+            OnnxModel::BgeLargeZhV15 => "bge-large-zh-v1.5",
+            OnnxModel::MultilingualE5Small => "multilingual-e5-small",
+            OnnxModel::MultilingualE5Base => "multilingual-e5-base",
+            OnnxModel::MultilingualE5Large => "multilingual-e5-large",
         }
     }
 }
