@@ -14,7 +14,7 @@ crate-type = ["staticlib"]
 name = "memme_ffi"
 
 [dependencies]
-uniffi = { version = "0.29", features = ["cli"] }
+uniffi = { version = "0.31", features = ["cli"] }
 thiserror.workspace = true
 memme-core = { workspace = true, default-features = false }
 memme-llm = { workspace = true }
@@ -22,4 +22,4 @@ memme-embeddings = { workspace = true, default-features = false }
 serde_json = { workspace = true }
 
 [build-dependencies]
-uniffi = { version = "0.29", features = ["build"] }
+uniffi = { version = "0.31", features = ["build"] }
