@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260908-entry-fixes">
 </head>
 <body>
   <div class="noise"></div>
@@ -97,44 +97,49 @@
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Try it locally</h2>
-      <p class="section-desc">One preferred path: the self-hosted REST server with a local ONNX embedding model &mdash; no API key, no cloud. Requires macOS or Linux (x64 / arm64) and a Rust toolchain.</p>
+      <p class="section-desc">Run the complete memory demo with local ONNX inference and no API key. Requires macOS or Linux (x64 / arm64), Rust, Python 3, and curl. The first run downloads dependencies and a model.</p>
 
       <div class="qs-steps">
         <div class="qs-step">
           <div class="qs-num">1</div>
-          <h4>Get the engine and the vector extension</h4>
+          <h4>Run the demo from source</h4>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code>git clone https://github.com/vibeinging/MemMe.git
+            <pre><code>git clone --branch main https://github.com/vibeinging/MemMe.git
 <span class="tk-kw">cd</span> MemMe
-<span class="tk-kw">export</span> MEMME_VEXDB_LITE_EXTENSION=<span class="tk-str">"$(bash scripts/download-vexdb-lite-extension.sh)"</span></code></pre>
+bash demos/rest-demo.sh</code></pre>
           </div>
+          <p class="qs-note">The script downloads and configures VexDB-Lite and ONNX Runtime, builds the server, and keeps the model cache with the demo data. The <code>v0.1.2</code> source archive predates these scripts; use <code>main</code> as shown above.</p>
         </div>
         <div class="qs-step">
           <div class="qs-num">2</div>
-          <h4>Start the server</h4>
+          <h4>Watch seven checks pass</h4>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">export</span> MEMME_API_KEY=change-me
-cargo run --release -p memme-server -- --db-path momo-memory.db</code></pre>
+            <pre><code>PASS wrote memories for an owner and two pets
+PASS Momo sees his promise
+PASS no leak to Luna
+PASS Luna sees her toy
+PASS owner-global allergy visible to Momo
+PASS after restart, Momo still remembers
+PASS isolation survives restarts</code></pre>
           </div>
-          <p class="qs-note">First run downloads the compact <code>bge-small-zh-v1.5</code> ONNX model; later runs start instantly and work offline.</p>
+          <p class="qs-note">These are the expected results. The script stops the server completely, restarts it on the same SQLite file, and checks memory and isolation again. Any failure exits with an error.</p>
         </div>
         <div class="qs-step">
           <div class="qs-num">3</div>
-          <h4>Write, recall, restart, recall again</h4>
+          <h4>Keep the data and run again</h4>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code>curl -s http://127.0.0.1:8080/v1/events -H <span class="tk-str">"Authorization: Bearer $MEMME_API_KEY"</span> \
-  -H <span class="tk-str">'Content-Type: application/json'</span> -d <span class="tk-str">'{
-    "session_id":"s1","user_id":"owner-001","agent_id":"momo","app_id":"demo",
-    "messages":[{"event_id":"e1","role":"user","content":"我给默默买了一个蓝色鲸鱼玩具。"}]
-  }'</span></code></pre>
+            <pre><code>bash demos/rest-demo.sh
+
+# If port 18070 is busy:
+MEMME_DEMO_PORT=18071 bash demos/rest-demo.sh</code></pre>
           </div>
-          <p class="qs-note">Or run the scripted version: <code>bash demos/rest-demo.sh</code>. It starts the server, writes memories for two pets, restarts the process, and shows that both the memory and the per-pet isolation survive.</p>
+          <p class="qs-note">Data and the model cache stay in <code>~/.cache/memme-demo</code>. Later runs reuse them; loading the model still takes time. Startup logs are in <code>server.log</code> in that directory. The default startup timeout is 600 seconds; override it with <code>MEMME_DEMO_START_TIMEOUT</code>.</p>
         </div>
       </div>
-      <p class="qs-alt">Prefer Node.js? <code>npm install @wjmwjmwb/memme</code> (macOS / Linux) &mdash; full guide in the <a href="https://github.com/vibeinging/MemMe#quick-start-with-nodejs" target="_blank" rel="noopener">README</a>.</p>
+      <p class="qs-alt">For individual API calls, follow the <a href="https://github.com/vibeinging/MemMe#quick-start-with-the-rest-server" target="_blank" rel="noopener">manual REST guide</a>. Prefer Node.js? <code>npm install @wjmwjmwb/memme</code> (macOS / Linux) &mdash; see the <a href="https://github.com/vibeinging/MemMe#quick-start-with-nodejs" target="_blank" rel="noopener">Node.js guide</a>.</p>
     </div>
   </section>
 
@@ -582,9 +587,15 @@ store.add(<span class="tk-str">"主人对花生严重过敏。"</span>, AddOptio
           <p>PyO3 + maturin. The PyPI <code>0.1.1</code> wheel is the legacy DuckDB build.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code>git clone https://github.com/vibeinging/MemMe.git
-<span class="tk-kw">cd</span> MemMe &amp;&amp; maturin develop --release</code></pre>
+            <pre><code># From the repository root:
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install maturin
+maturin develop \
+  --manifest-path crates/memme-python/Cargo.toml \
+  --release</code></pre>
           </div>
+          <p>Then configure the SQLite extension using the <a href="https://github.com/vibeinging/MemMe/tree/main/crates/memme-python#install" target="_blank" rel="noopener">Python installation guide</a>.</p>
         </div>
         <div class="binding-card" style="--card-delay: 3">
           <div class="binding-lang">Swift / C</div>
@@ -618,9 +629,10 @@ POST /v1/backups    GET  /diagnose</code></pre>
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
             <pre><code>{
   <span class="tk-str">"command"</span>: <span class="tk-str">"memme-mcp"</span>,
-  <span class="tk-str">"args"</span>: [<span class="tk-str">"--db"</span>, <span class="tk-str">"memory.db"</span>]
+  <span class="tk-str">"args"</span>: [<span class="tk-str">"--db-path"</span>, <span class="tk-str">"memory.db"</span>]
 }</code></pre>
           </div>
+          <p>Also configure <code>MEMME_VEXDB_LITE_EXTENSION</code>, <code>OPENAI_API_KEY</code>, <code>EMBEDDING_URL</code>, and <code>LLM_URL</code> in the client environment. Both URLs must be full API endpoints.</p>
         </div>
       </div>
     </div>

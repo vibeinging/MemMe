@@ -10,6 +10,53 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  entry-guards:
+    name: Demo and release guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python3 -m unittest discover -s scripts/tests -v
+
+  local-demo:
+    name: First model download (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: demo-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run demo with an empty model cache
+        env:
+          MEMME_DEMO_DIR: ${{ runner.temp }}/memme-demo
+        run: bash demos/rest-demo.sh
+      - name: Upload startup log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-log-${{ matrix.os }}
+          path: ${{ runner.temp }}/memme-demo/server.log
+          if-no-files-found: ignore
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

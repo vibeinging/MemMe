@@ -28,11 +28,12 @@ on-device use. Its Rust core can also be embedded in other companion products.
 
 ## Try it locally
 
-The fastest path runs entirely on your machine — no API key, no cloud. It
-needs macOS or Linux (x64 / arm64) and a Rust toolchain:
+This demo uses local inference and needs no API key. It requires macOS or
+Linux (x64 / arm64), Rust, Python 3, and curl. The first run needs internet
+access to download dependencies and the embedding model:
 
 ```bash
-git clone https://github.com/vibeinging/MemMe.git
+git clone --branch main https://github.com/vibeinging/MemMe.git
 cd MemMe
 bash demos/rest-demo.sh
 ```
@@ -41,9 +42,22 @@ The script downloads the pinned VexDB-Lite extension and ONNX Runtime, builds
 the REST server with a local ONNX embedding model, writes memories for one
 owner and two pets, fully restarts the process, and recalls again — so you can
 verify restart persistence and per-pet isolation yourself. The first run also
-downloads the compact embedding model (~100 MB, once); later runs start
-instantly and work offline. Node.js and manual REST paths are in the quick
-starts below.
+downloads the embedding model before the server starts. Later runs reuse
+the model cache in `~/.cache/memme-demo/.fastembed_cache`; inference works
+offline once the dependencies and model are cached. Startup still loads the
+model into memory.
+
+The script checks seven outcomes and exits with an error if a check fails.
+Set `MEMME_DEMO_PORT` if port 18070 is busy, `MEMME_DEMO_DIR` to keep the data
+and model cache elsewhere, or `MEMME_DEMO_START_TIMEOUT` to change the model
+startup timeout (default: 600 seconds). Startup details are in
+`$MEMME_DEMO_DIR/server.log` (default: `~/.cache/memme-demo/server.log`).
+
+**Source version:** this demo is maintained on `main`. The `v0.1.2` source
+archive predates the demo and ONNX Runtime download scripts; use the clone
+command above instead of running these instructions from that archive.
+Record `git rev-parse HEAD` when reporting a result. Node.js and manual REST
+paths are in the quick starts below.
 
 ## What an AI pet needs to remember
 

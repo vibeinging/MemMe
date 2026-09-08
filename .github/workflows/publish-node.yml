@@ -16,7 +16,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  source:
+    name: Resolve and validate release source
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate tag and package versions
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "Expected a version tag" >&2; exit 1; }
+          source_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          [[ "$source_sha" = "$tag_sha" ]] || { echo "Checkout is not the requested tag" >&2; exit 1; }
+          node <<'JS'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const base = 'crates/memme-node';
+          const version = process.env.RELEASE_TAG.slice(1);
+          const read = dir => JSON.parse(fs.readFileSync(`${base}/${dir}/package.json`, 'utf8'));
+          const main = read('.');
+          assert.equal(main.name, '@wjmwjmwb/memme');
+          assert.equal(main.version, version, 'Main package differs from release tag');
+          for (const platform of ['darwin-arm64', 'darwin-x64', 'linux-arm64-gnu', 'linux-x64-gnu']) {
+            const pkg = read(`npm/${platform}`);
+            assert.equal(pkg.name, `memme-${platform}`);
+            assert.equal(pkg.version, version, `${platform} differs from release tag`);
+            assert.equal(main.optionalDependencies[pkg.name], version, `${platform} dependency differs`);
+          }
+          JS
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: source
     name: Build - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.os }}
     strategy:
@@ -35,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.source.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -89,12 +132,14 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
-    needs: build
+    needs: [source, build]
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:

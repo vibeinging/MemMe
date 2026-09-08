@@ -13,25 +13,45 @@ memory, per-pet relationship memory, and fresh events in one SQLite file.
 > built and verified but not yet uploaded. Until then, build from source:
 
 ```bash
-git clone https://github.com/vibeinging/MemMe.git
+git clone --branch main https://github.com/vibeinging/MemMe.git
 cd MemMe
-pip install maturin
-maturin develop --release
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install maturin
+maturin develop --manifest-path crates/memme-python/Cargo.toml --release
 ```
+
+Run these commands from the repository root. Its `Cargo.toml` is a workspace
+manifest, so maturin needs the Python crate's manifest explicitly. Keep the
+virtual environment active for the Python examples below.
 
 The Python wheels support CPython 3.8+ on macOS and Linux, for x64 and arm64.
-MemMe loads a trusted VexDB-Lite v0.0.17 SQLite extension at runtime. Set its
-absolute path before opening a store:
+MemMe loads a trusted VexDB-Lite v0.0.17 SQLite extension at runtime. From the
+repository root, select the active Python interpreter's architecture, then
+download and verify the pinned library with SHA-256:
 
 ```bash
-export MEMME_VEXDB_LITE_EXTENSION=/absolute/path/to/vexdb_lite.so
+export MEMME_VEXDB_LITE_HOST="$(python - <<'PY'
+import platform
+hosts = {
+    ("Darwin", "arm64"): "aarch64-apple-darwin",
+    ("Darwin", "x86_64"): "x86_64-apple-darwin",
+    ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
+    ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+}
+print(hosts[(platform.system(), platform.machine())])
+PY
+)"
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
 ```
 
-The repository helper downloads the pinned library for your architecture and
-verifies it with SHA-256:
+This matters on Apple Silicon when Python runs natively but Rust runs under
+Rosetta: the library must match the Python process. If you use the default
+local `embedder="onnx"`, also configure its runtime for that architecture:
 
 ```bash
-export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export MEMME_ONNXRUNTIME_HOST="$MEMME_VEXDB_LITE_HOST"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 ```
 
 Only load a library you trust because SQLite extensions run as native code in

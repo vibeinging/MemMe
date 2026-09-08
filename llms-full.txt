@@ -779,7 +779,10 @@ from memme import MemoryStore
 
 # Create store. Requires MEMME_VEXDB_LITE_EXTENSION in the environment.
 # Build the current version from source (PyPI still serves legacy 0.1.1):
-#   pip install maturin && maturin develop --release
+# From the repository root:
+#   python3 -m venv .venv && source .venv/bin/activate
+#   python -m pip install maturin
+#   maturin develop --manifest-path crates/memme-python/Cargo.toml --release
 store = MemoryStore("memory.db", embedder="mock")
 
 # Owner-global memory is shared across this owner's pets.

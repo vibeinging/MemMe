@@ -55,8 +55,12 @@
 
 ## Try It
 
+Requires macOS or Linux on x64/arm64, Rust, Python 3, and curl. The first run
+downloads dependencies and the model. Use main: the v0.1.2 source archive does
+not include the demo and ONNX Runtime download scripts.
+
 ```bash
-git clone https://github.com/vibeinging/MemMe.git && cd MemMe
+git clone --branch main https://github.com/vibeinging/MemMe.git && cd MemMe
 bash demos/rest-demo.sh   # write → recall → restart → recall again, fully local
 ```
 

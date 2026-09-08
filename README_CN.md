@@ -26,20 +26,29 @@ MemMe 是 AI 宠物和 AI 陪伴设备的本地长期记忆体。它让 AI 宠�
 
 ## 在本地试用
 
-最快的路径完全运行在你自己的机器上——不需要 API Key，不连云。需要
-macOS 或 Linux（x64 / arm64）和 Rust 工具链：
+这个 Demo 使用本地模型，不需要 API Key。需要 macOS 或 Linux（x64 / arm64）、
+Rust、Python 3 和 curl。首次运行需要联网下载依赖和向量模型：
 
 ```bash
-git clone https://github.com/vibeinging/MemMe.git
+git clone --branch main https://github.com/vibeinging/MemMe.git
 cd MemMe
 bash demos/rest-demo.sh
 ```
 
-脚本会下载固定版本的 VexDB-Lite 扩展、构建使用本地 ONNX 向量模型的 REST
+脚本会下载固定版本的 VexDB-Lite 扩展和 ONNX Runtime，构建使用本地 ONNX 向量模型的 REST
 服务，写入一位主人和两只宠物的记忆，完整重启进程后再次检索——重启后记忆
-还在、不同宠物不串记忆，这两件事你可以亲自验证。首次运行会下载约 100 MB
-的本地向量模型（仅一次）；之后启动是即时的，并且完全离线。Node.js 和手动
-REST 路径见下面的快速开始。
+还在、不同宠物不串记忆，这两件事你可以亲自验证。首次启动服务前会下载模型，
+之后复用 `~/.cache/memme-demo/.fastembed_cache`。依赖和模型缓存齐全后，推理
+可以离线运行，但启动时仍需要把模型加载到内存。
+
+脚本检查 7 项结果，任何一项失败都会报错退出。18070 端口被占用时可设置
+`MEMME_DEMO_PORT`；数据和模型目录可通过 `MEMME_DEMO_DIR` 修改；模型启动等待
+时间可通过 `MEMME_DEMO_START_TIMEOUT` 修改，默认 600 秒。启动日志位于
+`$MEMME_DEMO_DIR/server.log`，默认是 `~/.cache/memme-demo/server.log`。
+
+**源码版本：** Demo 在 `main` 分支维护。`v0.1.2` 源码包早于 Demo 和 ONNX
+Runtime 下载脚本，不能直接运行这组命令；请使用上面的克隆命令获取 `main`。
+反馈结果时请附上 `git rev-parse HEAD`。Node.js 和手动 REST 路径见下面的快速开始。
 
 ## AI 宠物真正需要记住什么
 
@@ -171,6 +180,7 @@ Rust 项目可以直接从本仓库构建 SQLite 引擎：
 git clone https://github.com/vibeinging/MemMe.git
 cd MemMe
 export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 cargo build -p memme-core
 cargo test -p memme-core
 ```
@@ -216,6 +226,7 @@ fn main() -> memme_core::Result<()> {
 
 ```bash
 export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 export MEMME_API_KEY=change-me
 cargo run --release -p memme-server -- --db-path momo-memory.db
 ```
@@ -276,6 +287,7 @@ MemMe 使用普通 SQLite 数据库保存权威数据，使用 VexDB-Lite 的持
 
 ```bash
 export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 ```
 
 当前动态扩展支持 macOS、Linux 的 x64 和 arm64。VexDB-Lite v0.0.17 没有
@@ -321,6 +333,7 @@ Node.js 项目使用带作用域的 npm 包。Rust 和 Python 项目请固定一
 
 ```bash
 export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 cargo run --release -p memme-core --example pet_memory_benchmark -- \
   --dataset benchmarks/petmem/scenarios.json \
   --output benchmarks/petmem/results/latest.json

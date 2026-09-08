@@ -1323,11 +1323,13 @@ body {
 /* ═══════════ 06 BINDINGS ═══════════ */
 .bindings-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
 }
 
 .binding-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2063,12 +2065,14 @@ body {
 /* ═══════════ QUICK START ═══════════ */
 .qs-steps {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1.4rem;
   margin-top: 2.4rem;
 }
 
 .qs-step {
+  min-width: 0;
+  overflow-wrap: anywhere;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
