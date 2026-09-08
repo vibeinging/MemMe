@@ -28,6 +28,12 @@ pub struct Session {
     pub event_count: u32,
     /// Structured notes accumulated during append_events for LLM-free compact summary.
     pub structured_notes: Option<String>,
+    /// Number of searches that touched this session.
+    #[serde(default)]
+    pub queried_count: u32,
+    /// Last time a search touched this session.
+    #[serde(default)]
+    pub last_queried_at: Option<String>,
 }
 
 /// Options for listing sessions with optional time range and pagination.

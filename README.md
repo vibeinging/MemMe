@@ -2,418 +2,366 @@
 
 # MemMe
 
-**Memories that are actually yours.**
+**Local long-term memory for AI pets.**
 
-An embeddable AI memory engine. One file. Your device. Your rules.
+Remember the owner. Keep each pet relationship separate. Stay on the device.
 
-[![Website](https://img.shields.io/badge/Website-vibeinging.github.io/MemMe-8b7cf6?style=flat-square&logo=github)](https://vibeinging.github.io/MemMe/)
 [![CI](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40wjmwjmwb%2Fmemme.svg)](https://www.npmjs.com/package/@wjmwjmwb/memme)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-**Rust Core** · **SQLite Single-File** · **Sub-10ms Search** · **6 Language Bindings** · **LoCoMo 85.52%**
+**Rust core** · **SQLite single file** · **VexDB-Lite** · **macOS / Linux** · **offline-first**
 
 English | [中文](README_CN.md)
-
-<img src="docs/images/hero.png" alt="MemMe Hero" width="720">
 
 </div>
 
 ---
 
-You've been chatting with your AI assistant for three months. It knows your work, your tastes, how you think.
+MemMe is a private, durable memory runtime for AI pets and companions. It helps
+an AI pet remember its owner, preserve shared experiences, keep each
+relationship separate, and continue working across restarts, model changes, and
+network loss.
 
-Then one day the platform changes its privacy policy. Or you want to switch models. Or the service shuts down.
+The engine is built for AI-pet behavior, safety, isolation, low latency, and
+on-device use. Its Rust core can also be embedded in other companion products.
 
-Three months of memory — gone.
+## Try it locally
 
-Not because the tech isn't there. Because **those memories were never yours.**
-
-MemMe wants to change that.
-
-## Why your memory lives on someone else's server
-
-Your photos, your contacts, your notes — they live on your device. You can back them up, migrate them, delete them.
-
-But your AI conversation memory? It sits on OpenAI's servers. On Claude's cloud. You don't know who can access it, what it's been used to train, or whether it'll still be there tomorrow.
-
-AI memory is more sensitive than regular data. It's not just what you said — it's **who you are**: your thinking patterns, decision habits, emotional states, relationships. This is the most personal profile there is.
-
-**That data belongs on your device.**
-
-## One file. All your memories.
-
-```
-memory.db                  <- your entire memory, one file
-memory.db.replica          <- automatic backup copy
-|
-├── memories               content + vectors + metadata
-├── entities / relationships   knowledge graph (people, places, events)
-├── sessions / events      raw conversation stream
-├── episodes               episodic memory (compacted dialogue stories)
-├── identity               identity traits (who you are)
-├── procedures             procedural memory (skills, habits)
-├── meditations            meditation log (memory consolidation records)
-├── history                change audit (every read/write logged)
-└── memme_config           runtime config
-```
-
-To back up: `sync_replica()` for dual-copy, `backup_to_path()` for portable snapshots. To migrate: `full_export()` dumps everything as JSON. To import ChatGPT history: one line of code. To delete everything: delete the file.
-
-Built in Rust with native bindings for Python, Node.js, and Swift/Kotlin (via UniFFI). Plug in any LLM for smart extraction, or run pure vector mode at sub-10ms latency without one. Not an HTTP wrapper — native integration down to embedded devices and robots.
-
-When the app dies, memories survive. When the model changes, memories survive. When the platform disappears, memories survive.
-
-## Try It Now
+The fastest path runs entirely on your machine — no API key, no cloud. It
+needs macOS or Linux (x64 / arm64) and a Rust toolchain:
 
 ```bash
-pip install memme
-python demos/playground/server.py
+git clone https://github.com/vibeinging/MemMe.git
+cd MemMe
+bash demos/rest-demo.sh
 ```
 
-A local web app opens in your browser. Store memories, search by meaning, chat with your memory. All data stays on your machine. See [playground docs](demos/playground/README.md).
+The script downloads the pinned VexDB-Lite extension and ONNX Runtime, builds
+the REST server with a local ONNX embedding model, writes memories for one
+owner and two pets, fully restarts the process, and recalls again — so you can
+verify restart persistence and per-pet isolation yourself. The first run also
+downloads the compact embedding model (~100 MB, once); later runs start
+instantly and work offline. Node.js and manual REST paths are in the quick
+starts below.
 
-## Benchmark
+## What an AI pet needs to remember
 
-MemMe vs mem0 on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1540 questions, 10 conversations, GPT-4o-mini judge):
+An AI pet should remember more than a bag of similar chat snippets:
 
-<div align="center">
-<img src="docs/images/benchmark.png" alt="MemMe Benchmark" width="720">
-</div>
+- **Owner memory** — stable facts, preferences, boundaries, and safety rules
+  shared across the owner’s pets.
+- **Relationship memory** — names, inside jokes, shared experiences, and habits
+  that belong to one owner-pet relationship and must not leak to another pet.
+- **Fresh events** — what was said or done a moment ago, available before any
+  background summarization finishes.
+- **Changing truth** — expired or replaced facts must stop affecting replies,
+  while their history remains auditable.
+- **Durable local state** — memory survives restarts, model changes, network
+  loss, and application upgrades.
 
-**Overall: 85.52%** (excluding adversarial refusal) · Single-hop 87.23 · Multi-hop 78.19 · Temporal 61.46 · Open-domain 90.49
+## Core capabilities
 
-Pipeline: append_events → compact → meditate (per-episode fact extraction + vector dedup). 5-channel retrieval (vector + BM25 + entity spreading + word overlap + temporal) with RRF fusion and cross-encoder reranking.
+- Search owner-global memory and the selected pet relationship together.
+- Recall fresh events immediately inside the correct owner and pet scope.
+- Keep owners and pet relationships isolated by default.
+- Filter expired and superseded facts before they can affect a reply.
+- Store authoritative data in one SQLite file with VexDB-Lite vector indexing.
+- Combine vector, full-text, entity, temporal, and exact-identifier retrieval.
+- Preserve history, immutable safety memories, backups, and portable exports.
+- Run optional LLM extraction and consolidation outside the reply path.
 
-## Why MemMe
+## Memory model
 
-| | **MemMe** | **mem0** | **Zep** |
-|---|---|---|---|
-| Deployment | Single `.db` file | Server + Qdrant + Neo4j | Managed cloud |
-| Mobile / iOS | Native (UniFFI) | No | No |
-| Offline | Full support | Requires cloud APIs | Cloud only |
-| Latency (no LLM) | <10ms | Always needs LLM | Always needs LLM |
-| Language | Rust core | Python only | Go (server) |
-| Knowledge graph | Built-in (SQLite) | External Neo4j | No |
-| Hybrid search | Vector + BM25 + RRF | No | Partial |
-| Reranking | Built-in (API / ONNX) | Optional | No |
-| Forgetting curve | Built-in | No | No |
-| Data protection | Dual-replica + cloud backup + full export | No | SOC2/HIPAA (cloud) |
-| Chat import | ChatGPT / Claude / Gemini | No | No |
+```text
+message / action
+      │
+      ▼
+append-only events ───────────────► immediately searchable
+      │
+      ▼
+session ── compact ──► episode ── meditate ──► durable facts
+                                                   │
+                         ┌─────────────────────────┴──────────────┐
+                         │                                        │
+                 owner-global memory                    pet relationship memory
+                 agent_id = NULL                        agent_id = selected pet
+                         │                                        │
+                         └────────────── search ──────────────────┘
+                                            │
+                              VexDB vector + SQLite FTS
+```
 
-## Quick Start
+The normal reply path does not need an extra memory LLM call. It writes the raw
+event, reads the small active scope, and retrieves a few useful memories. Heavy
+fact extraction, reconciliation, graph work, and reflection can run after the
+reply or while the device is idle.
 
-### Rust
+SQLite tables are the source of truth. Vector and full-text indexes are derived
+data and can be rebuilt.
 
-```toml
-[dependencies]
-memme-core = "0.1"
-memme-embeddings = { version = "0.1", features = ["onnx"] }
+## PetMemBench
+
+`PetMemBench` is MemMe's product benchmark. Its scenarios cover owner safety,
+per-pet relationships, fresh events, privacy isolation, Chinese retrieval,
+expiration, correction, and deletion.
+
+Release benchmark for `0.1.2`, using 2,000 memories and three independent runs:
+
+| Metric | Result |
+|---|---:|
+| Required scenarios | 11 / 11 |
+| Extended scenarios | 3 / 3 |
+| Recall@10 | 100% |
+| Search p50 | 1.999 ms |
+| Search p95 | 3.062 ms |
+| Search p99 | 17.128 ms |
+| Write throughput | 445.7 memories/s |
+| SQLite file size | 10.4 MB |
+
+These numbers test the storage and retrieval contract. They do **not** yet prove
+final reply quality or production performance: the benchmark uses deterministic
+local test embeddings, 2,000 memories, and an x86_64 process under Rosetta on
+Apple Silicon.
+
+- [0.1.2 release report](docs/reports/2026-09-01_release-0.1.2.md)
+- [Scenarios](benchmarks/petmem/scenarios.json)
+- [AI-pet architecture research](docs/research/2026-09-01_ai-pet-memory-architecture.md)
+
+## Quick start with Node.js
+
+The current npm release supports macOS and Linux on arm64 and x64:
+
+```bash
+npm install @wjmwjmwb/memme
+```
+
+MemMe does not bundle the VexDB-Lite SQLite extension. Download the matching
+trusted VexDB-Lite v0.0.17 library and provide its absolute path:
+
+```bash
+export MEMME_VEXDB_LITE_EXTENSION=/absolute/path/to/vexdb_lite.dylib
+```
+
+```javascript
+const { MemoryStore } = require("@wjmwjmwb/memme");
+
+const store = MemoryStore.newOpenai(
+  process.env.OPENAI_API_KEY,
+  "momo-memory.db",
+);
+
+// Owner-global memory: visible to the owner's selected pets.
+await store.add("The owner has a severe peanut allergy.", "owner-001");
+
+// Relationship memory: only Momo should retrieve it.
+await store.add(
+  "Momo and the owner first met under the ginkgo tree.",
+  "owner-001",
+  "momo",
+);
+
+const context = await store.search(
+  "What should I remember when preparing Momo's birthday snack?",
+  "owner-001",
+  "momo",
+  null,
+  5,
+);
+
+console.log(context);
+```
+
+Use `MemoryStore.newMock()` for tests that must not call an embedding service.
+
+## Quick start with Rust
+
+Rust users can build the SQLite engine directly from this repository:
+
+```bash
+git clone https://github.com/vibeinging/MemMe.git
+cd MemMe
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
+cargo build -p memme-core
+cargo test -p memme-core
 ```
 
 ```rust
 use std::sync::Arc;
-use memme_core::{MemoryConfig, MemoryStore, AddOptions, SearchOptions};
+use memme_core::{AddOptions, MemoryConfig, MemoryStore, SearchOptions};
 use memme_embeddings::onnx::OnnxEmbedder;
 
 fn main() -> memme_core::Result<()> {
-    let config = MemoryConfig::new("memory.db", 384);
+    let config = MemoryConfig::new("momo-memory.db", 384);
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
-    store.add("User prefers dark mode", AddOptions::new("alice"))?;
-    store.add("User drinks coffee every morning", AddOptions::new("alice"))?;
+    store.add(
+        "主人对花生严重过敏。",
+        AddOptions::new("owner-001").immutable(true),
+    )?;
 
-    let results = store.search("morning routine", SearchOptions::new("alice").limit(5))?;
-    for r in &results {
-        println!("{} (score: {:.4})", r.content, r.score.unwrap_or(0.0));
+    store.add(
+        "默默和主人第一次见面是在银杏树下。",
+        AddOptions::new("owner-001").agent_id("momo"),
+    )?;
+
+    let memories = store.search(
+        "给默默准备生日零食，要注意什么？",
+        SearchOptions::new("owner-001").agent_id("momo").limit(5),
+    )?;
+
+    for memory in memories {
+        println!("{}", memory.content);
     }
+
     Ok(())
 }
 ```
 
-### Python
+## Quick start with the REST server
+
+The server uses the compact local `bge-small-zh-v1.5` ONNX model by default.
+Choose `--onnx-embedding-model multilingual-e5-small` for multilingual data.
+An LLM is optional: event
+ingestion and recall work without one; `compact` and `meditate` need one.
 
 ```bash
-pip install memme
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
+export MEMME_API_KEY=change-me
+cargo run --release -p memme-server -- --db-path momo-memory.db
 ```
 
-```python
-from memme import MemoryStore
-
-store = MemoryStore("memory.db")
-store.add("User prefers dark mode", user_id="alice")
-results = store.search("preferences", user_id="alice")
-for r in results:
-    print(r["content"], r["score"])
-```
-
-### Node.js
+Write each message with a stable event ID. Retrying the same request is safe:
 
 ```bash
-npm install memme
+curl -s http://127.0.0.1:8080/v1/events \
+  -H "Authorization: Bearer $MEMME_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id":"voice-session-001",
+    "user_id":"owner-001",
+    "agent_id":"momo",
+    "app_id":"xiaozhi",
+    "messages":[{
+      "event_id":"voice-session-001-user-001",
+      "role":"user",
+      "content":"I bought Momo a blue whale toy."
+    }]
+  }'
 ```
 
-```javascript
-const { MemoryStore } = require("memme");
+Use the same `user_id` and `agent_id` when recalling. This keeps relationship
+memory from different pets separate. The complete contract is in
+[`docs/openapi.yaml`](docs/openapi.yaml).
 
-// Use OpenAI embeddings (or newMock() for testing without API)
-const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.db");
-await store.add("User prefers dark mode", "alice");
-const results = await store.search("preferences", "alice");
-console.log(results);
+The REST API also exposes complete user-data operations:
+
+- `POST /v1/data/export` produces an unpaginated version 3 user export with
+  lifecycle, correction, graph, audit, procedure, meditation, and recall data.
+- `POST /v1/data/import` accepts only v3 exports for the same collection,
+  validates owner and cross-layer references, then imports every layer in one
+  transaction. The target must be free of imported IDs. Admission happens before
+  the JSON body is read; explicit body, record, and vector-memory limits apply.
+  Use a SQLite backup for larger databases or replacement restores.
+- `DELETE /v1/users/{user_id}` removes that user's memories, raw events,
+  sessions, episodes, graph, identity, and history after exact confirmation.
+- `POST /v1/backups` uses SQLite's online backup API to create a consistent
+  snapshot under `MEMME_BACKUP_DIR` while the service remains available.
+- `POST /v1/backups/restore` opens the candidate with the current embedding,
+  VexDB-Lite, and collection settings before replacement. It keeps the previous
+  database until the replacement reopens successfully. Success and failure both
+  restart the REST server on the same address; failure continues with the old DB.
+
+If remote embedding is temporarily unavailable, `/v1/events` still stores the
+raw text and returns `embedding_pending`. Replaying the same `event_id` after the
+provider recovers backfills its vector instead of skipping it as a duplicate.
+
+Only `/health` is public when `MEMME_API_KEY` is configured. `/diagnose` runs
+real provider checks and therefore requires the same Bearer token as `/v1/*`.
+
+A `session_id` is permanently bound to its first `user_id`, `agent_id`,
+`app_id`, and `run_id`. Reusing it with another owner or pet returns `400`.
+
+## VexDB-Lite storage
+
+MemMe uses a normal SQLite database as its durable source of truth and
+VexDB-Lite’s persistent `GRAPH_INDEX` for vector retrieval. `sqlite-vec` and
+DuckDB are not used by the current source tree.
+
+The repository helper downloads the pinned VexDB-Lite v0.0.17 release for the
+current macOS/Linux architecture and verifies the archive and library with
+SHA-256:
+
+```bash
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
 ```
 
-### Swift (UniFFI)
+Local ONNX embeddings additionally load a pinned ONNX Runtime 1.19.2 dynamic
+library via `ORT_DYLIB_PATH`:
 
-```swift
-import MemMe
-
-// Host app provides HTTP transport (URLSession, OkHttp, etc.)
-let store = try MemoryStore.newWithHttpClient(
-    dbPath: "memory.db",
-    httpClient: myHttpClient,  // implements HttpClient protocol
-    apiKey: "sk-...",
-    model: "text-embedding-3-small",
-    dims: 1536
-)
-try store.add("User prefers dark mode", userId: "alice")
-let results = try store.search("preferences", userId: "alice")
+```bash
+export ORT_DYLIB_PATH="$(bash scripts/download-onnx-runtime.sh)"
 ```
 
-## Features
+Current dynamic-extension support is macOS and Linux on x64 and arm64. Windows
+does not have a matching VexDB-Lite v0.0.17 SQLite extension. Mobile and WASM
+crates exist, but they are not yet wired to the same VexDB-Lite SQLite runtime.
 
-### Memory Pipeline
+Only load a trusted extension: SQLite extensions run as native code inside the
+application process.
 
-<div align="center">
-<img src="docs/images/pipeline.png" alt="MemMe Pipeline" width="720">
-</div>
+## Data and privacy
 
-- **Session/Episode architecture** — Stream -> Session -> Episode -> Memory four-layer data model
-- **Meditation** — memory consolidation: decay + per-episode fact extraction + vector dedup + graph building + entity-memory linking. Loops until all unmeditated episodes are processed
-- **Forgetting curve** — FSRS-based memory decay with stability reinforcement on access
-- **Knowledge graph** — entity/relationship extraction with spreading activation traversal
-- **Reflection** — LLM-powered analysis of recent memories, identifying themes, patterns, and focus areas
-- **Feedback learning** — extract behavioral principles from user corrections, stored as high-importance memories and identity traits
-
-### Search
-
-<div align="center">
-<img src="docs/images/search.png" alt="MemMe Search Pipeline" width="720">
-</div>
-
-- **Four-channel hybrid search** — vector + BM25 + entity graph + temporal, fused via RRF
-- **Adaptive RRF** — optional per-channel confidence scaling for dynamic weight adjustment
-- **Resolution-weighted scoring** — Granular/Narrative/Identity memories scored with configurable multipliers to reduce noise from broad summaries
-- **Reranking** — API reranker (Jina/Cohere) or local ONNX cross-encoder
-
-### Data Safety
-
-- **Single-file deployment** — one `.db` file holds vectors, graph, FTS index, and history
-- **Dual-replica protection** — CHECKPOINT + atomic file copy before meditation; auto-recovery from replica on corruption
-- **Cloud backup** — `backup_to_path()` creates portable snapshots (with metadata: memory count, schema version, file size); `restore_from_backup()` validates and restores. Host app handles upload to iCloud/S3/cloud drive
-- **Full export/import** — export all 8 data layers (memories, sessions, events, episodes, entities, relations, identity, sources) as JSON; import back losslessly
-- **External chat import** — import conversations from ChatGPT, Claude, and Gemini exports into the memory pipeline
-- **Privacy controls** — `LocalOnly`, `Syncable`, `EncryptedSync` per-memory
-
-### Bindings & API
-
-<div align="center">
-<img src="docs/images/bindings.png" alt="MemMe Bindings" width="720">
-</div>
-
-### Platform
-
-- **Pluggable LLM** — OpenAI, Anthropic, Gemini, Ollama, or none
-- **Diagnostics** — built-in health checks for storage, embedder, and LLM with per-check latency
-- **Four-level scoping** — `user_id` / `agent_id` / `app_id` / `run_id` isolation
-- **Battery-aware** — defers heavy operations on low battery
-- **Analytics** — user stats, memory frequency, top entities
-
-## Import Your Chat History
-
-Bring your existing conversations from other AI platforms:
-
-```rust
-use memme_core::import::{parse_chatgpt, parse_claude_export, parse_gemini};
-
-// Parse ChatGPT export (conversations.json from Settings > Export)
-let convs = parse_chatgpt(&std::fs::read_to_string("conversations.json")?)?;
-
-// Parse Claude export (conversations.jsonl from Settings > Export Data)
-let convs = parse_claude_export(&std::fs::read_to_string("conversations.jsonl")?)?;
-
-// Parse Gemini export (from Google Takeout)
-let convs = parse_gemini(&std::fs::read_to_string("gemini_export.json")?)?;
-
-// Ingest into MemMe → then compact & meditate to extract memories
-store.import_conversations(&convs, "alice")?;
+```text
+momo-memory.db             all authoritative memory data
+momo-memory.db.replica     optional local replica
 ```
 
-## Data Protection
+- One owner’s memory never enters another owner’s query.
+- One pet’s relationship memory never enters another pet’s query.
+- Expired and superseded facts are filtered before result fusion.
+- Immutable safety memory cannot be silently updated or deleted.
+- `backup_to_path()` creates a portable SQLite snapshot.
+- `full_export()` / `full_import()` and the REST data endpoints move every
+  user-data layer without a cloud service.
+- The host application controls sync, encryption, retention, and raw-audio
+  policy. For voice toys, text events are enough for memory; raw audio does not
+  need to become long-term memory.
 
-MemMe maintains a dual-replica system to ensure your memories are never lost:
+## Packages and APIs
 
-```rust
-// Sync primary → replica (CHECKPOINT + atomic file copy)
-store.sync_replica()?;
-
-// Cloud backup: portable snapshot with metadata
-let info = store.backup_to_path("/path/to/backup.db")?;
-println!("Backed up {} memories ({} bytes)", info.memory_count, info.size_bytes);
-// Host app uploads the file to iCloud / S3 / cloud drive
-
-// Restore from backup (caller must re-open MemoryStore after)
-MemoryStore::restore_from_backup("/path/to/backup.db", &config)?;
-
-// Full export: all 8 data layers as a single JSON
-let export = store.full_export(Some("alice"))?;
-std::fs::write("backup.json", serde_json::to_string_pretty(&export)?)?;
-
-// Full import: restore everything
-let data: FullExport = serde_json::from_str(&std::fs::read_to_string("backup.json")?)?;
-store.full_import(&data)?;
-```
-
-Meditation automatically syncs the replica before starting. If the primary file corrupts, MemMe auto-recovers from the replica on next startup.
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Language Bindings                      │
-│  Python (PyO3)  │  Node.js (NAPI-RS)  │  Swift (UniFFI) │
-├──────────────────────────────────────────────────────────┤
-│  REST API (axum)          │  MCP Server (stdio)          │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│                   memme-core (Rust)                       │
-│                                                          │
-│  Stream ──► Session ──► Episode ──► Memory                │
-│                    compact    meditate  │                 │
-│                            ┌───────────┤                 │
-│                            ▼           ▼                 │
-│                        Identity      Graph               │
-│                                                          │
-│  Search: Vector + BM25 + Graph + Temporal                │
-│          ──► RRF Fusion ──► Rerank                       │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  SQLite (.db single file + .replica backup)         │  │
-│  │  memories │ entities │ relationships │ episodes     │  │
-│  │  sessions │ events │ identity │ history │ meditations│  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  memme-embeddings          memme-llm                     │
-│  (ONNX / OpenAI / Ollama)  (OpenAI / Anthropic / Gemini  │
-│                             / Ollama / Noop)             │
-└──────────────────────────────────────────────────────────┘
-```
-
-| Crate | Purpose |
+| Component | Current use |
 |---|---|
-| `memme-core` | Core engine: CRUD, search, graph, meditation, replica, export/import |
-| `memme-embeddings` | Embedding trait + ONNX/OpenAI/Ollama backends |
-| `memme-llm` | LLM trait + OpenAI/Anthropic/Gemini/Ollama backends |
-| `memme-python` | Python bindings (PyO3 + maturin) |
-| `memme-ffi` | Swift/C bindings (UniFFI) |
-| `memme-node` | Node.js bindings (NAPI-RS) |
-| `memme-wasm` | WASM bindings (wasm-bindgen) |
-| `memme-server` | REST API server (axum) |
-| `memme-mcp` | MCP server for Claude Desktop / Cursor |
+| `memme-core` | Rust memory engine, lifecycle, search, graph, backup |
+| `memme-embeddings` | ONNX, OpenAI-compatible, and Ollama embedders |
+| `memme-llm` | Optional OpenAI, Anthropic, Gemini, and Ollama extraction |
+| [`@wjmwjmwb/memme`](https://www.npmjs.com/package/@wjmwjmwb/memme) | Node.js / Electron binding for macOS and Linux |
+| `memme-python` | PyO3 binding; build current SQLite version from source |
+| `memme-ffi` | Swift/C UniFFI binding; VexDB-Lite mobile wiring is pending |
+| `memme-server` | Self-hosted REST API |
+| `memme-mcp` | MCP stdio server |
 
-## REST API
+Use the scoped npm package for Node.js. For Rust and Python projects, pin a
+source revision and build the SQLite engine from this repository.
 
-```bash
-cargo run -p memme-server -- --db-path memory.db --port 8080
-```
+## Run PetMemBench
 
 ```bash
-# Add a memory
-curl -X POST http://localhost:8080/v1/memories \
-  -H "Content-Type: application/json" \
-  -d '{"content": "User likes dark mode", "user_id": "alice"}'
-
-# Search
-curl -X POST http://localhost:8080/v1/memories/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "UI preferences", "user_id": "alice", "limit": 5}'
-
-# Hybrid search (vector + keyword)
-curl -X POST http://localhost:8080/v1/memories/hybrid-search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "coffee", "user_id": "alice"}'
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+cargo run --release -p memme-core --example pet_memory_benchmark -- \
+  --dataset benchmarks/petmem/scenarios.json \
+  --output benchmarks/petmem/results/latest.json
 ```
-
-Full API reference: [docs/openapi.yaml](docs/openapi.yaml) — paste into [Swagger Editor](https://editor.swagger.io) to browse all 23 endpoints.
-
-## MCP Server
-
-For Claude Desktop, Cursor, and other MCP clients:
-
-```json
-{
-  "mcpServers": {
-    "memme": {
-      "command": "/path/to/memme-mcp",
-      "args": ["--db-path", "memory.db"]
-    }
-  }
-}
-```
-
-```bash
-cargo build -p memme-mcp --release
-```
-
-## Building from Source
-
-```bash
-git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
-cd MemMe
-cargo build --release
-cargo test   # 340+ tests
-```
-
-### Feature Flags
-
-| Feature | Description |
-|---|---|
-| `api-rerank` | API-based reranker (Jina/Cohere) |
-| `onnx-rerank` | Local ONNX cross-encoder reranker |
-
-### Build Python Package
-
-```bash
-cd crates/memme-python && maturin develop --release
-```
-
-## Use Cases
-
-- **AI Agents** — persistent memory across conversations
-- **Personal AI** — remember preferences, habits, and context on-device
-- **Mobile Apps** — offline-first memory that syncs when connected
-- **RAG Pipelines** — local hybrid retrieval as a knowledge base
-- **Digital Twins** — memory-powered digital representation of a person
-- **Embodied AI** — sub-10ms on-device memory for robots, drones, and IoT; single-file deployment with no network dependency; native Rust integrations with Dora-rs, LeRobot, and Copper-rs
-- **Chat Migration** — import your ChatGPT/Claude/Gemini history, own your data
-
-## Ecosystem
-
-| Integration | Status | Description |
-|---|---|---|
-| **Claude Desktop / Cursor** | Done | MCP protocol — long-term memory for AI assistants |
-| **REST API** | Done | axum server, 23 endpoints, Bearer auth |
-| **[YiYi](https://github.com/vibeinging/YiYi)** | Integrated | Desktop AI assistant — operates computer, executes tasks, manages files; memory powered by MemMe (named after the author's daughter; MemMe's reference app, actively maintained) |
-| **OpenClaw** | WIP | Memory plugin for open-source Agent framework |
-| **Dora-rs** | WIP | Memory node for Rust robotics framework |
-| **LeRobot** | WIP | Memory wrapper for Hugging Face robotics framework |
-| **Copper-rs** | WIP | CuTask integration for real-time robotics framework |
-| **LangChain / LlamaIndex** | Planned | Adapters for mainstream LLM frameworks |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. [Roadmap](docs/ROADMAP.md).
+AI-pet scenarios are the most useful contribution right now. A good test should
+state the owner, pet, time, expected memory, forbidden memory, and privacy scope.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

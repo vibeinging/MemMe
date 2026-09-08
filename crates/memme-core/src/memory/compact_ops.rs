@@ -22,7 +22,8 @@ impl super::MemoryStore {
     /// * `session_id` - Session to append to (created if not exists)
     /// * `messages` - Chat messages to store as events
     /// * `user_id` - User who owns this session
-    /// * `metadata` - Optional metadata for the events
+    /// * `metadata` - Optional metadata for the events. Set the reserved string
+    ///   field `agent_id` to associate events with one pet/agent relationship.
     pub fn append_events(
         &self,
         session_id: &str,
@@ -30,15 +31,89 @@ impl super::MemoryStore {
         user_id: &str,
         metadata: Option<serde_json::Value>,
     ) -> Result<AppendEventsResult> {
-        let non_system: Vec<&ChatMessage> =
-            messages.iter().filter(|m| m.role != "system").collect();
+        let identified: Vec<IdentifiedChatMessage> = messages
+            .iter()
+            .filter(|message| message.role != "system")
+            .map(|message| IdentifiedChatMessage {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                message: message.clone(),
+            })
+            .collect();
+        self.append_events_idempotent(session_id, &identified, user_id, metadata)
+    }
+
+    /// Append events with caller-provided IDs so retries do not create duplicates.
+    ///
+    /// An exact replay is accepted and counted in `events_replayed`. Reusing an
+    /// ID with different content, scope, or metadata returns an error.
+    pub fn append_events_idempotent(
+        &self,
+        session_id: &str,
+        messages: &[IdentifiedChatMessage],
+        user_id: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<AppendEventsResult> {
+        if session_id.trim().is_empty() {
+            return Err(MemoryError::Config("session_id must not be empty".into()));
+        }
+        if user_id.trim().is_empty() {
+            return Err(MemoryError::Config("user_id must not be empty".into()));
+        }
+        if messages
+            .iter()
+            .any(|event| event.message.image_url.is_some() || event.message.image_type.is_some())
+        {
+            return Err(MemoryError::Config(
+                "image_url and image_type are not supported by event storage yet".into(),
+            ));
+        }
+
+        let non_system: Vec<&IdentifiedChatMessage> = messages
+            .iter()
+            .filter(|m| m.message.role != "system")
+            .collect();
+
+        let mut event_ids = std::collections::HashSet::with_capacity(non_system.len());
+        for event in &non_system {
+            if event.event_id.trim().is_empty() {
+                return Err(MemoryError::Config("event_id must not be empty".into()));
+            }
+            if event.event_id.len() > 256 {
+                return Err(MemoryError::Config(
+                    "event_id must not be longer than 256 bytes".into(),
+                ));
+            }
+            if event.message.content.trim().is_empty() {
+                return Err(MemoryError::Config(
+                    "event content must not be empty".into(),
+                ));
+            }
+            if !matches!(event.message.role.as_str(), "user" | "assistant" | "tool") {
+                return Err(MemoryError::Config(format!(
+                    "unsupported event role '{}'",
+                    event.message.role
+                )));
+            }
+            if !event_ids.insert(event.event_id.as_str()) {
+                return Err(MemoryError::Config(format!(
+                    "duplicate event_id '{}' in request",
+                    event.event_id
+                )));
+            }
+        }
 
         if non_system.is_empty() {
+            let total_unprocessed = self
+                .storage
+                .count_unprocessed_events_in_session(session_id)?;
+            let threshold = self.config.tuning.compact_threshold;
             return Ok(AppendEventsResult {
                 session_id: session_id.to_string(),
                 events_appended: 0,
-                total_unprocessed: 0,
-                compact_needed: false,
+                events_replayed: 0,
+                embedding_pending: 0,
+                total_unprocessed,
+                compact_needed: threshold > 0 && total_unprocessed >= threshold as u64,
             });
         }
 
@@ -50,16 +125,108 @@ impl super::MemoryStore {
         self.storage
             .get_or_create_session(session_id, user_id, None, &now, meta_str.as_deref())?;
 
-        // Batch embed all messages in one API call, then insert events with embeddings.
-        // This makes events immediately searchable (V3 store-first principle).
-        let texts: Vec<&str> = non_system.iter().map(|m| m.content.as_str()).collect();
-        let embeddings = self
-            .embedder
-            .embed_batch(&texts)
-            .unwrap_or_else(|_| vec![vec![]; texts.len()]);
+        // Exact replays normally skip embedding. If a previous remote embedding
+        // call failed, the raw event has a NULL vector and the replay becomes a
+        // backfill attempt instead.
+        let mut pending = Vec::with_capacity(non_system.len());
+        let mut embedding_targets = Vec::with_capacity(non_system.len());
+        let mut events_replayed = 0;
+        for identified in non_system {
+            match self.storage.get_event(&identified.event_id)? {
+                Some(existing) => {
+                    let message = &identified.message;
+                    let expected_type = match message.role.as_str() {
+                        "user" => EventType::UserMessage,
+                        "assistant" => EventType::AiResponse,
+                        "tool" => EventType::ToolResult,
+                        _ => EventType::System,
+                    };
+                    let timestamp_matches = match message.timestamp.as_deref() {
+                        Some(timestamp) => timestamp == existing.timestamp,
+                        None => true,
+                    };
+                    let exact_replay = existing.source_id.is_none()
+                        && existing.parent_id.is_none()
+                        && existing.session_id.as_deref() == Some(session_id)
+                        && existing.user_id == user_id
+                        && existing.event_type == expected_type
+                        && existing.content == message.content
+                        && existing.metadata == metadata
+                        && timestamp_matches;
+                    if exact_replay {
+                        events_replayed += 1;
+                        if !self.storage.event_has_embedding(&identified.event_id)? {
+                            embedding_targets.push(identified);
+                        }
+                    } else {
+                        return Err(MemoryError::Config(format!(
+                            "event_id '{}' already exists with a different payload",
+                            identified.event_id
+                        )));
+                    }
+                }
+                None => {
+                    pending.push(identified);
+                    embedding_targets.push(identified);
+                }
+            }
+        }
+
+        let texts: Vec<&str> = embedding_targets
+            .iter()
+            .map(|message| message.message.content.as_str())
+            .collect();
+        let embeddings = if texts.is_empty() {
+            Some(Vec::new())
+        } else {
+            match self.embedder.embed_batch(&texts) {
+                Ok(embeddings)
+                    if embeddings.len() == texts.len()
+                        && embeddings
+                            .iter()
+                            .all(|embedding| embedding.len() == self.embedder.dimensions()) =>
+                {
+                    Some(embeddings)
+                }
+                Ok(embeddings) => {
+                    tracing::warn!(
+                        expected_count = texts.len(),
+                        actual_count = embeddings.len(),
+                        "Embedding batch shape mismatch; raw events remain pending"
+                    );
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Embedding failed; raw events remain pending");
+                    None
+                }
+            }
+        };
+        let embedding_index: std::collections::HashMap<&str, usize> = embedding_targets
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (message.event_id.as_str(), index))
+            .collect();
+
+        if let Some(embeddings) = embeddings.as_ref() {
+            for identified in &embedding_targets {
+                if pending
+                    .iter()
+                    .any(|pending| pending.event_id == identified.event_id)
+                {
+                    continue;
+                }
+                let index = embedding_index[identified.event_id.as_str()];
+                self.storage
+                    .backfill_event_embedding(&identified.event_id, &embeddings[index])?;
+            }
+        }
 
         let mut notes_batch = String::new();
-        for (i, msg) in non_system.iter().enumerate() {
+        let mut events_appended = 0;
+        let mut inserted_contents = Vec::new();
+        for identified in &pending {
+            let msg = &identified.message;
             let event_type = match msg.role.as_str() {
                 "user" => "user_message",
                 "assistant" => "ai_response",
@@ -76,9 +243,30 @@ impl super::MemoryStore {
                 opts = opts.metadata(m.clone());
             }
 
-            let event_id = uuid::Uuid::new_v4().to_string();
-            let emb = if i < embeddings.len() { &embeddings[i] } else { &[] as &[f32] };
-            self.storage.insert_event(&event_id, &msg.content, emb, &opts)?;
+            let emb = embeddings
+                .as_ref()
+                .and_then(|embeddings| {
+                    embedding_index
+                        .get(identified.event_id.as_str())
+                        .map(|index| embeddings[*index].as_slice())
+                })
+                .unwrap_or(&[]);
+            let inserted = self.storage.insert_event_idempotent(
+                &identified.event_id,
+                &msg.content,
+                emb,
+                &opts,
+            )?;
+            if !inserted {
+                events_replayed += 1;
+                if !emb.is_empty() && !self.storage.event_has_embedding(&identified.event_id)? {
+                    self.storage
+                        .backfill_event_embedding(&identified.event_id, emb)?;
+                }
+                continue;
+            }
+            events_appended += 1;
+            inserted_contents.push(msg.content.as_str());
 
             // Accumulate structured note
             let preview: String = msg.content.chars().take(120).collect();
@@ -106,15 +294,20 @@ impl super::MemoryStore {
         // Zero-LLM: uses Aho-Corasick on known entities + simple heuristics
         // for candidate entities (quoted strings, capitalized sequences).
         if self.config.enable_graph {
-            let contents: Vec<&str> = non_system.iter().map(|m| m.content.as_str()).collect();
-            if let Err(e) = self.build_cooccurrence_graph(&contents, user_id) {
+            if let Err(e) = self.build_cooccurrence_graph(&inserted_contents, user_id) {
                 tracing::warn!("Co-occurrence graph build failed: {e}");
             }
         }
 
         let result = AppendEventsResult {
             session_id: session_id.to_string(),
-            events_appended: non_system.len(),
+            events_appended,
+            events_replayed,
+            embedding_pending: if embeddings.is_some() {
+                0
+            } else {
+                embedding_targets.len()
+            },
             total_unprocessed,
             compact_needed,
         };
@@ -141,13 +334,7 @@ impl super::MemoryStore {
     ///
     /// Uses the internally configured LLM. Call `set_llm()` first.
     pub fn compact(&self, session_id: &str) -> Result<CompactResult> {
-        self.compact_inner(session_id, self.require_llm()?, true)
-    }
-
-    /// Compact without FTS rebuild (used by re_traces to batch rebuild at end).
-    #[allow(dead_code)]
-    fn compact_no_fts(&self, session_id: &str) -> Result<CompactResult> {
-        self.compact_inner(session_id, self.require_llm()?, false)
+        self.compact_inner(session_id, self.require_llm()?)
     }
 
     /// Internal compact implementation — purifies events, generates embeddings, does NOT extract memories.
@@ -155,7 +342,6 @@ impl super::MemoryStore {
         &self,
         session_id: &str,
         llm: Arc<dyn memme_llm::LlmProvider>,
-        rebuild_fts: bool,
     ) -> Result<CompactResult> {
         let session = self
             .storage
@@ -307,11 +493,6 @@ impl super::MemoryStore {
         // Clear structured notes after compact to avoid stale content in future compacts
         let _ = self.storage.clear_structured_notes(session_id);
 
-        if rebuild_fts {
-            let _ = self.storage.create_fts_index();
-            let _ = self.storage.create_fts_index_events();
-        }
-
         // Note: No memories extracted here — use meditate() for that
         Ok(CompactResult {
             session_id: session_id.to_string(),
@@ -339,13 +520,14 @@ impl super::MemoryStore {
         // 2. Get all sessions for this user
         let sessions = self.list_sessions(ListSessionsOptions::new(user_id))?;
 
-        // 3. Re-compact each session (skip per-session FTS rebuild)
+        // 3. Re-compact each session. Memory and event writes update FTS
+        // incrementally, so no full-index rebuild is needed.
         let mut results = Vec::new();
         for session in &sessions {
             self.storage.reset_events_processed(&session.session_id)?;
             let _ = self.storage.clear_structured_notes(&session.session_id);
 
-            match self.compact_no_fts(&session.session_id) {
+            match self.compact(&session.session_id) {
                 Ok(result) => results.push(result),
                 Err(e) => {
                     tracing::warn!(
@@ -355,9 +537,6 @@ impl super::MemoryStore {
                 }
             }
         }
-
-        // 4. Rebuild FTS index once at the end
-        let _ = self.storage.create_fts_index();
 
         Ok(results)
     }

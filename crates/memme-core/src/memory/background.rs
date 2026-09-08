@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone)]
 pub(crate) enum BackgroundTask {
     /// Compact the specified session into an episode.
+    #[allow(dead_code)] // planned: queued by automatic session compaction
     CompactSession(String),
     /// Run meditation on the specified episode.
     #[allow(dead_code)] // planned: triggered by low-confidence search results

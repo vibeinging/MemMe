@@ -77,43 +77,53 @@ impl Storage {
             r#"INSERT INTO memories (id, content, embedding, user_id, agent_id, run_id, app_id, actor_id, hash, metadata, importance, immutable, expiration_date, categories, memory_type, stability, privacy, event_time, episode_id, session_id, resolution)
                VALUES ($1, $2, {emb_literal}, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, {cats_literal}, $13, $14, $15, $16, $17, $18, $19)"#
         );
-        self.backend.execute(
-            &sql,
-            &[
-                SqlParam::Text(id.to_string()),
-                SqlParam::Text(content.to_string()),
-                SqlParam::Text(user_id.to_string()),
-                agent_val,
-                run_val,
-                app_val,
-                actor_val,
-                SqlParam::Text(hash.to_string()),
-                meta_val,
-                SqlParam::Float(imp_val),
-                SqlParam::Bool(params_.immutable),
-                exp_val,
-                mtype_val,
-                SqlParam::Float(stab_val),
-                SqlParam::Text(privacy_val.to_string()),
-                event_time_val,
-                episode_val,
-                session_val,
-                SqlParam::Text(resolution_val.to_string()),
-            ],
-        )?;
-        // Sync vec0 virtual table for vector search
-        if let Some(vec0_sql) = self.dialect().vec0_insert_sql("$1", &emb_literal) {
-            self.backend.execute(
-                &vec0_sql,
-                &[
-                    SqlParam::Text(id.to_string()),
-                    SqlParam::Text(user_id.to_string()),
-                ],
-            )?;
-        }
-        // Incrementally update FTS index
-        self.fts_insert_memory(id, content);
-        Ok(())
+        let memory_params = vec![
+            SqlParam::Text(id.to_string()),
+            SqlParam::Text(content.to_string()),
+            SqlParam::Text(user_id.to_string()),
+            agent_val.clone(),
+            run_val.clone(),
+            app_val.clone(),
+            actor_val,
+            SqlParam::Text(hash.to_string()),
+            meta_val,
+            SqlParam::Float(imp_val),
+            SqlParam::Bool(params_.immutable),
+            exp_val,
+            mtype_val,
+            SqlParam::Float(stab_val),
+            SqlParam::Text(privacy_val.to_string()),
+            event_time_val,
+            episode_val,
+            session_val,
+            SqlParam::Text(resolution_val.to_string()),
+        ];
+        let vector_sql = self.dialect().vector_insert_sql("$1", &emb_literal);
+        self.backend.transaction(|tx| {
+            tx.execute(&sql, &memory_params)?;
+            if let Some(vector_sql) = vector_sql.as_deref() {
+                tx.execute(
+                    vector_sql,
+                    &[
+                        SqlParam::Text(id.to_string()),
+                        SqlParam::Text(user_id.to_string()),
+                        agent_val,
+                        run_val,
+                        app_val,
+                    ],
+                )?;
+            }
+            if tx.table_exists("memories_fts")? {
+                tx.execute(
+                    "INSERT OR REPLACE INTO memories_fts(id, content) VALUES ($1, $2)",
+                    &[
+                        SqlParam::Text(id.to_string()),
+                        SqlParam::Text(content.to_string()),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// Set the episode_id on a memory (for linking extracted memories to their source episode).
@@ -194,9 +204,6 @@ impl Storage {
         metadata: Option<Option<&serde_json::Value>>,
         options: Option<&UpdateOptions>,
     ) -> Result<()> {
-        // Check immutable flag atomically (same write_conn used for the update below)
-        self.check_immutable(id)?;
-
         if embedding.len() != self.config.embedding_dims {
             return Err(MemoryError::Config(format!(
                 "embedding dimension mismatch: expected {}, got {}",
@@ -220,7 +227,7 @@ impl Storage {
         // Determine if we have a custom timestamp
         let custom_timestamp: Option<&str> = options.and_then(|opts| opts.timestamp.as_deref());
 
-        match (&effective_metadata, custom_timestamp) {
+        let (update_sql, update_params) = match (&effective_metadata, custom_timestamp) {
             (Some(Some(val)), Some(ts)) => {
                 let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
                 let sql = format!(
@@ -232,16 +239,16 @@ impl Storage {
                            metadata = $4
                        WHERE id = $5"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(ts.to_string()),
                         SqlParam::Text(json_str),
                         SqlParam::Text(id.to_string()),
                     ],
-                )?;
+                )
             }
             (Some(Some(val)), None) => {
                 let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
@@ -255,15 +262,15 @@ impl Storage {
                            metadata = $3
                        WHERE id = $4"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(json_str),
                         SqlParam::Text(id.to_string()),
                     ],
-                )?;
+                )
             }
             (Some(None), Some(ts)) => {
                 let sql = format!(
@@ -275,15 +282,15 @@ impl Storage {
                            metadata = NULL
                        WHERE id = $4"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(ts.to_string()),
                         SqlParam::Text(id.to_string()),
                     ],
-                )?;
+                )
             }
             (Some(None), None) => {
                 let now_ts = self.dialect().current_timestamp_expr();
@@ -296,14 +303,14 @@ impl Storage {
                            metadata = NULL
                        WHERE id = $3"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(id.to_string()),
                     ],
-                )?;
+                )
             }
             (None, Some(ts)) => {
                 let sql = format!(
@@ -314,15 +321,15 @@ impl Storage {
                            updated_at = $3
                        WHERE id = $4"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(ts.to_string()),
                         SqlParam::Text(id.to_string()),
                     ],
-                )?;
+                )
             }
             (None, None) => {
                 let now_ts = self.dialect().current_timestamp_expr();
@@ -334,19 +341,65 @@ impl Storage {
                            updated_at = {now_ts}
                        WHERE id = $3"#
                 );
-                self.backend.execute(
-                    &sql,
-                    &[
+                (
+                    sql,
+                    vec![
                         SqlParam::Text(content.to_string()),
                         SqlParam::Text(hash.to_string()),
                         SqlParam::Text(id.to_string()),
                     ],
+                )
+            }
+        };
+
+        let delete_sql = self.dialect().vector_delete_sql();
+        let insert_sql = self.dialect().vector_insert_sql("$1", &emb_literal);
+        self.backend.transaction(|tx| {
+            let scope = tx.query_one(
+                "SELECT immutable, user_id, agent_id, run_id, app_id FROM memories WHERE id = $1",
+                &[SqlParam::Text(id.to_string())],
+                |row| {
+                    Ok((
+                        row.get_opt_bool(0)?.unwrap_or(false),
+                        row.get_string(1)?,
+                        row.get_opt_string(2)?,
+                        row.get_opt_string(3)?,
+                        row.get_opt_string(4)?,
+                    ))
+                },
+            )?
+            .ok_or_else(|| MemoryError::NotFound(id.to_string()))?;
+            if scope.0 {
+                return Err(MemoryError::ImmutableMemory(id.to_string()));
+            }
+
+            tx.execute(&update_sql, &update_params)?;
+            if let Some(delete_sql) = delete_sql {
+                tx.execute(delete_sql, &[SqlParam::Text(id.to_string())])?;
+            }
+            if let Some(insert_sql) = insert_sql.as_deref() {
+                tx.execute(
+                    insert_sql,
+                    &[
+                        SqlParam::Text(id.to_string()),
+                        SqlParam::Text(scope.1),
+                        opt_text(scope.2.as_deref()),
+                        opt_text(scope.3.as_deref()),
+                        opt_text(scope.4.as_deref()),
+                    ],
                 )?;
             }
-        }
-        // Incrementally update FTS index with new content
-        self.fts_insert_memory(id, content);
-        Ok(())
+            if tx.table_exists("memories_fts")? {
+                tx.execute(
+                    "INSERT OR REPLACE INTO memories_fts(id, content) VALUES ($1, $2)",
+                    &[
+                        SqlParam::Text(id.to_string()),
+                        SqlParam::Text(content.to_string()),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     // ── Update metadata only (dedup fast path) ──
@@ -417,21 +470,42 @@ impl Storage {
 
     /// Delete a memory by ID. Returns error if the memory is immutable.
     pub(crate) fn delete_memory(&self, id: &str) -> Result<()> {
-        // Check immutable flag
-        self.check_immutable(id)?;
+        let vector_sql = self.dialect().vector_delete_sql();
+        self.backend.transaction(|tx| {
+            let immutable = tx.query_one(
+                "SELECT immutable FROM memories WHERE id = $1",
+                &[SqlParam::Text(id.to_string())],
+                |row| row.get_opt_bool(0).map(|value| value.unwrap_or(false)),
+            )?;
+            match immutable {
+                Some(true) => return Err(MemoryError::ImmutableMemory(id.to_string())),
+                None => return Err(MemoryError::NotFound(id.to_string())),
+                Some(false) => {}
+            }
 
-        // Delete from FTS before removing from memories
-        self.fts_delete_memory(id);
-        // Delete from vec0
-        if let Some(vec0_sql) = self.dialect().vec0_delete_sql() {
-            self.backend
-                .execute(vec0_sql, &[SqlParam::Text(id.to_string())])?;
-        }
-        self.backend.execute(
-            "DELETE FROM memories WHERE id = $1",
-            &[SqlParam::Text(id.to_string())],
-        )?;
-        Ok(())
+            if tx.table_exists("memories_fts")? {
+                tx.execute(
+                    "DELETE FROM memories_fts WHERE id = $1",
+                    &[SqlParam::Text(id.to_string())],
+                )?;
+            }
+            if let Some(vector_sql) = vector_sql {
+                tx.execute(vector_sql, &[SqlParam::Text(id.to_string())])?;
+            }
+            tx.execute(
+                "DELETE FROM associations WHERE from_id = $1 OR to_id = $1",
+                &[SqlParam::Text(id.to_string())],
+            )?;
+            tx.execute(
+                "DELETE FROM memory_entities WHERE memory_id = $1",
+                &[SqlParam::Text(id.to_string())],
+            )?;
+            tx.execute(
+                "DELETE FROM memories WHERE id = $1",
+                &[SqlParam::Text(id.to_string())],
+            )?;
+            Ok(())
+        })
     }
 
     // ── Get by ID ──

@@ -1,8 +1,8 @@
 //! WASM bindings for MemMe.
 //!
-//! **Note**: These bindings target native WASM runtimes (wasmtime, wasmer)
-//! via `wasm32-wasip1`, or serve as a reference for browser-side integration.
-//! SQLite compiles cleanly to WASM targets.
+//! VexDB-Lite static registration is not wired into this crate yet. The crate
+//! remains buildable as a reference binding, but store construction is
+//! intentionally disabled so consumers cannot mistake it for a working release.
 
 use std::sync::Mutex;
 
@@ -20,20 +20,17 @@ pub struct MemoryStore {
 
 #[wasm_bindgen]
 impl MemoryStore {
-    /// Create an in-memory store with mock embedder.
+    /// Store construction is unavailable until VexDB-Lite's WASM module is
+    /// statically registered with the same SQLite instance used by MemMe.
     ///
     /// # Arguments
     /// * `dims` - Embedding dimensions (default: 384).
     #[wasm_bindgen(constructor)]
     pub fn new(dims: Option<u32>) -> Result<MemoryStore, JsError> {
-        let d = dims.unwrap_or(384) as usize;
-        let embedder = std::sync::Arc::new(memme_embeddings::mock::MockEmbedder::new(d));
-        let config = memme_core::config::MemoryConfig::new(":memory:", d);
-        let store = memme_core::memory::MemoryStore::new(config, embedder)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(Self {
-            inner: Mutex::new(store),
-        })
+        let _ = dims;
+        Err(JsError::new(
+            "memme-wasm is not available yet: VexDB-Lite WASM static registration is required",
+        ))
     }
 
     /// Add a memory.

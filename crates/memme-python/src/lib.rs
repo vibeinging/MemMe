@@ -57,8 +57,11 @@ impl MemoryStore {
     ///     llm_api_key: API key for the LLM provider (persisted in DB).
     ///     llm_model: LLM model name (default depends on provider).
     ///     llm_base_url: Custom LLM API base URL.
+    ///     vexdb_extension_path: Trusted path to the platform-native VexDB-Lite
+    ///         SQLite extension. When omitted, `MEMME_VEXDB_LITE_EXTENSION` is used.
     #[new]
-    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None, rerank_onnx=false))]
+    #[pyo3(signature = (db_path=":memory:", *, embedder="onnx", api_key=None, base_url=None, embed_model=None, dims=None, llm_provider="openai", llm_api_key=None, llm_model=None, llm_base_url=None, llm_max_tokens=None, llm_temperature=None, enable_forgetting_curve=None, rrf_vector_weight=None, rrf_fts_weight=None, rrf_entity_weight=None, rrf_k=None, rrf_temporal_weight=None, rerank_api_key=None, rerank_base_url=None, rerank_model=None, rerank_onnx=false, vexdb_extension_path=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         db_path: &str,
         embedder: &str,
@@ -82,6 +85,7 @@ impl MemoryStore {
         rerank_base_url: Option<&str>,
         rerank_model: Option<&str>,
         rerank_onnx: bool,
+        vexdb_extension_path: Option<&str>,
     ) -> PyResult<Self> {
         let _rt_guard = shared_runtime().enter();
 
@@ -156,8 +160,11 @@ impl MemoryStore {
             config.tuning.enable_rerank = true;
         }
 
-        let mut store = memme_core::memory::MemoryStore::new(config, emb)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let store = match vexdb_extension_path {
+            Some(path) => memme_core::memory::MemoryStore::new_with_vexdb_lite(config, emb, path),
+            None => memme_core::memory::MemoryStore::new(config, emb),
+        };
+        let mut store = store.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         // Configure LLM if provided
         if let Some(key) = llm_api_key {
@@ -192,7 +199,7 @@ impl MemoryStore {
                     }
                     Arc::new(memme_llm::ollama::OllamaProvider::new(cfg))
                 }
-                "openai" | _ => {
+                "openai" => {
                     let model = llm_model.unwrap_or("gpt-4o-mini");
                     let url = llm_base_url.ok_or_else(|| {
                         PyRuntimeError::new_err("llm_base_url required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)")
@@ -205,8 +212,12 @@ impl MemoryStore {
                         },
                     ))
                 }
+                _ => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "Unknown llm_provider: {llm_provider}. Use 'openai', 'anthropic', 'gemini', or 'ollama'."
+                    )));
+                }
             };
-            store.set_llm_provider(llm);
             store
                 .save_llm_config(
                     key,
@@ -214,6 +225,7 @@ impl MemoryStore {
                     llm_base_url.unwrap_or(""),
                 )
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            store.set_llm_provider(llm);
         }
 
         // Configure reranker: ONNX (local cross-encoder) or API
@@ -380,6 +392,7 @@ impl MemoryStore {
 
     /// Search memories by semantic similarity.
     #[pyo3(signature = (query, *, user_id, agent_id=None, run_id=None, limit=10, threshold=None))]
+    #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
         py: Python<'_>,
@@ -451,13 +464,14 @@ impl MemoryStore {
                 model: model.clone(),
             },
         ));
-        self.inner.set_llm_provider(llm);
         py.allow_threads(|| {
             self.inner
                 .save_llm_config(&api_key, &model, &base_url)
                 .map_err(|e| e.to_string())
         })
-        .map_err(|e: String| PyRuntimeError::new_err(e))
+        .map_err(|e: String| PyRuntimeError::new_err(e))?;
+        self.inner.set_llm_provider(llm);
+        Ok(())
     }
 
     /// Run diagnostic checks on storage, embedder, and LLM (if configured).
@@ -506,6 +520,52 @@ impl MemoryStore {
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("session_id", &result.session_id)?;
         dict.set_item("events_appended", result.events_appended)?;
+        dict.set_item("events_replayed", result.events_replayed)?;
+        dict.set_item("embedding_pending", result.embedding_pending)?;
+        dict.set_item("total_unprocessed", result.total_unprocessed)?;
+        dict.set_item("compact_needed", result.compact_needed)?;
+        Ok(dict.into())
+    }
+
+    /// Append events with caller-provided IDs so a failed request can be replayed safely.
+    /// Each tuple is `(event_id, role, content)`.
+    #[pyo3(signature = (messages, *, session_id, user_id, metadata=None))]
+    fn append_events_idempotent(
+        &self,
+        py: Python<'_>,
+        messages: Vec<(String, String, String)>,
+        session_id: &str,
+        user_id: &str,
+        metadata: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let meta = parse_metadata(metadata)?;
+        let messages: Vec<memme_core::types::IdentifiedChatMessage> = messages
+            .into_iter()
+            .map(
+                |(event_id, role, content)| memme_core::types::IdentifiedChatMessage {
+                    event_id,
+                    message: memme_core::types::ChatMessage {
+                        role,
+                        content,
+                        image_url: None,
+                        image_type: None,
+                        timestamp: None,
+                    },
+                },
+            )
+            .collect();
+        let (session_id, user_id) = (session_id.to_string(), user_id.to_string());
+        let result = py
+            .allow_threads(|| {
+                self.inner
+                    .append_events_idempotent(&session_id, &messages, &user_id, meta)
+            })
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("session_id", &result.session_id)?;
+        dict.set_item("events_appended", result.events_appended)?;
+        dict.set_item("events_replayed", result.events_replayed)?;
+        dict.set_item("embedding_pending", result.embedding_pending)?;
         dict.set_item("total_unprocessed", result.total_unprocessed)?;
         dict.set_item("compact_needed", result.compact_needed)?;
         Ok(dict.into())
@@ -823,7 +883,7 @@ impl MemoryStore {
 
 fn parse_metadata(metadata: Option<&str>) -> PyResult<Option<serde_json::Value>> {
     metadata
-        .map(|s| serde_json::from_str(s))
+        .map(serde_json::from_str)
         .transpose()
         .map_err(|e| PyRuntimeError::new_err(format!("Invalid metadata JSON: {e}")))
 }

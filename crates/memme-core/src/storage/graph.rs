@@ -200,6 +200,10 @@ impl Storage {
                     source: row.get_string(5)?,
                     target: row.get_string(6)?,
                     description: row.get_opt_string(7)?,
+                    created_at: None,
+                    strength: None,
+                    context: None,
+                    episode_ids: None,
                 })
             },
         )
@@ -317,6 +321,10 @@ impl Storage {
                     source: row.get_string(5)?,
                     target: row.get_string(6)?,
                     description: row.get_opt_string(7)?,
+                    created_at: None,
+                    strength: None,
+                    context: None,
+                    episode_ids: None,
                 })
             },
         )

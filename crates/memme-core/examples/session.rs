@@ -6,7 +6,8 @@
 //! sessions, and sessions can be compacted into episodes with memory extraction.
 //!
 //! Run with:
-//!   cargo run -p memme-core --example session
+//!   MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)" \
+//!     cargo run -p memme-core --example session
 
 use std::sync::Arc;
 
@@ -130,7 +131,7 @@ fn main() {
         },
         ChatMessage {
             role: "assistant".into(),
-            content: "SQLite supports vector similarity search through extensions like sqlite-vec. MemMe uses this for embedding-based memory retrieval.".into(),
+            content: "SQLite supports vector similarity search through extensions like VexDB-Lite. MemMe uses VexDB-Lite for embedding-based memory retrieval.".into(),
             image_url: None,
             image_type: None,
             timestamp: Some("2026-04-01T10:01:05Z".into()),

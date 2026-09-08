@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "memme"
-version = "0.1.1"
+version = "0.1.2"
 description = "Edge-first AI memory engine powered by SQLite"
 license = {text = "Apache-2.0"}
 authors = [{name = "MemMe Contributors"}]
@@ -17,7 +17,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",

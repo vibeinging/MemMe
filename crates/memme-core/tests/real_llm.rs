@@ -47,7 +47,7 @@ fn embedding_dims() -> usize {
 
 fn make_embedder() -> Arc<OpenAiEmbedder> {
     Arc::new(
-        OpenAiEmbedder::new(&api_key(), &embedding_base_url()).with_model(OpenAiModel::Custom {
+        OpenAiEmbedder::new(api_key(), embedding_base_url()).with_model(OpenAiModel::Custom {
             name: embedding_model(),
             dims: embedding_dims(),
             send_dims: true,
@@ -506,7 +506,7 @@ fn test_real_hybrid_search() {
     ];
 
     for topic in &topics {
-        store.add(*topic, AddOptions::new("user1")).unwrap();
+        store.add(topic, AddOptions::new("user1")).unwrap();
     }
 
     // Rebuild FTS index

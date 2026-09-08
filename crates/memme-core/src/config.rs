@@ -3,6 +3,10 @@ use crate::types::PruningStrategy;
 #[cfg(feature = "webhooks")]
 use crate::webhook::WebhookConfig;
 
+/// Environment variable used by [`crate::MemoryStore::new`] to find the
+/// platform-native VexDB-Lite SQLite extension.
+pub const VEXDB_LITE_EXTENSION_ENV: &str = "MEMME_VEXDB_LITE_EXTENSION";
+
 /// User-facing configuration for the memory store.
 #[derive(Debug, Clone)]
 pub struct MemoryConfig {

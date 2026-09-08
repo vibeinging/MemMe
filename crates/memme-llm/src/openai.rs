@@ -94,24 +94,43 @@ impl OpenAIConfig {
 /// An LLM provider backed by the OpenAI chat completions API.
 pub struct OpenAIProvider {
     config: OpenAIConfig,
-    client: reqwest::blocking::Client,
+    client: crate::http_client::SafeBlockingClient,
     /// Custom protocol adapter for non-OpenAI API formats.
     protocol: Option<Box<dyn ChatProtocol>>,
 }
 
 impl OpenAIProvider {
-    pub fn new(mut config: OpenAIConfig) -> Self {
+    pub fn new(config: OpenAIConfig) -> Self {
+        Self::new_with_resolved_addresses(config, &[])
+    }
+
+    /// Create a provider whose hostname is pinned to addresses already checked
+    /// by the host application. This closes the DNS-rebinding gap between URL
+    /// validation and the actual HTTP request.
+    pub fn new_with_resolved_addresses(
+        mut config: OpenAIConfig,
+        resolved_addresses: &[std::net::SocketAddr],
+    ) -> Self {
         config.base_url = config.base_url.trim_end_matches('/').to_string();
-        let client = reqwest::blocking::Client::builder()
+        let mut builder = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(90))
             .connect_timeout(std::time::Duration::from_secs(10))
             .tcp_keepalive(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(5)
+            .redirect(reqwest::redirect::Policy::none());
+        if !resolved_addresses.is_empty() {
+            if let Ok(url) = reqwest::Url::parse(&config.base_url) {
+                if let Some(host) = url.host_str() {
+                    builder = builder.resolve_to_addrs(host, resolved_addresses);
+                }
+            }
+        }
+        let client = builder
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            .expect("valid OpenAI HTTP client configuration");
         Self {
             config,
-            client,
+            client: client.into(),
             protocol: None,
         }
     }
@@ -153,29 +172,21 @@ impl OpenAIProvider {
         let body_text = response.text().unwrap_or_default();
 
         if status.as_u16() == 429 {
-            Err(LlmError::RequestFailed(format!(
-                "Rate limited (429): {body_text}"
-            )))
+            Err(LlmError::RequestFailed("Rate limited (429)".to_string()))
         } else if status.as_u16() == 400 && body_text.contains("context_length_exceeded") {
-            Err(LlmError::InvalidFormat(format!(
-                "Context length exceeded: {body_text}"
-            )))
+            Err(LlmError::InvalidFormat(
+                "Context length exceeded".to_string(),
+            ))
         } else if status.as_u16() == 400 && body_text.contains("content_filter") {
-            Err(LlmError::InvalidFormat(format!(
-                "Content filtered: {body_text}"
-            )))
+            Err(LlmError::InvalidFormat("Content filtered".to_string()))
         } else if status.is_server_error() {
-            Err(LlmError::RequestFailed(format!(
-                "Server error ({status}): {body_text}"
-            )))
+            Err(LlmError::RequestFailed(format!("Server error ({status})")))
         } else if status.as_u16() == 401 || status.as_u16() == 403 {
             Err(LlmError::ConfigError(format!(
                 "Authentication failed ({status}): check your API key"
             )))
         } else {
-            Err(LlmError::RequestFailed(format!(
-                "HTTP {status}: {body_text}"
-            )))
+            Err(LlmError::RequestFailed(format!("HTTP {status}")))
         }
     }
 

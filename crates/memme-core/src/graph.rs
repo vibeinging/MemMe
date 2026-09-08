@@ -26,6 +26,8 @@ pub fn search_graph(
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 user_id: user_id.to_string(),
+                created_at: None,
+                updated_at: None,
             });
         }
 
@@ -39,6 +41,8 @@ pub fn search_graph(
                     name: rel.source.clone(),
                     entity_type: None,
                     user_id: user_id.to_string(),
+                    created_at: None,
+                    updated_at: None,
                 });
             }
             if seen_entity_ids.insert(rel.target_id.clone()) {
@@ -47,6 +51,8 @@ pub fn search_graph(
                     name: rel.target.clone(),
                     entity_type: None,
                     user_id: user_id.to_string(),
+                    created_at: None,
+                    updated_at: None,
                 });
             }
 
@@ -154,6 +160,8 @@ mod smart_graph {
                     name: extracted.name.clone(),
                     entity_type: Some(extracted.entity_type.clone()),
                     user_id: user_id.to_string(),
+                    created_at: None,
+                    updated_at: None,
                 });
             }
 
@@ -184,6 +192,10 @@ mod smart_graph {
                         relation_type: rel.relation.clone(),
                         user_id: user_id.to_string(),
                         description: rel.description.clone(),
+                        created_at: None,
+                        strength: None,
+                        context: None,
+                        episode_ids: None,
                     });
                 }
             }

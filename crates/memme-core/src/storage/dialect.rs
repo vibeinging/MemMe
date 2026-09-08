@@ -90,37 +90,56 @@ pub(crate) trait SqlDialect: Send + Sync {
     /// SQL expression for `pow(base, exp)`.
     fn power_expr(&self, base: &str, exponent: &str) -> String;
 
-    // ── Vector index (vec0) ──
+    // ── Vector index ──
 
-    /// Whether this backend uses a vec0 virtual table for vector search.
+    /// Whether this backend uses a virtual table for indexed vector search.
     /// If true, `vector_search_sql()` generates a MATCH-based KNN query
     /// instead of a brute-force ORDER BY distance query.
-    fn has_vec0_table(&self) -> bool {
+    fn has_vector_index(&self) -> bool {
         false
     }
 
-    /// SQL to create a vec0 virtual table for the memories table.
-    /// Returns None if vec0 is not supported.
-    fn create_vec0_table_sql(&self, _dims: usize) -> Option<String> {
+    /// Stable identifier persisted in `memme_config` for backend switching.
+    fn vector_backend_name(&self) -> &'static str;
+
+    /// Physical virtual-table name for memory vectors.
+    fn memory_vector_table_name(&self) -> &'static str;
+
+    /// Physical virtual-table name for event vectors.
+    fn event_vector_table_name(&self) -> &'static str;
+
+    /// SQL to create vector index tables. Returns None if not supported.
+    fn create_vector_index_sql(&self, _dims: usize) -> Option<String> {
         None
     }
 
-    /// SQL to insert a row into the vec0 table after inserting into memories.
-    /// `id_param` is the memory ID placeholder (e.g. `$1`), `$2` is user_id.
+    /// Rebuild the selected vector index from authoritative source tables.
+    fn rebuild_vector_index_sql(&self) -> Option<String> {
+        None
+    }
+
+    /// Create indexes on vector metadata shadow tables.
+    fn vector_metadata_indexes_sql(&self) -> Option<String> {
+        None
+    }
+
+    /// SQL to insert a row into the memory vector table.
+    /// `id_param` is the memory ID placeholder (e.g. `$1`). `$2` through `$5`
+    /// are user_id, agent_id, run_id, and app_id.
     /// `embedding_literal` is the formatted embedding literal.
-    fn vec0_insert_sql(&self, _id_param: &str, _embedding_literal: &str) -> Option<String> {
+    fn vector_insert_sql(&self, _id_param: &str, _embedding_literal: &str) -> Option<String> {
         None
     }
 
-    /// SQL to delete a row from the vec0 table.
-    fn vec0_delete_sql(&self) -> Option<&str> {
+    /// SQL to delete a memory from the vector table.
+    fn vector_delete_sql(&self) -> Option<&str> {
         None
     }
 
-    /// Generate a vec0 MATCH-based KNN query that returns (id, distance) pairs.
+    /// Generate a MATCH-based KNN query that returns (id, distance) pairs.
     /// `embedding_param` is the parameter placeholder for the query embedding.
     /// `user_id_param` is the parameter placeholder for user_id (partition key).
-    fn vec0_knn_sql(
+    fn vector_knn_sql(
         &self,
         _embedding_param: &str,
         _user_id_param: &str,
@@ -129,18 +148,18 @@ pub(crate) trait SqlDialect: Send + Sync {
         None
     }
 
-    /// SQL to insert a row into the vec_events table.
-    fn vec0_event_insert_sql(&self, _id_param: &str, _embedding_literal: &str) -> Option<String> {
+    /// SQL to insert a row into the event vector table.
+    fn vector_event_insert_sql(&self, _id_param: &str, _embedding_literal: &str) -> Option<String> {
         None
     }
 
-    /// SQL to delete a row from the vec_events table.
-    fn vec0_event_delete_sql(&self) -> Option<&str> {
+    /// SQL to delete an event from the vector table.
+    fn vector_event_delete_sql(&self) -> Option<&str> {
         None
     }
 
-    /// Generate a vec0 MATCH-based KNN query on vec_events.
-    fn vec0_event_knn_sql(
+    /// Generate a MATCH-based KNN query on the event vector table.
+    fn vector_event_knn_sql(
         &self,
         _embedding_param: &str,
         _user_id_param: &str,

@@ -31,6 +31,14 @@ const TEMPORAL_WEIGHT: f32 = 0.15;
 /// Default threshold above which a contradiction is flagged.
 pub(crate) const DEFAULT_CONTRADICTION_THRESHOLD: f32 = 0.5;
 
+/// Whether a new fact explicitly says that an earlier fact changed.
+/// This gate keeps the vector fallback conservative and avoids an extra search
+/// for ordinary independent facts.
+pub(crate) fn has_explicit_override_marker(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    contains_any(&lower, &get_locale_patterns("auto").preference_markers)
+}
+
 /// Check whether `text` contains any of the given markers (case-insensitive for EN).
 fn contains_any(text_lower: &str, markers: &[&str]) -> bool {
     markers.iter().any(|m| text_lower.contains(m))
@@ -104,10 +112,7 @@ fn numeric_change_signal(old_lower: &str, new_lower: &str) -> (f32, Option<Strin
                 };
                 // Within 10x of each other → plausible update (not random numbers)
                 if ratio < 10.0 {
-                    return (
-                        1.0,
-                        Some(format!("numeric_change({old_n}→{new_n})")),
-                    );
+                    return (1.0, Some(format!("numeric_change({old_n}→{new_n})")));
                 }
             }
         }
@@ -146,7 +151,69 @@ fn extract_numbers(text: &str) -> Vec<f64> {
             chars.next();
         }
     }
+
+    let mut chinese = String::new();
+    for ch in text.chars().chain(std::iter::once(' ')) {
+        if matches!(
+            ch,
+            '零' | '一'
+                | '二'
+                | '两'
+                | '三'
+                | '四'
+                | '五'
+                | '六'
+                | '七'
+                | '八'
+                | '九'
+                | '十'
+                | '百'
+        ) {
+            chinese.push(ch);
+        } else if !chinese.is_empty() {
+            if let Some(value) = parse_chinese_number(&chinese) {
+                nums.push(value as f64);
+            }
+            chinese.clear();
+        }
+    }
     nums
+}
+
+/// Parse the common Chinese number forms used in dates, times, counts, and doses.
+/// This intentionally stops at hundreds; larger financial values should use the
+/// LLM reconciliation path or Arabic digits.
+fn parse_chinese_number(text: &str) -> Option<u32> {
+    let digit = |ch| match ch {
+        '零' => Some(0),
+        '一' => Some(1),
+        '二' | '两' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    };
+
+    let mut total = 0_u32;
+    let mut current = 0_u32;
+    for ch in text.chars() {
+        match ch {
+            '十' => {
+                total += current.max(1) * 10;
+                current = 0;
+            }
+            '百' => {
+                total += current.max(1) * 100;
+                current = 0;
+            }
+            _ => current = digit(ch)?,
+        }
+    }
+    Some(total + current)
 }
 
 /// Detect temporal override: both texts exist and the old one is semantically similar
@@ -215,7 +282,7 @@ pub(crate) fn detect_contradiction(
     }
 
     ContradictionResult {
-        is_contradiction: total_score > DEFAULT_CONTRADICTION_THRESHOLD,
+        is_contradiction: total_score >= DEFAULT_CONTRADICTION_THRESHOLD,
         score: total_score,
         signals,
     }
@@ -332,6 +399,17 @@ mod tests {
     }
 
     #[test]
+    fn test_explicit_numeric_override_is_contradiction() {
+        let r = detect_contradiction("明天遛狗时间是上午九点", "明天遛狗时间改成上午十点", true);
+        assert!(
+            r.is_contradiction,
+            "score={} signals={:?}",
+            r.score, r.signals
+        );
+        assert!(has_explicit_override_marker("明天改成上午十点"));
+    }
+
+    #[test]
     fn test_numeric_change_currency() {
         let r = detect_contradiction(
             "Pre-approved for $350,000",
@@ -342,6 +420,17 @@ mod tests {
             r.signals.iter().any(|s| s.contains("numeric_change")),
             "signals: {:?}",
             r.signals
+        );
+    }
+
+    #[test]
+    fn test_chinese_numeric_change() {
+        let r = detect_contradiction("上午九点遛狗", "改成上午十点遛狗", true);
+        assert!(r.signals.iter().any(|s| s.contains("numeric_change")));
+        assert!(
+            r.is_contradiction,
+            "score={} signals={:?}",
+            r.score, r.signals
         );
     }
 

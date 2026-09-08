@@ -209,12 +209,19 @@ class TestHybridSearch:
         for r in results:
             assert r["score"] is not None
 
-    def test_hybrid_search_custom_weights(self, populated_store):
-        populated_store.rebuild_fts_index()
-        results = populated_store.hybrid_search(
-            "coffee", user_id="alice",
-            vector_weight=0.3, fts_weight=0.7,
+    def test_hybrid_search_custom_weights(self):
+        weighted_store = memme.MemoryStore(
+            ":memory:",
+            embedder="mock",
+            rrf_vector_weight=0.3,
+            rrf_fts_weight=0.7,
         )
+        weighted_store.add(
+            "I love drinking coffee every morning",
+            user_id="alice",
+        )
+        weighted_store.rebuild_fts_index()
+        results = weighted_store.hybrid_search("coffee", user_id="alice")
         assert len(results) > 0
 
     def test_hybrid_search_without_fts_index(self, populated_store):

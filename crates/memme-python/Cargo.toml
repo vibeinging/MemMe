@@ -14,7 +14,7 @@ name = "memme"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py38"] }
 memme-core = { workspace = true, features = ["webhooks", "api-rerank", "onnx-rerank"] }
 memme-embeddings = { workspace = true, features = ["onnx", "openai"] }
 memme-llm = { workspace = true, features = ["openai", "ollama", "anthropic", "gemini"] }

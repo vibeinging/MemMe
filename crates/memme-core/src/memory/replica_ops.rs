@@ -7,10 +7,9 @@ use crate::types::{BackupInfo, ReplicaStatus, ReplicaSyncResult};
 impl super::MemoryStore {
     /// Sync the primary database to its replica.
     ///
-    /// Performs CHECKPOINT (flush WAL) then atomic file copy.
+    /// Uses SQLite's online backup API to create a consistent snapshot.
     /// For `:memory:` databases, returns `Ok(None)`.
-    #[allow(dead_code)]
-    pub(crate) fn sync_replica(&self) -> Result<Option<ReplicaSyncResult>> {
+    pub fn sync_replica(&self) -> Result<Option<ReplicaSyncResult>> {
         self.storage.sync_replica()
     }
 
@@ -31,8 +30,7 @@ impl super::MemoryStore {
     }
 
     /// Get the status of the primary and replica files.
-    #[allow(dead_code)]
-    pub(crate) fn replica_status(&self) -> Result<ReplicaStatus> {
+    pub fn replica_status(&self) -> Result<ReplicaStatus> {
         self.storage.replica_status()
     }
 
@@ -48,10 +46,16 @@ impl super::MemoryStore {
         self.storage.backup_to_path(path)
     }
 
+    /// Validate a backup without changing the current database.
+    pub fn validate_backup(path: &str) -> Result<()> {
+        replica::validate_db_file(path)
+    }
+
     /// Restore the primary database from a backup file.
     ///
-    /// Validates the backup is a readable database file, then performs
-    /// an atomic copy to the primary database path.
+    /// Validates the backup with the real MemMe configuration before replacing
+    /// the primary. If the replacement cannot be opened, the previous database
+    /// is restored automatically.
     ///
     /// **Warning**: The caller must re-open the `MemoryStore` after calling this,
     /// as the underlying database file has been replaced.
@@ -59,6 +63,6 @@ impl super::MemoryStore {
         backup_path: &str,
         config: &crate::config::MemoryConfig,
     ) -> Result<()> {
-        replica::restore_from_backup(backup_path, &config.db_path)
+        replica::restore_from_backup(backup_path, config)
     }
 }

@@ -1,9 +1,55 @@
-use crate::error::Result;
+use crate::error::{MemoryError, Result};
 use crate::types::{ListSessionsOptions, Session, SqlParam};
 
 use super::backend::RowAccess;
 use super::util::opt_text;
 use super::Storage;
+
+const SESSION_SCOPE_KEYS: [&str; 3] = ["agent_id", "app_id", "run_id"];
+
+fn scope_value<'a>(metadata: Option<&'a serde_json::Value>, key: &str) -> Result<Option<&'a str>> {
+    let Some(value) = metadata.and_then(|metadata| metadata.get(key)) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| MemoryError::Config(format!("session metadata.{key} must be a string")))?;
+    if value.trim().is_empty() {
+        return Err(MemoryError::Config(format!(
+            "session metadata.{key} must not be empty"
+        )));
+    }
+    Ok(Some(value))
+}
+
+fn validate_session_identity(
+    session: &Session,
+    user_id: &str,
+    source_id: Option<&str>,
+    metadata: Option<&serde_json::Value>,
+) -> Result<()> {
+    if session.user_id != user_id {
+        return Err(MemoryError::Config(format!(
+            "session_id '{}' is already owned by another user",
+            session.session_id
+        )));
+    }
+    if session.source_id.as_deref() != source_id {
+        return Err(MemoryError::Config(format!(
+            "session_id '{}' conflicts with source_id",
+            session.session_id
+        )));
+    }
+    for key in SESSION_SCOPE_KEYS {
+        if scope_value(session.metadata.as_ref(), key)? != scope_value(metadata, key)? {
+            return Err(MemoryError::Config(format!(
+                "session_id '{}' conflicts with {key}",
+                session.session_id
+            )));
+        }
+    }
+    Ok(())
+}
 
 impl Storage {
     /// Insert a new session.
@@ -39,7 +85,7 @@ impl Storage {
                       s.started_at, s.ended_at,
                       s.metadata, s.created_at,
                       (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
-                      s.structured_notes
+                      s.structured_notes, s.queried_count, s.last_queried_at
                FROM sessions s
                WHERE s.session_id = $1"#,
             &[SqlParam::Text(session_id.to_string())],
@@ -78,7 +124,7 @@ impl Storage {
                       s.started_at, s.ended_at,
                       s.metadata, s.created_at,
                       (SELECT COUNT(*) FROM events WHERE session_id = s.session_id) AS event_count,
-                      s.structured_notes
+                      s.structured_notes, s.queried_count, s.last_queried_at
                FROM sessions s
                WHERE {where_clause}
                ORDER BY s.started_at DESC
@@ -121,12 +167,21 @@ impl Storage {
         started_at: &str,
         metadata: Option<&str>,
     ) -> Result<Session> {
+        let metadata_value = metadata
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()?;
         if let Some(session) = self.get_session(session_id)? {
+            validate_session_identity(&session, user_id, source_id, metadata_value.as_ref())?;
             return Ok(session);
         }
         self.insert_session(session_id, user_id, source_id, started_at, metadata)?;
-        self.get_session(session_id)?
-            .ok_or_else(|| crate::error::MemoryError::Config("Failed to create session".into()))
+        let session = self
+            .get_session(session_id)?
+            .ok_or_else(|| MemoryError::Config("Failed to create session".into()))?;
+        // The insert uses ON CONFLICT so concurrent creators are safe. Validate
+        // again in case another request won the race with a different owner or scope.
+        validate_session_identity(&session, user_id, source_id, metadata_value.as_ref())?;
+        Ok(session)
     }
     /// Append a line to a session's structured notes, capped at 2000 chars.
     pub(crate) fn append_structured_note(&self, session_id: &str, note: &str) -> Result<()> {
@@ -172,6 +227,7 @@ impl Storage {
     }
 
     /// Get the queried_count for a session. Returns 0 if session not found.
+    #[allow(dead_code)] // planned: feedback-driven consolidation
     pub(crate) fn get_session_queried_count(&self, session_id: &str) -> Result<u32> {
         let count = self.backend.query_one(
             "SELECT COALESCE(queried_count, 0) FROM sessions WHERE session_id = $1",
@@ -182,6 +238,7 @@ impl Storage {
     }
 
     /// Check if a session has already been compacted (has a corresponding episode).
+    #[allow(dead_code)] // planned: automatic session compaction
     pub(crate) fn session_has_episode(&self, session_id: &str) -> Result<bool> {
         // Episodes store session_ids as a JSON array. Check if any episode
         // contains this session_id in its session_ids column.
@@ -196,6 +253,7 @@ impl Storage {
 
     /// Get session IDs for a user that have unprocessed events and no episode yet.
     /// These are sessions that need compact before search can find their content effectively.
+    #[allow(dead_code)] // planned: automatic session compaction
     pub(crate) fn get_uncompacted_session_ids(&self, user_id: &str) -> Result<Vec<String>> {
         // A session is "uncompacted" if:
         // 1. It belongs to this user
@@ -240,5 +298,7 @@ fn map_session_row(row: &dyn RowAccess) -> Result<Session> {
         created_at: row.get_string(6)?,
         event_count: row.get_opt_i64(7)?.unwrap_or(0) as u32,
         structured_notes: row.get_opt_string(8)?,
+        queried_count: row.get_opt_i64(9)?.unwrap_or(0) as u32,
+        last_queried_at: row.get_opt_string(10)?,
     })
 }

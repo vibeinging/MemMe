@@ -1,5 +1,6 @@
-use crate::config::MemoryConfig;
-use crate::error::Result;
+use crate::config::{MemoryConfig, VEXDB_LITE_EXTENSION_ENV};
+use crate::error::{MemoryError, Result};
+use crate::types::SqlParam;
 
 mod analytics;
 pub(crate) mod backend;
@@ -16,6 +17,7 @@ mod graph;
 mod history;
 mod identity_store;
 mod meditation_store;
+pub(crate) mod portable_import;
 mod procedural;
 pub(crate) mod query;
 mod recall_store;
@@ -40,34 +42,298 @@ pub struct Storage {
 }
 
 impl Storage {
+    const VECTOR_INDEX_VERSION: &'static str = "3";
+
     /// Open a SQLite-backed storage and initialize the schema.
     pub fn open(config: MemoryConfig) -> Result<Self> {
+        let extension_path = std::env::var_os(VEXDB_LITE_EXTENSION_ENV).ok_or_else(|| {
+            MemoryError::Config(format!(
+                "VexDB-Lite SQLite extension is required; set {VEXDB_LITE_EXTENSION_ENV} \
+                 or use MemoryStore::new_with_vexdb_lite()"
+            ))
+        })?;
+        Self::open_with_vexdb_lite(config, extension_path)
+    }
+
+    /// Open SQLite with an explicit VexDB-Lite extension path.
+    pub fn open_with_vexdb_lite(
+        config: MemoryConfig,
+        extension_path: impl AsRef<std::path::Path>,
+    ) -> Result<Self> {
         config.validate()?;
-        let conn = backend_sqlite::open_sqlite(&config)?;
+        let conn = backend_sqlite::open_sqlite(&config, extension_path.as_ref())?;
         let backend = Backend::sqlite(conn);
         // Initialize schema using the dialect
         let dialect = backend.dialect();
         let schema = Self::sqlite_init_schema(&config, dialect);
         backend.execute_batch(&schema)?;
-        // Create vec0 virtual table for vector search
-        if let Some(vec0_sql) = dialect.create_vec0_table_sql(config.embedding_dims) {
-            backend.execute_batch(&vec0_sql)?;
+        // The source tables are authoritative. Validate them before dropping or
+        // recreating any derived vector index so a bad configuration cannot
+        // destroy the last usable index before open returns an error.
+        Self::validate_source_embedding_dimensions(&backend, config.embedding_dims)?;
+        let vector_table_count = backend.query_count(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ($1, $2)",
+            &[
+                SqlParam::Text(dialect.memory_vector_table_name().to_string()),
+                SqlParam::Text(dialect.event_vector_table_name().to_string()),
+            ],
+        )?;
+        let mut vector_tables_existed = vector_table_count == 2;
+        if vector_table_count > 0 {
+            if vector_tables_existed {
+                Self::validate_vector_table_dimensions(&backend, dialect, config.embedding_dims)?;
+            }
+            let stored_version = backend.query_one(
+                "SELECT value FROM memme_config WHERE key = 'vector_index_version'",
+                &[],
+                |row| row.get_string(0),
+            )?;
+            if !vector_tables_existed
+                || stored_version.as_deref() != Some(Self::VECTOR_INDEX_VERSION)
+            {
+                backend.execute_batch(&format!(
+                    "DROP TABLE IF EXISTS {}; DROP TABLE IF EXISTS {}",
+                    dialect.memory_vector_table_name(),
+                    dialect.event_vector_table_name()
+                ))?;
+                vector_tables_existed = false;
+            }
+        }
+        // Create VexDB-Lite virtual tables for indexed vector search.
+        if let Some(vector_sql) = dialect.create_vector_index_sql(config.embedding_dims) {
+            backend.execute_batch(&vector_sql)?;
         }
         let storage = Self { backend, config };
         storage.run_migrations()?;
+        storage.ensure_vector_index(vector_tables_existed)?;
+        storage.ensure_fts_indexes()?;
+        storage.retire_legacy_vec0_data()?;
         Ok(storage)
+    }
+
+    fn validate_vector_table_dimensions(
+        backend: &Backend,
+        dialect: &dyn SqlDialect,
+        expected_dims: usize,
+    ) -> Result<()> {
+        for table in [
+            dialect.memory_vector_table_name(),
+            dialect.event_vector_table_name(),
+        ] {
+            let sql = format!("SELECT value FROM {table}_config WHERE key = 'dim'");
+            let raw = backend
+                .query_one(&sql, &[], |row| row.get_string(0))?
+                .ok_or_else(|| {
+                    MemoryError::Config(format!(
+                        "VexDB-Lite index {table} is missing its dimension metadata"
+                    ))
+                })?;
+            let actual_dims = raw.parse::<usize>().map_err(|_| {
+                MemoryError::Config(format!(
+                    "VexDB-Lite index {table} has invalid dimension metadata: {raw}"
+                ))
+            })?;
+            if actual_dims != expected_dims {
+                return Err(MemoryError::Config(format!(
+                    "VexDB-Lite index dimension mismatch for {table}: database uses \
+                     {actual_dims}, configuration requests {expected_dims}; re-embed into a new \
+                     database or reopen with the original dimension"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_source_embedding_dimensions(backend: &Backend, expected_dims: usize) -> Result<()> {
+        let expected_bytes = expected_dims.saturating_mul(4);
+        for (table, column) in [("memories", "embedding"), ("events", "content_vec")] {
+            let invalid = backend.query_count(
+                &format!(
+                    "SELECT COUNT(*) FROM {table} WHERE {column} IS NOT NULL \
+                     AND length({column}) > 0 AND length({column}) != $1"
+                ),
+                &[SqlParam::Int(expected_bytes as i64)],
+            )?;
+            if invalid > 0 {
+                return Err(MemoryError::Config(format!(
+                    "cannot build a {expected_dims}-dimension VexDB-Lite index: {invalid} rows in \
+                     {table}.{column} use a different embedding size"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuild the VexDB-Lite index from authoritative embeddings when needed.
+    fn ensure_vector_index(&self, vector_tables_existed: bool) -> Result<()> {
+        let backend_name = self.dialect().vector_backend_name();
+        let previous_backend = self.backend.query_one(
+            "SELECT value FROM memme_config WHERE key = 'vector_backend'",
+            &[],
+            |row| row.get_string(0),
+        )?;
+
+        let needs_rebuild =
+            !vector_tables_existed || previous_backend.as_deref() != Some(backend_name);
+        let rebuild_sql = self.dialect().rebuild_vector_index_sql();
+        let index_sql = self.dialect().vector_metadata_indexes_sql();
+        self.backend.transaction(|tx| {
+            if needs_rebuild {
+                if let Some(rebuild_sql) = rebuild_sql.as_deref() {
+                    tx.execute_batch(rebuild_sql)?;
+                }
+            }
+            if let Some(index_sql) = index_sql.as_deref() {
+                tx.execute_batch(index_sql)?;
+            }
+            for (key, value) in [
+                ("vector_backend", backend_name.to_string()),
+                ("vector_dimensions", self.config.embedding_dims.to_string()),
+                (
+                    "vector_index_version",
+                    Self::VECTOR_INDEX_VERSION.to_string(),
+                ),
+            ] {
+                tx.execute(
+                    "INSERT INTO memme_config(key, value) VALUES ($1, $2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    &[SqlParam::Text(key.to_string()), SqlParam::Text(value)],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Remove persisted sqlite-vec shadow data after the Vex index is ready.
+    ///
+    /// The legacy virtual-table schema rows remain because SQLite cannot invoke
+    /// sqlite-vec's xDestroy after the module has been removed. Editing
+    /// sqlite_schema automatically would risk database corruption, so this
+    /// migration only removes the verified ordinary shadow tables that contain
+    /// vectors and partition metadata. Rollback to a sqlite-vec build therefore
+    /// requires restoring a pre-migration backup.
+    fn retire_legacy_vec0_data(&self) -> Result<()> {
+        let mut shadow_tables = Vec::new();
+        for root in ["vec_memories", "vec_events"] {
+            let ddl = self.backend.query_one(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $1",
+                &[SqlParam::Text(root.to_string())],
+                |row| row.get_opt_string(0),
+            )?;
+            let Some(Some(ddl)) = ddl else {
+                continue;
+            };
+            let normalized = ddl.to_ascii_lowercase();
+            if !normalized.contains("create virtual table") || !normalized.contains("using vec0") {
+                return Err(MemoryError::Config(format!(
+                    "refusing to retire unexpected legacy table {root}: schema is not sqlite-vec vec0"
+                )));
+            }
+
+            let pattern = format!("{root}_*");
+            let names = self.backend.query_read(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB $1",
+                &[SqlParam::Text(pattern)],
+                |row| row.get_string(0),
+            )?;
+            for name in names {
+                if !Self::is_known_vec0_shadow(root, &name) {
+                    return Err(MemoryError::Config(format!(
+                        "refusing to remove unknown sqlite-vec shadow table: {name}"
+                    )));
+                }
+                shadow_tables.push(name);
+            }
+        }
+
+        if shadow_tables.is_empty() {
+            return Ok(());
+        }
+
+        self.backend.transaction(|tx| {
+            for name in &shadow_tables {
+                tx.execute_batch(&format!("DROP TABLE IF EXISTS \"{name}\""))?;
+            }
+            tx.execute(
+                "INSERT INTO memme_config(key, value) VALUES ('legacy_vec0_retired', '1') \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                &[],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn is_known_vec0_shadow(root: &str, name: &str) -> bool {
+        let Some(suffix) = name.strip_prefix(root) else {
+            return false;
+        };
+        if matches!(suffix, "_info" | "_chunks" | "_rowids" | "_auxiliary") {
+            return true;
+        }
+        ["_vector_chunks", "_metadatachunks", "_metadatatext"]
+            .iter()
+            .any(|prefix| {
+                suffix.strip_prefix(prefix).is_some_and(|digits| {
+                    digits.len() == 2 && digits.chars().all(|c| c.is_ascii_digit())
+                })
+            })
     }
 
     /// Run incremental migrations for columns added after initial schema.
     fn run_migrations(&self) -> Result<()> {
-        // Migration: add pinned column to memories (added in v0.2)
-        let has_pinned = self.backend.query_read(
-            "SELECT pinned FROM memories LIMIT 0", &[], |_| Ok(())
-        );
-        if has_pinned.is_err() {
-            let _ = self.backend.execute_batch(
-                "ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0;"
+        // Migration: normalize event relationship scope. Older callers may
+        // already have stored agent_id inside metadata.
+        let has_event_agent =
+            self.backend
+                .query_read("SELECT agent_id FROM events LIMIT 0", &[], |_| Ok(()));
+        if has_event_agent.is_err() {
+            self.backend.execute_batch(
+                "ALTER TABLE events ADD COLUMN agent_id TEXT; \
+                 UPDATE events SET agent_id = json_extract(metadata, '$.agent_id') \
+                 WHERE metadata IS NOT NULL AND json_valid(metadata);",
+            )?;
+        }
+        self.backend.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_events_user_agent \
+             ON events(user_id, agent_id);",
+        )?;
+
+        // Migration: add application and run scopes to raw events. Older rows
+        // already carry these values inside metadata when set by callers.
+        for (column, json_key) in [("app_id", "app_id"), ("run_id", "run_id")] {
+            let has_column = self.backend.query_read(
+                &format!("SELECT {column} FROM events LIMIT 0"),
+                &[],
+                |_| Ok(()),
             );
+            if has_column.is_err() {
+                self.backend.execute_batch(&format!(
+                    "ALTER TABLE events ADD COLUMN {column} TEXT; \
+                     UPDATE events SET {column} = json_extract(metadata, '$.{json_key}') \
+                     WHERE metadata IS NOT NULL AND json_valid(metadata);"
+                ))?;
+            }
+        }
+        self.backend.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_events_user_scope \
+             ON events(user_id, agent_id, app_id, run_id);",
+        )?;
+
+        // Old versions could persist an LLM credential in the SQLite file.
+        // Secrets now come only from the process environment.
+        self.backend.execute(
+            "DELETE FROM memme_config WHERE key = $1",
+            &[SqlParam::Text("llm_api_key".to_string())],
+        )?;
+
+        // Migration: add pinned column to memories (added in v0.2)
+        let has_pinned =
+            self.backend
+                .query_read("SELECT pinned FROM memories LIMIT 0", &[], |_| Ok(()));
+        if has_pinned.is_err() {
+            let _ = self
+                .backend
+                .execute_batch("ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0;");
         }
         Ok(())
     }
@@ -189,6 +455,9 @@ impl Storage {
                 event_id TEXT PRIMARY KEY,
                 source_id TEXT,
                 session_id TEXT,
+                agent_id TEXT,
+                app_id TEXT,
+                run_id TEXT,
                 timestamp TEXT NOT NULL DEFAULT (datetime('now')),
                 event_type TEXT NOT NULL DEFAULT 'system',
                 content TEXT NOT NULL,
@@ -316,80 +585,134 @@ impl Storage {
     }
 
     /// Current schema version. Bump this when adding new tables/columns/indexes.
-    pub(crate) const SCHEMA_VERSION: &'static str = "5";
+    pub(crate) const SCHEMA_VERSION: &'static str = "6";
 
     // ── Reset ──
 
     /// Delete ALL data from all tables. This is destructive and cannot be undone.
     pub(crate) fn reset(&self) -> Result<()> {
-        self.backend.execute_batch("DELETE FROM history")?;
         let collection = &self.config.collection_name;
-        self.backend
-            .execute_batch(&format!("DELETE FROM relationships_{collection}"))?;
-        self.backend
-            .execute_batch(&format!("DELETE FROM entities_{collection}"))?;
-        self.backend.execute_batch("DELETE FROM memory_entities")?;
-        self.backend.execute_batch("DELETE FROM memories")?;
-        self.backend.execute_batch("DELETE FROM procedures")?;
-        // Four-layer tables
-        let _ = self.backend.execute_batch("DELETE FROM sources");
-        let _ = self.backend.execute_batch("DELETE FROM sessions");
-        let _ = self.backend.execute_batch("DELETE FROM events");
-        let _ = self.backend.execute_batch("DELETE FROM episodes");
-        let _ = self.backend.execute_batch("DELETE FROM identity");
-        let _ = self.backend.execute_batch("DELETE FROM associations");
-        let _ = self.backend.execute_batch("DELETE FROM meditations");
-        let _ = self.backend.execute_batch("DELETE FROM recalls");
-        Ok(())
+        let memory_vectors = self.dialect().memory_vector_table_name();
+        let event_vectors = self.dialect().event_vector_table_name();
+        self.backend.transaction(|tx| {
+            tx.execute_batch(&format!(
+                "DELETE FROM {memory_vectors}; DELETE FROM {event_vectors}"
+            ))?;
+            for fts in ["memories_fts", "events_fts", "episodes_fts"] {
+                if tx.table_exists(fts)? {
+                    tx.execute_batch(&format!("DELETE FROM {fts}"))?;
+                }
+            }
+            tx.execute_batch(&format!(
+                "DELETE FROM history;
+                 DELETE FROM relationships_{collection};
+                 DELETE FROM entities_{collection};
+                 DELETE FROM memory_entities;
+                 DELETE FROM associations;
+                 DELETE FROM memories;
+                 DELETE FROM procedures;
+                 DELETE FROM sources;
+                 DELETE FROM sessions;
+                 DELETE FROM events;
+                 DELETE FROM episodes;
+                 DELETE FROM identity;
+                 DELETE FROM meditations;
+                 DELETE FROM recalls;"
+            ))?;
+            Ok(())
+        })
     }
 }
 
 impl Storage {
     /// Delete ALL data for a single user across every table.
     pub(crate) fn delete_user_data(&self, user_id: &str) -> Result<()> {
-        use crate::types::SqlParam;
         let collection = &self.config.collection_name;
-        let p = &[SqlParam::Text(user_id.to_string())];
-        let _ = self.backend.execute("DELETE FROM vec_memories WHERE memory_id IN (SELECT id FROM memories WHERE user_id = $1)", p);
-        let _ = self.backend.execute("DELETE FROM vec_events WHERE event_id IN (SELECT event_id FROM events WHERE user_id = $1)", p);
-        let _ = self.backend.execute(
-            "DELETE FROM memories_fts WHERE id IN (SELECT id FROM memories WHERE user_id = $1)",
-            p,
-        );
-        let _ = self.backend.execute("DELETE FROM episodes_fts WHERE episode_id IN (SELECT episode_id FROM episodes WHERE user_id = $1)", p);
-        self.backend
-            .execute("DELETE FROM memory_entities WHERE user_id = $1", p)?;
-        self.backend.execute(
-            &format!("DELETE FROM relationships_{collection} WHERE user_id = $1"),
-            p,
-        )?;
-        self.backend.execute(
-            &format!("DELETE FROM entities_{collection} WHERE user_id = $1"),
-            p,
-        )?;
-        self.backend
-            .execute("DELETE FROM history WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM memories WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM events WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM sessions WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM episodes WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM identity WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM meditations WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM recalls WHERE user_id = $1", p)?;
-        self.backend
-            .execute("DELETE FROM procedures WHERE user_id = $1", p)?;
-        let _ = self
-            .backend
-            .execute("DELETE FROM sources WHERE user_id = $1", p);
-        let _ = self.backend.execute("DELETE FROM associations WHERE from_id IN (SELECT id FROM memories WHERE user_id = $1) OR to_id IN (SELECT id FROM memories WHERE user_id = $1)", p);
-        Ok(())
+        let memory_vectors = self.dialect().memory_vector_table_name();
+        let event_vectors = self.dialect().event_vector_table_name();
+        self.backend.transaction(|tx| {
+            let p = &[SqlParam::Text(user_id.to_string())];
+
+            tx.execute(
+                &format!(
+                    "DELETE FROM {memory_vectors} WHERE rowid IN (\
+                     SELECT rowid FROM {memory_vectors}_vectors WHERE user_id = $1)"
+                ),
+                p,
+            )?;
+            tx.execute(
+                &format!(
+                    "DELETE FROM {event_vectors} WHERE rowid IN (\
+                     SELECT rowid FROM {event_vectors}_vectors WHERE user_id = $1)"
+                ),
+                p,
+            )?;
+
+            if tx.table_exists("memories_fts")? {
+                tx.execute(
+                    "DELETE FROM memories_fts WHERE id IN (\
+                     SELECT id FROM memories WHERE user_id = $1)",
+                    p,
+                )?;
+            }
+            if tx.table_exists("events_fts")? {
+                tx.execute(
+                    "DELETE FROM events_fts WHERE event_id IN (\
+                     SELECT event_id FROM events WHERE user_id = $1)",
+                    p,
+                )?;
+            }
+            if tx.table_exists("episodes_fts")? {
+                tx.execute(
+                    "DELETE FROM episodes_fts WHERE episode_id IN (\
+                     SELECT episode_id FROM episodes WHERE user_id = $1)",
+                    p,
+                )?;
+            }
+
+            // Associations have no user_id. Remove every edge touching any
+            // user-owned layer while those source rows still exist.
+            tx.execute(
+                &format!(
+                    "DELETE FROM associations WHERE
+                     (from_layer = 'memory' AND from_id IN (SELECT id FROM memories WHERE user_id = $1)) OR
+                     (to_layer = 'memory' AND to_id IN (SELECT id FROM memories WHERE user_id = $1)) OR
+                     (from_layer = 'event' AND from_id IN (SELECT event_id FROM events WHERE user_id = $1)) OR
+                     (to_layer = 'event' AND to_id IN (SELECT event_id FROM events WHERE user_id = $1)) OR
+                     (from_layer = 'episode' AND from_id IN (SELECT episode_id FROM episodes WHERE user_id = $1)) OR
+                     (to_layer = 'episode' AND to_id IN (SELECT episode_id FROM episodes WHERE user_id = $1)) OR
+                     (from_layer = 'identity' AND from_id IN (SELECT trait_id FROM identity WHERE user_id = $1)) OR
+                     (to_layer = 'identity' AND to_id IN (SELECT trait_id FROM identity WHERE user_id = $1)) OR
+                     (from_layer = 'entity' AND from_id IN (SELECT id FROM entities_{collection} WHERE user_id = $1)) OR
+                     (to_layer = 'entity' AND to_id IN (SELECT id FROM entities_{collection} WHERE user_id = $1))"
+                ),
+                p,
+            )?;
+            tx.execute("DELETE FROM memory_entities WHERE user_id = $1", p)?;
+            tx.execute(
+                &format!("DELETE FROM relationships_{collection} WHERE user_id = $1"),
+                p,
+            )?;
+            tx.execute(
+                &format!("DELETE FROM entities_{collection} WHERE user_id = $1"),
+                p,
+            )?;
+            for table in [
+                "history",
+                "memories",
+                "events",
+                "sessions",
+                "episodes",
+                "identity",
+                "meditations",
+                "recalls",
+                "procedures",
+                "sources",
+            ] {
+                tx.execute(&format!("DELETE FROM {table} WHERE user_id = $1"), p)?;
+            }
+            Ok(())
+        })
     }
 }
 

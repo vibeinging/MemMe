@@ -160,7 +160,9 @@ impl super::MemoryStore {
                 let ep_start = std::time::Instant::now();
                 let ep_timeout = std::time::Duration::from_secs(180);
 
-                let events = self.storage.get_events_by_ids(&episode.event_ids)?;
+                let events = self
+                    .storage
+                    .get_events_by_ids_for_user(&episode.event_ids, &options.user_id)?;
                 if events.is_empty() {
                     let _ = self.storage.mark_episode_meditated(&episode.episode_id);
                     continue;

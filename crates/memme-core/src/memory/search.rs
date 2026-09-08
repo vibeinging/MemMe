@@ -4,7 +4,8 @@ use crate::time_parser::{self, TimeRange};
 use crate::types::*;
 
 use super::helpers::{
-    compute_retention, compute_retention_with_type, filter_fields, interference_discount, recover_lock, row_to_result,
+    compute_retention, compute_retention_with_type, filter_fields, interference_discount,
+    recover_lock, row_to_result,
 };
 
 impl super::MemoryStore {
@@ -28,6 +29,7 @@ impl super::MemoryStore {
         query: &str,
         query_embedding: &[f32],
         user_id: &str,
+        agent_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryResult>> {
         // Step 1: Extract entities from query
@@ -52,6 +54,7 @@ impl super::MemoryStore {
         let rows = self.storage.entity_associated_memories(
             &entity_refs,
             user_id,
+            agent_id,
             Some(query_embedding),
             limit,
         )?;
@@ -166,12 +169,16 @@ impl super::MemoryStore {
     ///
     /// Zero LLM calls at retrieval time.
     pub fn search(&self, query: &str, options: SearchOptions) -> Result<Vec<MemoryResult>> {
+        let limit = options.limit.unwrap_or(self.config.tuning.default_limit);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let embedding = self
             .embedder
             .embed(query)
             .map_err(crate::error::MemoryError::Embedding)?;
 
-        let limit = options.limit.unwrap_or(self.config.tuning.default_limit);
         let threshold = options.threshold;
 
         let has_reranker = self.reranker.is_some() && self.config.tuning.enable_rerank;
@@ -199,7 +206,11 @@ impl super::MemoryStore {
         let expanded_entities = if !query_entities.is_empty() && self.config.enable_graph {
             let seed_refs: Vec<&str> = query_entities.iter().map(|s| s.as_str()).collect();
             self.storage
-                .spread_entity_names(&seed_refs, &options.user_id, self.config.tuning.graph_spreading_depth)
+                .spread_entity_names(
+                    &seed_refs,
+                    &options.user_id,
+                    self.config.tuning.graph_spreading_depth,
+                )
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -210,7 +221,8 @@ impl super::MemoryStore {
             query.to_string()
         } else {
             // Add graph-expanded entities as OR terms for broader BM25 recall
-            let entity_terms: Vec<&str> = expanded_entities.iter()
+            let entity_terms: Vec<&str> = expanded_entities
+                .iter()
                 .filter(|e| !query.to_lowercase().contains(&e.to_lowercase()))
                 .map(|s| s.as_str())
                 .take(10) // cap to avoid overly broad queries
@@ -237,6 +249,7 @@ impl super::MemoryStore {
                         &embedding,
                         &options.user_id,
                         options.agent_id.as_deref(),
+                        true,
                         options.run_id.as_deref(),
                         options.app_id.as_deref(),
                         options.filter.as_ref(),
@@ -280,6 +293,7 @@ impl super::MemoryStore {
                         query,
                         &embedding,
                         &options.user_id,
+                        options.agent_id.as_deref(),
                         candidate_limit,
                     ) {
                         Ok(r) => r,
@@ -314,28 +328,68 @@ impl super::MemoryStore {
                 }
                 crate::search::word_overlap_rank_with(query, &pool, self.tokenizer.as_ref())
             };
+            let mut exact_pool = vector_results.clone();
+            for result in &fts_results {
+                if !exact_pool.iter().any(|candidate| candidate.id == result.id) {
+                    exact_pool.push(result.clone());
+                }
+            }
+            let distinctive_identifier_results =
+                crate::search::distinctive_identifier_rank(query, &exact_pool);
 
             // ── Step 4: Fusion + temporal filter ──
             let ranked_lists: Vec<(&[MemoryResult], f64)> = [
-                (vector_results.as_slice(), self.config.tuning.rrf_vector_weight),
+                (
+                    vector_results.as_slice(),
+                    self.config.tuning.rrf_vector_weight,
+                ),
                 (fts_results.as_slice(), self.config.tuning.rrf_fts_weight),
-                (entity_results.as_slice(), self.config.tuning.rrf_entity_weight),
-                (word_overlap_results.as_slice(), self.config.tuning.rrf_word_overlap_weight),
+                (
+                    entity_results.as_slice(),
+                    self.config.tuning.rrf_entity_weight,
+                ),
+                (
+                    word_overlap_results.as_slice(),
+                    self.config.tuning.rrf_word_overlap_weight,
+                ),
+                (
+                    distinctive_identifier_results.as_slice(),
+                    // A full identifier match is intentionally stronger than
+                    // several generic partial confirmations.
+                    self.config.tuning.rrf_fts_weight * 3.0,
+                ),
             ]
             .into_iter()
             .filter(|(results, _)| !results.is_empty())
             .collect();
 
-            if ranked_lists.is_empty() {
+            let mut recalled = if ranked_lists.is_empty() {
                 Vec::new()
-            } else if ranked_lists.len() == 1 {
-                ranked_lists[0].0.to_vec()
             } else {
                 fused = true;
                 let fuse_limit = limit * rerank_mult;
-                // Default: RRF fusion (multiple confirmations = stronger signal)
+                // Always convert channel-specific scores to one higher-is-better
+                // scale, even when only one channel returns candidates.
                 crate::search::rrf_fuse(&ranked_lists, self.config.tuning.rrf_k, fuse_limit)
+            };
+
+            // Exact identifiers are deterministic lookup intent. RRF can
+            // otherwise truncate a strong FTS-only hit before later stages.
+            if let Some(exact) = distinctive_identifier_results.first() {
+                let boosted_score = recalled
+                    .iter()
+                    .filter_map(|result| result.score)
+                    .fold(0.0_f32, f32::max)
+                    + 1.0;
+                if let Some(existing) = recalled.iter_mut().find(|result| result.id == exact.id) {
+                    existing.score = Some(boosted_score);
+                } else {
+                    let mut exact = exact.clone();
+                    exact.score = Some(boosted_score);
+                    recalled.push(exact);
+                }
             }
+            recalled
         } else {
             // Pure vector search (no FTS configured)
             let vector_limit = limit * rerank_mult;
@@ -343,6 +397,7 @@ impl super::MemoryStore {
                 &embedding,
                 &options.user_id,
                 options.agent_id.as_deref(),
+                true,
                 options.run_id.as_deref(),
                 options.app_id.as_deref(),
                 options.filter.as_ref(),
@@ -359,7 +414,7 @@ impl super::MemoryStore {
 
         // ── Temporal filter: apply time range constraint on fused results ──
         let results = if has_temporal_intent && !temporal_ranges.is_empty() {
-            self.apply_temporal_filter(results, &temporal_ranges)
+            self.apply_temporal_filter(results, &temporal_ranges, fused)
         } else {
             results
         };
@@ -368,8 +423,14 @@ impl super::MemoryStore {
         // From top results, follow entity edges to discover related memories
         // that recall channels might have missed. Conservative: only graph-linked,
         // not broad entity discovery (which introduces noise without reranker).
-        let results = if self.config.enable_graph && self.config.tuning.graph_augmentation_limit > 0 {
-            self.graph_augment_results(results, &embedding, &options.user_id)
+        let results = if self.config.enable_graph && self.config.tuning.graph_augmentation_limit > 0
+        {
+            self.graph_augment_results(
+                results,
+                &embedding,
+                &options.user_id,
+                options.agent_id.as_deref(),
+            )
         } else {
             results
         };
@@ -404,18 +465,27 @@ impl super::MemoryStore {
         // ── Forgetting curve scoring ──
         let mut results = if self.config.tuning.enable_forgetting_curve {
             let max_score = if fused || was_reranked {
-                results.iter().filter_map(|r| r.score).fold(0.0f32, f32::max).max(0.001)
+                results
+                    .iter()
+                    .filter_map(|r| r.score)
+                    .fold(0.0f32, f32::max)
+                    .max(0.001)
             } else {
                 1.0
             };
-            let mem_count = self.storage.count_user_memories(&options.user_id).unwrap_or(0);
+            let mem_count = self
+                .storage
+                .count_user_memories(&options.user_id)
+                .unwrap_or(0);
             let i_discount = interference_discount(mem_count);
 
             results
                 .into_iter()
                 .map(|mut r| {
                     let stability = r.stability.unwrap_or(1.0);
-                    let retention = compute_retention_with_type(&r.updated_at, stability, Some(&r.resolution)) * i_discount;
+                    let retention =
+                        compute_retention_with_type(&r.updated_at, stability, Some(&r.resolution))
+                            * i_discount;
                     r.retention = Some(retention);
                     if let Some(raw_score) = r.score {
                         let similarity = if was_reranked || fused {
@@ -435,14 +505,26 @@ impl super::MemoryStore {
         };
 
         if self.config.tuning.enable_forgetting_curve {
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
-        // Resolution-based score adjustment
+        let scores_are_relevance =
+            fused || was_reranked || self.config.tuning.enable_forgetting_curve;
+
+        // Resolution weights apply only to higher-is-better relevance scores.
+        // Pure vector scores are distances, so multiplying them would reverse
+        // the meaning of a larger resolution weight.
         let mut results: Vec<MemoryResult> = results
             .into_iter()
             .map(|mut r| {
-                if let Some(score) = r.score {
+                if scores_are_relevance {
+                    let Some(score) = r.score else {
+                        return r;
+                    };
                     let res_mult = match r.resolution {
                         Resolution::Granular => self.config.tuning.resolution_weight_granular,
                         Resolution::Narrative => self.config.tuning.resolution_weight_narrative,
@@ -454,17 +536,28 @@ impl super::MemoryStore {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            if scores_are_relevance {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
 
         // ── Step 7: Post-processing ──
 
-        // 7a. Filter superseded memories (knowledge-update correctness)
-        // TODO: filter superseded memories once superseded_by is exposed in MemoryResult
+        // 7a. Expired, superseded, and validity-ended memories are filtered in
+        // every storage recall channel before fusion.
 
         // 7b. Session diversity: cap results per session to ensure cross-session coverage
         let max_per_session = self.config.tuning.max_per_session;
         if max_per_session > 0 {
-            let mut session_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut session_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
             results.retain(|r| {
                 if let Some(ref sid) = r.session_id {
                     let count = session_counts.entry(sid.clone()).or_insert(0);
@@ -491,7 +584,10 @@ impl super::MemoryStore {
             let mut seen_sessions = std::collections::HashSet::new();
             for r in &results {
                 if self.config.tuning.enable_forgetting_curve {
-                    queue.push(super::DeferredWrite::ReinforceStability(r.id.clone(), self.config.tuning.stability_growth_factor));
+                    queue.push(super::DeferredWrite::ReinforceStability(
+                        r.id.clone(),
+                        self.config.tuning.stability_growth_factor,
+                    ));
                 } else {
                     queue.push(super::DeferredWrite::IncrementAccess(r.id.clone()));
                 }
@@ -509,9 +605,15 @@ impl super::MemoryStore {
         // Apply threshold filter
         let results = if let Some(t) = threshold {
             if fused || was_reranked || self.config.tuning.enable_forgetting_curve {
-                results.into_iter().filter(|r| r.score.unwrap_or(0.0) >= t).collect()
+                results
+                    .into_iter()
+                    .filter(|r| r.score.unwrap_or(0.0) >= t)
+                    .collect()
             } else {
-                results.into_iter().filter(|r| r.score.map_or(true, |s| s <= t)).collect()
+                results
+                    .into_iter()
+                    .filter(|r| r.score.map_or(true, |s| s <= t))
+                    .collect()
             }
         } else {
             results
@@ -524,7 +626,10 @@ impl super::MemoryStore {
 
         // Apply field filtering if specified
         if let Some(ref fields) = options.fields {
-            Ok(results.into_iter().map(|r| filter_fields(r, fields)).collect())
+            Ok(results
+                .into_iter()
+                .map(|r| filter_fields(r, fields))
+                .collect())
         } else {
             Ok(results)
         }
@@ -537,6 +642,7 @@ impl super::MemoryStore {
         &self,
         mut results: Vec<MemoryResult>,
         _ranges: &[TimeRange],
+        scores_are_relevance: bool,
     ) -> Vec<MemoryResult> {
         // For now, boost results that have event_time within the ranges.
         // Full interval overlap matching (Hindsight-style) is a future enhancement.
@@ -549,14 +655,28 @@ impl super::MemoryStore {
                     {
                         // Boost score for temporally matching results
                         if let Some(ref mut score) = r.score {
-                            *score *= 1.5;
+                            if scores_are_relevance {
+                                *score *= 1.5;
+                            } else {
+                                *score /= 1.5;
+                            }
                         }
                         break;
                     }
                 }
             }
         }
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            if scores_are_relevance {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
         results
     }
 
@@ -567,6 +687,7 @@ impl super::MemoryStore {
         mut results: Vec<MemoryResult>,
         query_embedding: &[f32],
         user_id: &str,
+        agent_id: Option<&str>,
     ) -> Vec<MemoryResult> {
         let aug_limit = self.config.tuning.graph_augmentation_limit;
         if aug_limit == 0 || results.is_empty() {
@@ -592,12 +713,15 @@ impl super::MemoryStore {
         if let Ok(rows) = self.storage.entity_associated_memories(
             &entity_refs,
             user_id,
+            agent_id,
             Some(query_embedding),
             aug_limit * 2,
         ) {
             let mut added = 0;
             for row in rows {
-                if added >= aug_limit { break; }
+                if added >= aug_limit {
+                    break;
+                }
                 if !existing_ids.contains(&row.id) {
                     results.push(row_to_result(row));
                     added += 1;
@@ -646,11 +770,10 @@ impl super::MemoryStore {
 
     /// **Advanced** — Most users should use `search()` instead.
     ///
-    /// Rebuild the FTS index. Call this after batch insertions.
+    /// Rebuild the FTS indexes from their source tables.
     ///
-    /// The FTS index is not automatically updated when memories are
-    /// added/updated/deleted. Call this method to rebuild the index
-    /// so that `hybrid_search` returns up-to-date FTS results.
+    /// Normal writes update the indexes incrementally. This method is intended
+    /// for recovery or maintenance after an external database modification.
     pub fn rebuild_fts_index(&self) -> Result<()> {
         self.storage.create_fts_index()?;
         self.storage.create_fts_index_events()

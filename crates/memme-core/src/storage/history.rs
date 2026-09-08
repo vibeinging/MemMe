@@ -81,38 +81,8 @@ impl Storage {
 
         let where_clause = conditions.join(" AND ");
 
-        // First, collect the ids and content of memories to be deleted (for history)
-        let select_sql = format!("SELECT id, content FROM memories WHERE {where_clause}");
-        let delete_sql = format!("DELETE FROM memories WHERE {where_clause}");
-
-        let rows: Vec<(String, String)> =
-            self.backend
-                .query_read(&select_sql, &dynamic_params, |row| {
-                    Ok((row.get_string(0)?, row.get_string(1)?))
-                })?;
-
-        let count = rows.len() as u64;
-
-        // Delete the memories
-        self.backend.execute(&delete_sql, &dynamic_params)?;
-
-        // Record history for each deleted memory
-        for (mem_id, content) in &rows {
-            let history_id = uuid::Uuid::new_v4().to_string();
-            self.backend.execute(
-                "INSERT INTO history (id, memory_id, user_id, old_memory, new_memory, event) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    SqlParam::Text(history_id),
-                    SqlParam::Text(mem_id.clone()),
-                    SqlParam::Text(user_id.to_string()),
-                    SqlParam::Text(content.clone()),
-                    SqlParam::Text(String::new()),
-                    SqlParam::Text("DELETE".to_string()),
-                ],
-            )?;
-        }
-
-        Ok(count)
+        let rows = self.delete_memories_where(&where_clause, &dynamic_params, Some(user_id))?;
+        Ok(rows.len() as u64)
     }
 
     /// Delete all history records for a user.

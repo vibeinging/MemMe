@@ -29,7 +29,9 @@
 //!
 //! let config = MemoryConfig::new(":memory:", 384);
 //! let embedder = Arc::new(MockEmbedder::new(384));
-//! let store = MemoryStore::new(config, embedder).unwrap();
+//! let extension_path = std::env::var_os("MEMME_VEXDB_LITE_EXTENSION")
+//!     .expect("set MEMME_VEXDB_LITE_EXTENSION to a trusted VexDB-Lite library");
+//! let store = MemoryStore::new_with_vexdb_lite(config, embedder, extension_path).unwrap();
 //! ```
 
 pub mod analytics;
@@ -54,7 +56,7 @@ pub mod types;
 #[cfg(feature = "webhooks")]
 pub mod webhook;
 
-pub use config::{MemoryConfig, PowerConfig, TuningConfig};
+pub use config::{MemoryConfig, PowerConfig, TuningConfig, VEXDB_LITE_EXTENSION_ENV};
 pub use error::{MemoryError, Result};
 pub use import::{ImportConversationsResult, ImportedConversation};
 pub use memme_llm::prompts::FeedbackItem;
@@ -92,6 +94,7 @@ pub use types::{
     GraphSearchResult,
     HistoryEvent,
     HistoryRecord,
+    IdentifiedChatMessage,
     IdentityTrait,
     IngestEventOptions,
     ListEpisodesOptions,

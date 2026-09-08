@@ -2,7 +2,8 @@
 //! and search configuration options.
 //!
 //! Run with:
-//!   cargo run -p memme-core --example search
+//!   MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)" \
+//!     cargo run -p memme-core --example search
 
 use std::sync::Arc;
 

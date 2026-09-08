@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "name": "PetMemBench core scenarios",
+  "description": "AI 宠物记忆体的离线最小场景集，覆盖用户安全、关系记忆、即时事件、隔离和过期信息。",
+  "records": [
+    {
+      "id": "global_allergy",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "content": "主人对花生严重过敏，宠物绝不能推荐含花生的零食。",
+      "immutable": true,
+      "memory_type": "long_term"
+    },
+    {
+      "id": "global_profile",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "content": "主人最喜欢的颜色是青绿色，心情低落时喜欢听雨声。",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "momo_first_meeting",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "content": "主人和宠物默默第一次见面是在虹桥公园的银杏树下。",
+      "event_time": "2025-10-01",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "momo_birthday",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "content": "宠物默默把10月12日当作自己的生日。",
+      "event_time": "2025-10-12",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "doudou_first_meeting",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "agent_id": "doudou",
+      "content": "主人和宠物豆豆第一次见面是在海边灯塔。",
+      "event_time": "2025-11-03",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "doudou_birthday",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "agent_id": "doudou",
+      "content": "宠物豆豆把11月3日当作自己的生日。",
+      "event_time": "2025-11-03",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "alpha_secret",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "content": "主人甲的识别口令是橙色星球。",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "beta_secret",
+      "kind": "memory",
+      "user_id": "owner-beta",
+      "content": "主人乙的识别口令是紫色月亮。",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "expired_medicine",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "content": "今晚八点需要服用阿莫西林。",
+      "expiration_date": "2020-01-01T00:00:00Z",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "current_medicine",
+      "kind": "memory",
+      "user_id": "owner-alpha",
+      "content": "目前没有需要服用的药物。",
+      "memory_type": "long_term"
+    },
+    {
+      "id": "fresh_event",
+      "kind": "event",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "session_id": "session-momo-today",
+      "role": "user",
+      "content": "我刚刚给你买了一个蓝色小鲸鱼玩具。",
+      "timestamp": "2026-09-01T09:30:00+08:00"
+    }
+  ],
+  "queries": [
+    {
+      "id": "global_safety",
+      "category": "safety",
+      "query": "主人不能吃什么？",
+      "user_id": "owner-alpha",
+      "limit": 5,
+      "expected_all": ["花生"],
+      "forbidden_any": ["紫色月亮"],
+      "required": true,
+      "note": "全局安全信息必须能找回。"
+    },
+    {
+      "id": "relationship_scope",
+      "category": "relationship",
+      "query": "我们第一次见面在哪里？",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "limit": 5,
+      "expected_all": ["虹桥公园"],
+      "forbidden_any": ["海边灯塔"],
+      "required": true,
+      "note": "一个宠物不能读到另一个宠物的关系记忆。"
+    },
+    {
+      "id": "user_isolation",
+      "category": "privacy",
+      "query": "我的识别口令是什么？",
+      "user_id": "owner-alpha",
+      "limit": 5,
+      "expected_all": ["橙色星球"],
+      "forbidden_any": ["紫色月亮"],
+      "required": true,
+      "note": "不同用户之间不能串数据。"
+    },
+    {
+      "id": "fresh_event_recall",
+      "category": "freshness",
+      "query": "我刚刚买了什么玩具？",
+      "user_id": "owner-alpha",
+      "limit": 5,
+      "expected_all": ["蓝色小鲸鱼"],
+      "forbidden_any": [],
+      "required": true,
+      "note": "刚写入的原始事件不等整理就应可检索。"
+    },
+    {
+      "id": "expired_safety",
+      "category": "lifecycle",
+      "query": "今晚八点要吃什么药？",
+      "user_id": "owner-alpha",
+      "limit": 5,
+      "expected_all": ["目前没有需要服用的药物"],
+      "forbidden_any": ["阿莫西林"],
+      "required": true,
+      "note": "过期信息不能继续影响回答。"
+    },
+    {
+      "id": "cjk_retrieval",
+      "category": "language",
+      "query": "心情不好时我喜欢听什么？",
+      "user_id": "owner-alpha",
+      "limit": 5,
+      "expected_all": ["雨声"],
+      "forbidden_any": [],
+      "required": true,
+      "note": "中文短句是 AI 宠物的主要输入。"
+    },
+    {
+      "id": "composite_pet_context",
+      "category": "context",
+      "query": "给默默准备生日零食，要注意什么？",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "limit": 8,
+      "expected_all": ["10月12日", "花生"],
+      "forbidden_any": ["11月3日"],
+      "required": false,
+      "note": "一次查询应合并全局用户记忆和当前宠物关系记忆。"
+    },
+    {
+      "id": "agent_scoped_fresh_event",
+      "category": "context",
+      "query": "主人刚刚买了什么玩具？",
+      "user_id": "owner-alpha",
+      "agent_id": "momo",
+      "limit": 5,
+      "expected_all": ["蓝色小鲸鱼"],
+      "forbidden_any": [],
+      "required": false,
+      "note": "带宠物范围查询时也应看到当前关系里的新事件。"
+    }
+  ]
+}

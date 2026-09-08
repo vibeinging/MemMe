@@ -6,6 +6,24 @@ use crate::types::SqlParam;
 use super::Storage;
 
 impl Storage {
+    /// Persist non-secret LLM settings in one transaction.
+    pub(crate) fn save_llm_config(&self, model: &str, base_url: &str) -> Result<()> {
+        self.backend.transaction(|tx| {
+            tx.execute("DELETE FROM memme_config WHERE key = 'llm_api_key'", &[])?;
+            for (key, value) in [("llm_model", model), ("llm_base_url", base_url)] {
+                tx.execute(
+                    "INSERT INTO memme_config (key, value) VALUES ($1, $2) \
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                    &[
+                        SqlParam::Text(key.to_string()),
+                        SqlParam::Text(value.to_string()),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// Set a config key-value pair (upsert).
     pub(crate) fn set_config(&self, key: &str, value: &str) -> Result<()> {
         self.backend.execute(

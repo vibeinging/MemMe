@@ -15,8 +15,6 @@ pub enum OnnxModel {
     BgeLargeEnV15,
     /// BGE-small-zh-v1.5 — 512 dimensions, Chinese.
     BgeSmallZhV15,
-    /// BGE-large-zh-v1.5 — 1024 dimensions, Chinese.
-    BgeLargeZhV15,
     /// multilingual-e5-small — 384 dimensions, 100+ languages.
     MultilingualE5Small,
     /// multilingual-e5-base — 768 dimensions, 100+ languages.
@@ -26,18 +24,18 @@ pub enum OnnxModel {
 }
 
 impl OnnxModel {
-    fn to_fastembed(self) -> EmbeddingModel {
-        match self {
+    fn to_fastembed(self) -> Result<EmbeddingModel, EmbedError> {
+        let model = match self {
             OnnxModel::AllMiniLmL6V2 => EmbeddingModel::AllMiniLML6V2,
             OnnxModel::BgeSmallEnV15 => EmbeddingModel::BGESmallENV15,
             OnnxModel::BgeBaseEnV15 => EmbeddingModel::BGEBaseENV15,
             OnnxModel::BgeLargeEnV15 => EmbeddingModel::BGELargeENV15,
             OnnxModel::BgeSmallZhV15 => EmbeddingModel::BGESmallZHV15,
-            OnnxModel::BgeLargeZhV15 => EmbeddingModel::BGELargeZHV15,
             OnnxModel::MultilingualE5Small => EmbeddingModel::MultilingualE5Small,
             OnnxModel::MultilingualE5Base => EmbeddingModel::MultilingualE5Base,
             OnnxModel::MultilingualE5Large => EmbeddingModel::MultilingualE5Large,
-        }
+        };
+        Ok(model)
     }
 
     fn dimensions(self) -> usize {
@@ -47,7 +45,6 @@ impl OnnxModel {
             OnnxModel::BgeBaseEnV15 => 768,
             OnnxModel::BgeLargeEnV15 => 1024,
             OnnxModel::BgeSmallZhV15 => 512,
-            OnnxModel::BgeLargeZhV15 => 1024,
             OnnxModel::MultilingualE5Small => 384,
             OnnxModel::MultilingualE5Base => 768,
             OnnxModel::MultilingualE5Large => 1024,
@@ -61,7 +58,6 @@ impl OnnxModel {
             OnnxModel::BgeBaseEnV15 => "bge-base-en-v1.5",
             OnnxModel::BgeLargeEnV15 => "bge-large-en-v1.5",
             OnnxModel::BgeSmallZhV15 => "bge-small-zh-v1.5",
-            OnnxModel::BgeLargeZhV15 => "bge-large-zh-v1.5",
             OnnxModel::MultilingualE5Small => "multilingual-e5-small",
             OnnxModel::MultilingualE5Base => "multilingual-e5-base",
             OnnxModel::MultilingualE5Large => "multilingual-e5-large",
@@ -87,7 +83,7 @@ impl OnnxEmbedder {
 
     /// Create a new ONNX embedder with the specified model.
     pub fn with_model(onnx_model: OnnxModel) -> Result<Self, EmbedError> {
-        let options = InitOptions::new(onnx_model.to_fastembed()).with_show_download_progress(true);
+        let options = init_options(onnx_model.to_fastembed()?, None);
 
         let model = TextEmbedding::try_new(options).map_err(|e| {
             EmbedError::InitError(format!(
@@ -109,9 +105,7 @@ impl OnnxEmbedder {
         onnx_model: OnnxModel,
         cache_dir: impl Into<std::path::PathBuf>,
     ) -> Result<Self, EmbedError> {
-        let options = InitOptions::new(onnx_model.to_fastembed())
-            .with_show_download_progress(true)
-            .with_cache_dir(cache_dir.into());
+        let options = init_options(onnx_model.to_fastembed()?, Some(cache_dir.into()));
 
         let model = TextEmbedding::try_new(options).map_err(|e| {
             EmbedError::InitError(format!(
@@ -127,6 +121,18 @@ impl OnnxEmbedder {
             name: onnx_model.name().to_string(),
         })
     }
+}
+
+fn init_options(model: EmbeddingModel, cache_dir: Option<std::path::PathBuf>) -> InitOptions {
+    let mut options = InitOptions {
+        model_name: model,
+        show_download_progress: true,
+        ..Default::default()
+    };
+    if let Some(cache_dir) = cache_dir {
+        options.cache_dir = cache_dir;
+    }
+    options
 }
 
 impl Embedder for OnnxEmbedder {

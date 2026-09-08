@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 memme-core = { workspace = true, features = ["webhooks"] }
-memme-embeddings = { workspace = true, features = ["openai"] }
+memme-embeddings = { workspace = true, features = ["onnx", "openai"] }
 memme-llm = { workspace = true, features = ["openai"] }
 tokio.workspace = true
 serde.workspace = true
@@ -27,3 +27,8 @@ axum = { version = "0.8", features = ["json"] }
 tower-http = { version = "0.6", features = ["cors"] }
 clap = { version = "4", features = ["derive", "env"] }
 uuid.workspace = true
+url = "2"
+
+[dev-dependencies]
+serde_yaml = "0.9"
+tower = { version = "0.5", features = ["util"] }

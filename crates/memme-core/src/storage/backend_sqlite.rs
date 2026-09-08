@@ -1,7 +1,7 @@
 //! SQLite backend implementation for the `Backend` enum.
 //!
 //! Embeddings are stored as BLOBs (raw little-endian f32 bytes via `bytemuck`).
-//! Vector search uses `sqlite-vec` extension's `vec_distance_cosine()` function.
+//! Vector search uses the VexDB-Lite SQLite extension.
 
 use std::sync::Mutex;
 
@@ -13,17 +13,67 @@ use crate::types::SqlParam;
 
 use super::backend::RowAccess;
 
-/// Open a SQLite connection, register sqlite-vec extension, and configure WAL mode.
-pub(crate) fn open_sqlite(config: &MemoryConfig) -> Result<Connection> {
-    // Register sqlite-vec as an auto-extension BEFORE opening connections.
-    // This makes vec_distance_cosine() and vec0 virtual tables available.
-    unsafe {
-        #[allow(clippy::missing_transmute_annotations)]
-        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-            sqlite_vec::sqlite3_vec_init as *const (),
-        )));
-    }
+#[cfg(unix)]
+pub(crate) fn set_private_file_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
 
+    if path.exists() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| {
+                MemoryError::Storage(format!(
+                    "cannot set private permissions on {}: {error}",
+                    path.display()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn set_private_file_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+fn ensure_database_parent(path: &std::path::Path) -> Result<()> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    if parent.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(parent).map_err(|error| {
+        MemoryError::Storage(format!(
+            "cannot create database directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                MemoryError::Storage(format!(
+                    "cannot set private database directory permissions on {}: {error}",
+                    parent.display()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Open SQLite, load the selected vector extension, and configure WAL mode.
+pub(crate) fn open_sqlite(
+    config: &MemoryConfig,
+    extension_path: &std::path::Path,
+) -> Result<Connection> {
+    if config.db_path != ":memory:" {
+        ensure_database_parent(std::path::Path::new(&config.db_path))?;
+    }
     let conn = if config.db_path == ":memory:" {
         Connection::open_in_memory()
     } else {
@@ -31,9 +81,19 @@ pub(crate) fn open_sqlite(config: &MemoryConfig) -> Result<Connection> {
     }
     .map_err(|e| MemoryError::Storage(e.to_string()))?;
 
+    load_vexdb_lite(&conn, extension_path)?;
+
     // Enable WAL mode for better concurrent read performance
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
         .map_err(|e| MemoryError::Storage(e.to_string()))?;
+
+    if config.db_path != ":memory:" {
+        set_private_file_permissions(std::path::Path::new(&config.db_path))?;
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = format!("{}{suffix}", config.db_path);
+            set_private_file_permissions(std::path::Path::new(&sidecar))?;
+        }
+    }
 
     // Register custom pow() function (SQLite doesn't have built-in math functions
     // unless compiled with SQLITE_ENABLE_MATH_FUNCTIONS).
@@ -49,18 +109,40 @@ pub(crate) fn open_sqlite(config: &MemoryConfig) -> Result<Connection> {
     )
     .map_err(|e| MemoryError::Storage(format!("Failed to register pow(): {e}")))?;
 
-    // Verify sqlite-vec is loaded
-    let vec_version: String = conn
-        .query_row("SELECT vec_version()", [], |row| row.get(0))
+    let vexdb_version: String = conn
+        .query_row("SELECT vexdb_version()", [], |row| row.get(0))
         .map_err(|e| {
             MemoryError::Storage(format!(
-                "sqlite-vec extension failed to load: {e}. \
-                 Ensure the 'sqlite' feature is enabled."
+                "VexDB-Lite extension loaded without vexdb_version(): {e}"
             ))
         })?;
-    tracing::info!("sqlite-vec {vec_version} loaded");
+    tracing::info!("VexDB-Lite {vexdb_version} loaded");
 
     Ok(conn)
+}
+
+fn load_vexdb_lite(conn: &Connection, extension_path: &std::path::Path) -> Result<()> {
+    if !extension_path.is_file() {
+        return Err(MemoryError::Config(format!(
+            "VexDB-Lite SQLite extension does not exist: {}",
+            extension_path.display()
+        )));
+    }
+
+    // The caller opts in with an explicit path. No SQL is executed while
+    // extension loading is enabled, and the guard disables it on every exit.
+    let guard = unsafe { rusqlite::LoadExtensionGuard::new(conn) }.map_err(|e| {
+        MemoryError::Storage(format!("Cannot enable SQLite extension loading: {e}"))
+    })?;
+    let result = unsafe { conn.load_extension(extension_path, Some("sqlite3_vexdblite_init")) }
+        .map_err(|e| {
+            MemoryError::Storage(format!(
+                "Failed to load VexDB-Lite SQLite extension {}: {e}",
+                extension_path.display()
+            ))
+        });
+    drop(guard);
+    result
 }
 
 // ── RowAccess for rusqlite ──
@@ -144,6 +226,15 @@ pub(crate) fn sqlite_execute(
     params: &[SqlParam],
 ) -> Result<usize> {
     let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+    sqlite_execute_on(&conn, sql, params)
+}
+
+/// Execute a write statement on an already-locked SQLite connection.
+pub(crate) fn sqlite_execute_on(
+    conn: &Connection,
+    sql: &str,
+    params: &[SqlParam],
+) -> Result<usize> {
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
         .iter()
         .map(|p| p as &dyn rusqlite::types::ToSql)
@@ -155,6 +246,11 @@ pub(crate) fn sqlite_execute(
 /// Execute a batch of SQL statements on a SQLite connection.
 pub(crate) fn sqlite_execute_batch(conn: &Mutex<Connection>, sql: &str) -> Result<()> {
     let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+    sqlite_execute_batch_on(&conn, sql)
+}
+
+/// Execute a batch on an already-locked SQLite connection.
+pub(crate) fn sqlite_execute_batch_on(conn: &Connection, sql: &str) -> Result<()> {
     conn.execute_batch(sql)
         .map_err(|e| MemoryError::Storage(e.to_string()))
 }
@@ -167,6 +263,16 @@ pub(crate) fn sqlite_query_collect<T>(
     mapper: &mut impl FnMut(&dyn RowAccess) -> Result<T>,
 ) -> Result<Vec<T>> {
     let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+    sqlite_query_collect_on(&conn, sql, params, mapper)
+}
+
+/// Query rows from an already-locked SQLite connection.
+pub(crate) fn sqlite_query_collect_on<T>(
+    conn: &Connection,
+    sql: &str,
+    params: &[SqlParam],
+    mapper: &mut impl FnMut(&dyn RowAccess) -> Result<T>,
+) -> Result<Vec<T>> {
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| MemoryError::Storage(e.to_string()))?;
@@ -191,32 +297,28 @@ pub(crate) fn sqlite_query_collect<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::VEXDB_LITE_EXTENSION_ENV;
+
+    fn vexdb_connection() -> Connection {
+        let path = std::env::var_os(VEXDB_LITE_EXTENSION_ENV)
+            .unwrap_or_else(|| panic!("set {VEXDB_LITE_EXTENSION_ENV} to run memme-core tests"));
+        let conn = Connection::open_in_memory().unwrap();
+        load_vexdb_lite(&conn, std::path::Path::new(&path)).unwrap();
+        conn
+    }
 
     #[test]
-    fn test_sqlite_vec_loads() {
-        // Verify sqlite-vec extension is available
-        unsafe {
-            #[allow(clippy::missing_transmute_annotations)]
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
-        let conn = Connection::open_in_memory().unwrap();
+    fn test_vexdb_lite_loads() {
+        let conn = vexdb_connection();
         let version: String = conn
-            .query_row("SELECT vec_version()", [], |row| row.get(0))
+            .query_row("SELECT vexdb_version()", [], |row| row.get(0))
             .unwrap();
         assert!(!version.is_empty());
     }
 
     #[test]
-    fn test_vec_distance_cosine() {
-        unsafe {
-            #[allow(clippy::missing_transmute_annotations)]
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
-        let conn = Connection::open_in_memory().unwrap();
+    fn test_vexdb_cosine_distance() {
+        let conn = vexdb_connection();
 
         // Identical vectors → distance 0
         let a: Vec<f32> = vec![1.0, 0.0, 0.0];
@@ -225,7 +327,7 @@ mod tests {
         let b_blob: &[u8] = bytemuck::cast_slice(&b);
         let dist: f64 = conn
             .query_row(
-                "SELECT vec_distance_cosine(?1, ?2)",
+                "SELECT vexdb_cosine_distance(?1, ?2)",
                 rusqlite::params![a_blob, b_blob],
                 |row| row.get(0),
             )
@@ -242,7 +344,7 @@ mod tests {
         let b_blob: &[u8] = bytemuck::cast_slice(&b);
         let dist: f64 = conn
             .query_row(
-                "SELECT vec_distance_cosine(?1, ?2)",
+                "SELECT vexdb_cosine_distance(?1, ?2)",
                 rusqlite::params![a_blob, b_blob],
                 |row| row.get(0),
             )
@@ -254,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vec0_knn_search() {
+    fn test_vexdb_knn_search() {
         use crate::config::MemoryConfig;
         use crate::storage::Storage;
 
@@ -297,7 +399,7 @@ mod tests {
 
         // Search for vectors close to [1, 0, 0] — should find m1 first, m2 second, m3 last
         let results = storage
-            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 3)
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, false, None, None, None, 3)
             .unwrap();
 
         assert_eq!(results.len(), 3);
@@ -320,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vec0_delete_sync() {
+    fn test_vexdb_delete_sync() {
         use crate::config::MemoryConfig;
         use crate::storage::Storage;
 
@@ -338,7 +440,7 @@ mod tests {
 
         // Verify it's searchable
         let results = storage
-            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5)
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, false, None, None, None, 5)
             .unwrap();
         assert_eq!(results.len(), 1);
 
@@ -347,7 +449,7 @@ mod tests {
 
         // Should no longer be found
         let results = storage
-            .vector_search(&[1.0, 0.0, 0.0], "alice", None, None, None, None, 5)
+            .vector_search(&[1.0, 0.0, 0.0], "alice", None, false, None, None, None, 5)
             .unwrap();
         assert_eq!(results.len(), 0);
     }

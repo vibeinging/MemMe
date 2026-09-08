@@ -141,11 +141,7 @@ impl super::MemoryStore {
 
     /// List all pinned memories for a user.
     pub fn list_pinned_traces(&self, user_id: &str) -> Result<Vec<MemoryResult>> {
-        self.list_traces(
-            ListOptions::new(user_id)
-                .pinned_only()
-                .limit(100),
-        )
+        self.list_traces(ListOptions::new(user_id).pinned_only().limit(100))
     }
 
     /// Recall old memories for nostalgia / proactive bubbles ("还记得那天...").
@@ -171,8 +167,15 @@ impl super::MemoryStore {
             crate::types::SqlParam::Float(min_importance as f64),
             crate::types::SqlParam::Int(limit as i64),
         ];
-        let rows = self.storage.backend.query_read(&sql, &params, crate::storage::query::map_memory_row)?;
-        Ok(rows.into_iter().map(super::helpers::row_to_result).collect())
+        let rows = self.storage.backend.query_read(
+            &sql,
+            &params,
+            crate::storage::query::map_memory_row,
+        )?;
+        Ok(rows
+            .into_iter()
+            .map(super::helpers::row_to_result)
+            .collect())
     }
 
     /// Get the approximate database size in bytes.

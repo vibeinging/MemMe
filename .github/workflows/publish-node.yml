@@ -24,8 +24,6 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +45,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: crates/memme-node
-        run: npm ci
+        # Platform packages do not exist until this workflow publishes them.
+        # Do not require unresolved optionalDependencies during the build phase.
+        run: npm install --ignore-scripts --omit=optional --no-package-lock
 
       # Cross-compilation setup for aarch64-unknown-linux-gnu
       - name: Install cross-compilation tools
@@ -67,7 +67,7 @@ jobs:
             export CXX=aarch64-linux-gnu-g++
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           fi
-          npx napi build --platform --release --target ${{ matrix.settings.target }} --manifest-path ../../Cargo.toml -p memme-node
+          npx napi build --platform --release --target ${{ matrix.settings.target }} --cargo-cwd . --js-package-name memme
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -93,7 +93,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: crates/memme-node
-        run: npm ci
+        run: npm install --ignore-scripts --omit=optional --no-package-lock
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -111,14 +111,27 @@ jobs:
       - name: Publish
         working-directory: crates/memme-node
         run: |
-          # Publish platform-specific packages first
-          for dir in npm/*/; do
-            if [ -d "$dir" ]; then
-              echo "Publishing $dir..."
-              npm publish "$dir" --access public --provenance
+          publish_if_needed() {
+            local dir="$1"
+            local name version
+            name="$(node -p "require('./${dir}/package.json').name")"
+            version="$(node -p "require('./${dir}/package.json').version")"
+            if [ "$(npm view "${name}@${version}" version 2>/dev/null)" = "${version}" ]; then
+              echo "${name}@${version} is already on npm — skipping."
+              return 0
             fi
+            npm publish "$dir" --access public --provenance
+          }
+          # Publish platform-specific packages first, then the main package.
+          # Versions already on npm are skipped, so re-pushing a release tag
+          # cannot fail on republishing.
+          for dir in \
+            npm/darwin-arm64 \
+            npm/darwin-x64 \
+            npm/linux-arm64-gnu \
+            npm/linux-x64-gnu; do
+            publish_if_needed "$dir"
           done
-          # Publish the main package
-          npm publish --access public --provenance
+          publish_if_needed "."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

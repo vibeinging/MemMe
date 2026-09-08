@@ -43,6 +43,15 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// A chat message with a stable caller-provided event ID for safe replay.
+#[napi(object)]
+pub struct IdentifiedChatMessage {
+    pub event_id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: Option<String>,
+}
+
 /// Entity in the knowledge graph.
 #[napi(object)]
 pub struct Entity {
@@ -206,6 +215,8 @@ pub struct MeditationRecord {
 pub struct AppendEventsResult {
     pub session_id: String,
     pub events_appended: u32,
+    pub events_replayed: u32,
+    pub embedding_pending: u32,
     pub total_unprocessed: u32,
     pub compact_needed: bool,
 }
@@ -411,6 +422,18 @@ fn create_llm(
     )))
 }
 
+fn open_core_store(
+    config: memme_core::config::MemoryConfig,
+    embedder: Arc<dyn memme_embeddings::Embedder>,
+    vexdb_extension_path: Option<String>,
+) -> Result<memme_core::memory::MemoryStore> {
+    let store = match vexdb_extension_path {
+        Some(path) => memme_core::memory::MemoryStore::new_with_vexdb_lite(config, embedder, path),
+        None => memme_core::memory::MemoryStore::new(config, embedder),
+    };
+    store.map_err(|e| Error::from_reason(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // MemoryStore
 // ---------------------------------------------------------------------------
@@ -428,14 +451,19 @@ impl MemoryStore {
     // -----------------------------------------------------------------------
 
     /// Create a new MemoryStore with mock embedder (for testing).
+    /// Pass a trusted VexDB-Lite extension path explicitly, or omit it to use
+    /// MEMME_VEXDB_LITE_EXTENSION.
     #[napi(factory)]
-    pub fn new_mock(db_path: Option<String>, dims: Option<u32>) -> Result<Self> {
+    pub fn new_mock(
+        db_path: Option<String>,
+        dims: Option<u32>,
+        vexdb_extension_path: Option<String>,
+    ) -> Result<Self> {
         let path = db_path.unwrap_or_else(|| ":memory:".to_string());
         let d = dims.unwrap_or(384) as usize;
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(d));
         let config = memme_core::config::MemoryConfig::new(&path, d);
-        let store = memme_core::memory::MemoryStore::new(config, embedder)
-            .map_err(|e| Error::from_reason(e.to_string()))?;
+        let store = open_core_store(config, embedder, vexdb_extension_path)?;
         Ok(Self {
             inner: Arc::new(store),
         })
@@ -449,15 +477,14 @@ impl MemoryStore {
         responses: Vec<String>,
         db_path: Option<String>,
         dims: Option<u32>,
+        vexdb_extension_path: Option<String>,
     ) -> Result<Self> {
         let path = db_path.unwrap_or_else(|| ":memory:".to_string());
         let d = dims.unwrap_or(384) as usize;
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(d));
         let config = memme_core::config::MemoryConfig::new(&path, d);
         let llm = Arc::new(ScriptedMockLlm::new(responses)) as Arc<dyn memme_llm::LlmProvider>;
-        let store = memme_core::memory::MemoryStore::new(config, embedder)
-            .map_err(|e| Error::from_reason(e.to_string()))?
-            .with_llm(llm);
+        let store = open_core_store(config, embedder, vexdb_extension_path)?.with_llm(llm);
         Ok(Self {
             inner: Arc::new(store),
         })
@@ -471,6 +498,7 @@ impl MemoryStore {
         base_url: Option<String>,
         model: Option<String>,
         dims: Option<u32>,
+        vexdb_extension_path: Option<String>,
     ) -> Result<Self> {
         let path = db_path.unwrap_or_else(|| ":memory:".to_string());
         let embed_url = base_url.ok_or_else(|| {
@@ -492,11 +520,11 @@ impl MemoryStore {
             embedder.dimensions()
         };
         let config = memme_core::config::MemoryConfig::new(&path, final_dims);
-        let store = memme_core::memory::MemoryStore::new(
+        let store = open_core_store(
             config,
             Arc::new(embedder) as Arc<dyn memme_embeddings::Embedder>,
-        )
-        .map_err(|e| Error::from_reason(e.to_string()))?;
+            vexdb_extension_path,
+        )?;
         Ok(Self {
             inner: Arc::new(store),
         })
@@ -842,12 +870,59 @@ impl MemoryStore {
             Ok(AppendEventsResult {
                 session_id: r.session_id,
                 events_appended: r.events_appended as u32,
+                events_replayed: r.events_replayed as u32,
+                embedding_pending: r.embedding_pending as u32,
                 total_unprocessed: r.total_unprocessed as u32,
                 compact_needed: r.compact_needed,
             })
         })
         .await
         .map_err(|e| Error::from_reason(e.to_string()))?
+    }
+
+    /// Append events with stable IDs. Exact replays are accepted; conflicting
+    /// reuse of an ID is rejected.
+    #[napi]
+    pub async fn append_events_idempotent(
+        &self,
+        session_id: String,
+        messages: Vec<IdentifiedChatMessage>,
+        user_id: String,
+        metadata: Option<String>,
+    ) -> Result<AppendEventsResult> {
+        let store = self.inner.clone();
+        let meta = metadata
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|error| Error::from_reason(format!("Invalid JSON: {error}")))?;
+        let messages: Vec<memme_core::types::IdentifiedChatMessage> = messages
+            .into_iter()
+            .map(|message| memme_core::types::IdentifiedChatMessage {
+                event_id: message.event_id,
+                message: memme_core::types::ChatMessage {
+                    role: message.role,
+                    content: message.content,
+                    image_url: None,
+                    image_type: None,
+                    timestamp: message.timestamp,
+                },
+            })
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            let result = store
+                .append_events_idempotent(&session_id, &messages, &user_id, meta)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            Ok(AppendEventsResult {
+                session_id: result.session_id,
+                events_appended: result.events_appended as u32,
+                events_replayed: result.events_replayed as u32,
+                embedding_pending: result.embedding_pending as u32,
+                total_unprocessed: result.total_unprocessed as u32,
+                compact_needed: result.compact_needed,
+            })
+        })
+        .await
+        .map_err(|error| Error::from_reason(error.to_string()))?
     }
 
     /// Compact a session: extract memories + create episode from unprocessed events.

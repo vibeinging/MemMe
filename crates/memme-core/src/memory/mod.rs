@@ -86,7 +86,9 @@ enum DeferredWrite {
 ///
 /// let config = MemoryConfig::new(":memory:", 384);
 /// let embedder = Arc::new(MockEmbedder::new(384));
-/// let store = MemoryStore::new(config, embedder).unwrap();
+/// let extension_path = std::env::var_os("MEMME_VEXDB_LITE_EXTENSION")
+///     .expect("set MEMME_VEXDB_LITE_EXTENSION to a trusted VexDB-Lite library");
+/// let store = MemoryStore::new_with_vexdb_lite(config, embedder, extension_path).unwrap();
 /// ```
 ///
 /// # Thread safety
@@ -120,11 +122,34 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Create a new MemoryStore, opening (or creating) the SQLite database
-    /// and initializing the schema.
+    /// Create a new MemoryStore backed by VexDB-Lite SQLite.
+    ///
+    /// The extension path is read from `MEMME_VEXDB_LITE_EXTENSION`. Use
+    /// [`Self::new_with_vexdb_lite`] when the caller already has an explicit
+    /// trusted path.
     pub fn new(config: MemoryConfig, embedder: Arc<dyn Embedder>) -> Result<Self> {
         let storage = Storage::open(config.clone())?;
-        info!(db_path = %config.db_path, collection = %config.collection_name, "MemoryStore initialized (SQLite)");
+        info!(db_path = %config.db_path, collection = %config.collection_name, "MemoryStore initialized (VexDB-Lite SQLite)");
+        Self::from_storage(storage, config, embedder)
+    }
+
+    /// Create a new store with an explicit VexDB-Lite SQLite extension path.
+    ///
+    /// The path must point to a trusted, platform-native `.dylib`, `.so`, or
+    /// `.dll` whose architecture matches the current process.
+    pub fn new_with_vexdb_lite(
+        config: MemoryConfig,
+        embedder: Arc<dyn Embedder>,
+        extension_path: impl AsRef<std::path::Path>,
+    ) -> Result<Self> {
+        let extension_path = extension_path.as_ref();
+        let storage = Storage::open_with_vexdb_lite(config.clone(), extension_path)?;
+        info!(
+            db_path = %config.db_path,
+            collection = %config.collection_name,
+            extension_path = %extension_path.display(),
+            "MemoryStore initialized (VexDB-Lite SQLite)"
+        );
         Self::from_storage(storage, config, embedder)
     }
 
@@ -181,36 +206,68 @@ impl MemoryStore {
         &self,
         new_id: &str,
         new_content: &str,
-        _new_embedding: &[f32],
+        new_embedding: &[f32],
         user_id: &str,
+        agent_id: Option<&str>,
     ) {
-        // Step 1: Entity-first — find memories sharing entities (SQL, ~1ms)
-        let neighbors = match self.storage.entity_neighbor_memories(new_id, user_id, 20) {
-            Ok(n) => n,
-            Err(_) => return,
-        };
+        let mut candidates = Vec::new();
 
-        if neighbors.is_empty() {
-            return;
+        // Entity-linked memories remain the broad path when graph data exists.
+        if self.config.enable_graph {
+            if let Ok(neighbors) = self
+                .storage
+                .entity_neighbor_memories(new_id, user_id, agent_id, 20)
+            {
+                candidates.extend(neighbors.into_iter().map(|neighbor| {
+                    (
+                        neighbor.memory_id,
+                        neighbor.content,
+                        Some(neighbor.shared_entities),
+                    )
+                }));
+            }
         }
 
-        // Step 2: Rule-based contradiction check on entity-neighbor candidates
-        for neighbor in &neighbors {
-            let cr = crate::contradiction::detect_contradiction(
-                &neighbor.content,
-                new_content,
-                true,
-            );
+        // Explicit corrections also work without graph/LLM setup. The marker
+        // gate makes this extra KNN lookup rare and avoids treating ordinary
+        // similar facts as replacements.
+        if crate::contradiction::has_explicit_override_marker(new_content) {
+            if let Ok(rows) = self.storage.vector_search(
+                new_embedding,
+                user_id,
+                agent_id,
+                false,
+                None,
+                None,
+                None,
+                20,
+            ) {
+                for row in rows {
+                    if row.id == new_id
+                        || row.agent_id.as_deref() != agent_id
+                        || row.score.is_some_and(|distance| distance > 0.45)
+                    {
+                        continue;
+                    }
+                    if !candidates.iter().any(|(id, _, _)| id == &row.id) {
+                        candidates.push((row.id, row.content, None));
+                    }
+                }
+            }
+        }
+
+        for (old_id, old_content, shared_entities) in candidates {
+            let cr = crate::contradiction::detect_contradiction(&old_content, new_content, true);
             if cr.is_contradiction {
                 debug!(
-                    old_id = %neighbor.memory_id,
+                    old_id = %old_id,
                     new_id = %new_id,
                     score = cr.score,
-                    shared_entities = neighbor.shared_entities,
+                    shared_entities = ?shared_entities,
                     signals = ?cr.signals,
-                    "Contradiction detected (entity+rule) — marking superseded"
+                    "Contradiction detected — marking superseded"
                 );
-                let _ = self.storage.mark_superseded(&neighbor.memory_id, new_id);
+                let _ = self.storage.mark_superseded(&old_id, new_id);
             }
         }
     }
@@ -289,28 +346,35 @@ impl MemoryStore {
         self.reranker = Some(reranker);
     }
 
-    /// Persist LLM config to the database (for auto-restore on next open).
-    /// Does NOT create or change the current LLM provider.
-    pub fn save_llm_config(&self, api_key: &str, model: &str, base_url: &str) -> Result<()> {
-        self.storage.set_config("llm_api_key", api_key)?;
-        self.storage.set_config("llm_model", model)?;
-        self.storage.set_config("llm_base_url", base_url)?;
-        Ok(())
+    /// Persist the non-secret LLM endpoint config to the database.
+    ///
+    /// The API key is intentionally not persisted. Provide it again through
+    /// `LLM_API_KEY` or `MEMME_LLM_API_KEY` after restart.
+    /// This method does not create or change the current LLM provider.
+    pub fn save_llm_config(&self, _api_key: &str, model: &str, base_url: &str) -> Result<()> {
+        self.storage.save_llm_config(model, base_url)
     }
 
-    /// Read persisted LLM config from DB / env vars. Returns `(api_key, model, base_url)`.
+    /// Read the persisted, non-secret LLM settings.
+    pub fn load_persisted_llm_config(&self) -> Result<Option<(String, String)>> {
+        let model = self.storage.get_config("llm_model")?;
+        let base_url = self.storage.get_config("llm_base_url")?;
+        match (model, base_url) {
+            (None, None) => Ok(None),
+            (Some(model), Some(base_url)) => Ok(Some((model, base_url))),
+            _ => Err(MemoryError::Config(
+                "persisted LLM configuration is incomplete".to_string(),
+            )),
+        }
+    }
+
+    /// Read the LLM key from the environment and endpoint config from SQLite.
+    /// Returns `(api_key, model, base_url)`.
     pub fn load_llm_config(&self) -> Option<(String, String, String)> {
-        let api_key = std::env::var("MEMME_LLM_API_KEY")
+        let api_key = std::env::var("LLM_API_KEY")
             .ok()
-            .or_else(|| std::env::var("MEMME_API_KEY").ok())
-            .or_else(|| self.storage.get_config("llm_api_key").ok().flatten())?;
-        let model = self
-            .storage
-            .get_config("llm_model")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let base_url = self.storage.get_config("llm_base_url").ok().flatten()?;
+            .or_else(|| std::env::var("MEMME_LLM_API_KEY").ok())?;
+        let (model, base_url) = self.load_persisted_llm_config().ok()??;
         Some((api_key, model, base_url))
     }
 
@@ -553,11 +617,15 @@ impl MemoryStore {
                     .get_trace(&id)?
                     .ok_or_else(|| MemoryError::NotFound(id.clone()))?;
 
-                // Contradiction detection: multi-dimensional approach.
-                // Entity-first: find memories sharing entities, then rule-based check.
-                if self.config.enable_graph {
-                    self.detect_contradictions_multi(&id, content, &embedding, &options.user_id);
-                }
+                // Reconcile explicit corrections even without graph/LLM setup;
+                // graph-linked contradictions remain available when enabled.
+                self.detect_contradictions_multi(
+                    &id,
+                    content,
+                    &embedding,
+                    &options.user_id,
+                    options.agent_id.as_deref(),
+                );
 
                 // Auto-prune if enabled and over limit
                 if self.config.tuning.auto_prune {
@@ -708,12 +776,13 @@ impl MemoryStore {
                     }
 
                     // Contradiction detection in batch path
-                    if self.config.enable_graph {
-                        self.detect_contradictions_multi(
-                            &id, content, embedding, &options.user_id,
-                        );
-                    }
-
+                    self.detect_contradictions_multi(
+                        &id,
+                        content,
+                        embedding,
+                        &options.user_id,
+                        options.agent_id.as_deref(),
+                    );
 
                     let history_id = Uuid::new_v4().to_string();
                     let _ = self.storage.record_history(
@@ -900,7 +969,7 @@ impl MemoryStore {
     ///
     /// Removes memories, events, sessions, episodes, entities, relationships,
     /// identity traits, history, meditations, recalls, procedures, and
-    /// corresponding entries in vec0 and FTS indexes.
+    /// corresponding entries in VexDB-Lite and FTS indexes.
     pub fn delete_user_data(&self, user_id: &str) -> Result<()> {
         self.flush_deferred_writes();
         self.storage.delete_user_data(user_id)?;

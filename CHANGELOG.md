@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-01
+
+npm `@wjmwjmwb/memme@0.1.2` (macOS / Linux) was published from this source
+line. PyPI and crates.io remain on `0.1.1` until registry credentials are
+refreshed; both publish workflows run manually.
+
 ### Changed
 
 - **SQLite migration**: Replaced DuckDB with SQLite as the sole storage backend. Single-file `.db` format, smaller binary, broader platform compatibility. All APIs remain unchanged.

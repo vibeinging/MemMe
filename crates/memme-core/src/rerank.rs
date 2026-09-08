@@ -414,23 +414,26 @@ impl OnnxReranker {
     /// If model initialization fails, the reranker degrades gracefully to NoOp behavior.
     pub fn new(model_name: &str, top_n: usize) -> Self {
         // Auto-detect CoreML on Apple Silicon for hardware acceleration.
-        let mut options = fastembed::RerankInitOptions::default();
+        #[cfg(not(feature = "onnx-rerank-coreml"))]
+        let options = fastembed::RerankInitOptions::default();
 
         #[cfg(feature = "onnx-rerank-coreml")]
-        {
+        let options = {
+            let mut options = fastembed::RerankInitOptions::default();
             let coreml_ep = ort::execution_providers::CoreMLExecutionProvider::default().build();
-            options = options.with_execution_providers(vec![coreml_ep]);
             tracing::info!("OnnxReranker: CoreML execution provider enabled");
-        }
+            options.execution_providers = vec![coreml_ep];
+            options
+        };
 
         let model = fastembed::TextRerank::try_new(options)
             .map_err(|e| format!("Failed to load rerank model '{}': {}", model_name, e));
 
-        if model.is_err() {
+        if let Err(error) = &model {
             tracing::warn!(
                 "OnnxReranker: model '{}' not available, falling back to NoOp. Error: {}",
                 model_name,
-                model.as_ref().unwrap_err()
+                error
             );
         }
 
@@ -489,7 +492,7 @@ impl Reranker for OnnxReranker {
                 let idx = rr.index;
                 if idx < results.len() {
                     let mut mem = results[idx].clone();
-                    mem.score = Some(rr.score as f32);
+                    mem.score = Some(rr.score);
                     Some(mem)
                 } else {
                     None

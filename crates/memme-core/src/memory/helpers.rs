@@ -196,8 +196,8 @@ pub(crate) fn compute_retention_with_type(
     let c = match resolution {
         Some(crate::types::Resolution::Identity) => 10.0, // very slow: core traits
         Some(crate::types::Resolution::Granular) => 5.0,  // normal: facts
-        Some(crate::types::Resolution::Narrative) => 3.0,  // faster: summaries
-        None => 5.0,                                        // default
+        Some(crate::types::Resolution::Narrative) => 3.0, // faster: summaries
+        None => 5.0,                                      // default
     };
     let retention = (1.0 + days_elapsed / (c * s)).powf(-0.5);
     retention.clamp(0.0, 1.0)

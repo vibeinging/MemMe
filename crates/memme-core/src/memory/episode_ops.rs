@@ -149,7 +149,8 @@ impl super::MemoryStore {
         if paged_ids.is_empty() {
             return Ok(Vec::new());
         }
-        self.storage.get_events_by_ids(&paged_ids)
+        self.storage
+            .get_events_by_ids_for_user(&paged_ids, &ep.user_id)
     }
 
     /// Search episode messages by semantic similarity.
@@ -167,7 +168,9 @@ impl super::MemoryStore {
             return Ok(Vec::new());
         }
         // Get all events, batch-embed them, then rank by similarity to query
-        let all_events = self.storage.get_events_by_ids(&ep.event_ids)?;
+        let all_events = self
+            .storage
+            .get_events_by_ids_for_user(&ep.event_ids, &ep.user_id)?;
         if all_events.is_empty() {
             return Ok(Vec::new());
         }

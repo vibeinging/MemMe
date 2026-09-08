@@ -30,6 +30,17 @@ pub enum MemoryError {
     #[error("LLM error: {0}")]
     Llm(String),
 
+    /// A database restore failed and the previous primary could not be put
+    /// back into a verified, openable state. The process must stop so SQLite
+    /// cannot create a new empty database at the primary path.
+    #[error(
+        "Database restore rollback failed; manual recovery is required from '{rollback_path}': {message}"
+    )]
+    RollbackFailed {
+        rollback_path: String,
+        message: String,
+    },
+
     /// Attempted to modify or delete a memory marked as immutable.
     #[error("Memory is immutable and cannot be modified or deleted: {0}")]
     ImmutableMemory(String),

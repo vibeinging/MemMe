@@ -3,6 +3,46 @@ use std::collections::HashMap;
 use crate::tokenizer::Tokenizer;
 use crate::types::{Episode, Event, MemoryResult};
 
+/// Rank candidates that contain a distinctive identifier from the query.
+///
+/// This deliberately targets tokens containing an ASCII digit (IDs, ticket
+/// numbers, dates with separators). It does not affect ordinary natural-language
+/// queries. The returned list is used as one additional RRF confirmation so a
+/// precise FTS hit is not drowned out by several weak semantic channels.
+pub(crate) fn distinctive_identifier_rank(
+    query: &str,
+    candidates: &[MemoryResult],
+) -> Vec<MemoryResult> {
+    let identifiers = query
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|ch: char| {
+                !(ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/'))
+            })
+        })
+        .filter(|token| token.len() >= 4 && token.bytes().any(|byte| byte.is_ascii_digit()))
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+
+    if identifiers.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranked = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let content = candidate.content.to_lowercase();
+            let matches = identifiers
+                .iter()
+                .filter(|identifier| content.contains(identifier.as_str()))
+                .count();
+            (matches > 0).then(|| (matches, candidate.clone()))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    ranked.into_iter().map(|(_, candidate)| candidate).collect()
+}
+
 /// Compute confidence score for a search channel based on its score distribution.
 ///
 /// Confidence = mean(top_k_similarities) / (1 + stddev). Higher values indicate
@@ -247,6 +287,26 @@ pub fn rrf_fuse_events(ranked_lists: &[(&[Event], f64)], k: usize, limit: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_distinctive_identifier_rank() {
+        let candidates = vec![
+            MemoryResult {
+                id: "generic".to_string(),
+                content: "PETFACT-000223 shared memory".to_string(),
+                ..Default::default()
+            },
+            MemoryResult {
+                id: "exact".to_string(),
+                content: "PETFACT-001531 shared memory".to_string(),
+                ..Default::default()
+            },
+        ];
+        let ranked = distinctive_identifier_rank("PETFACT-001531 shared memory", &candidates);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].id, "exact");
+        assert!(distinctive_identifier_rank("shared memory", &candidates).is_empty());
+    }
 
     fn make_result(id: &str, content: &str) -> MemoryResult {
         MemoryResult {

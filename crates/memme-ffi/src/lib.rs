@@ -3,6 +3,9 @@
 //! This crate does NOT embed an HTTP client. Instead it exposes an `HttpClient`
 //! callback interface that the host app implements (e.g. URLSession on iOS,
 //! OkHttp on Android). This keeps reqwest/tokio out of the FFI binary.
+//!
+//! Mobile store construction is intentionally blocked until VexDB-Lite is
+//! statically registered against the same SQLite instance used by MemMe.
 
 uniffi::setup_scaffolding!();
 
@@ -357,14 +360,21 @@ impl From<memme_core::error::MemoryError> for MemmeError {
     }
 }
 
+fn mobile_vexdb_unavailable() -> MemmeError {
+    MemmeError::Runtime {
+        msg: "MemMe mobile bindings are not available yet: VexDB-Lite static registration is required"
+            .to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main object
 // ---------------------------------------------------------------------------
 
 /// The main MemMe memory store, exposed as a UniFFI Object.
 ///
-/// For iOS / Android, create with `new_with_http_client` and supply a native
-/// HTTP client (URLSession / OkHttp). For testing, use `new_mock`.
+/// iOS and Android construction currently returns a clear error until
+/// VexDB-Lite static registration is integrated into the mobile package.
 #[derive(uniffi::Object)]
 pub struct MemoryStore {
     inner: Mutex<memme_core::memory::MemoryStore>,
@@ -379,6 +389,9 @@ impl MemoryStore {
     /// Create a MemoryStore with a mock embedder (useful for testing, no API needed).
     #[uniffi::constructor]
     pub fn new_mock(db_path: String, dims: u32) -> Result<Arc<Self>, MemmeError> {
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            return Err(mobile_vexdb_unavailable());
+        }
         let embedder = Arc::new(memme_embeddings::mock::MockEmbedder::new(dims as usize));
         let config = memme_core::config::MemoryConfig::new(&db_path, dims as usize);
         let store = memme_core::memory::MemoryStore::new(config, embedder)?;
@@ -404,6 +417,9 @@ impl MemoryStore {
         embedding_dims: Option<u32>,
         llm_base_url: Option<String>,
     ) -> Result<Arc<Self>, MemmeError> {
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            return Err(mobile_vexdb_unavailable());
+        }
         let http_arc: Arc<dyn HttpClient> = Arc::from(http_client);
         let base_url = llm_base_url.ok_or(MemmeError::Runtime { msg: "llm_base_url required (full endpoint URL, e.g. https://api.openai.com/v1/chat/completions)".to_string() })?;
 

@@ -14,6 +14,9 @@ pub struct Source {
     pub registered_at: String,
     /// Arbitrary JSON metadata about this source.
     pub metadata: Option<serde_json::Value>,
+    /// Owner of this source. Older exports may omit this field.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// Type of event in the stream layer.
@@ -84,6 +87,15 @@ pub struct Event {
     pub metadata: Option<serde_json::Value>,
     /// Owner of this event.
     pub user_id: String,
+    /// Agent scope copied out of metadata for strict isolation.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Application scope copied out of metadata for strict isolation.
+    #[serde(default)]
+    pub app_id: Option<String>,
+    /// Run scope copied out of metadata for strict isolation.
+    #[serde(default)]
+    pub run_id: Option<String>,
     /// Whether this event has been processed by compact().
     pub processed: bool,
     /// When this event was processed (ISO 8601).

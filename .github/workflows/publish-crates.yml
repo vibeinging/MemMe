@@ -1,9 +1,10 @@
 name: Publish to crates.io
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Manual only: crates.io tokens are rotated per release and the publish
+  # order matters (memme-embeddings → memme-llm → memme-core). Run this
+  # from the Actions tab after a release tag exists.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,6 +34,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -p memme-core -p memme-embeddings -p memme-llm -- -D warnings
+
+      - name: Download and verify VexDB-Lite SQLite extension
+        run: bash scripts/download-vexdb-lite-extension.sh
 
       - name: Tests
         run: cargo test -p memme-core -p memme-embeddings -p memme-llm

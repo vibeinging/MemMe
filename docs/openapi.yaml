@@ -3,8 +3,9 @@ info:
   title: MemMe REST API
   description: |
     Self-hosted REST API for the MemMe AI memory engine.
-    All data is stored in a local SQLite file. Your memories never leave your device.
-  version: 0.1.0
+    Data is stored in one local SQLite file. Text is sent outside the device only
+    when you configure a remote embedding or LLM provider.
+  version: 0.1.2
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -89,22 +90,49 @@ components:
               format: float
               nullable: true
 
-    SmartAddResult:
+    IdentifiedChatMessage:
+      type: object
+      required: [event_id, role, content]
+      properties:
+        event_id:
+          type: string
+          description: Stable caller-generated ID used to make retries idempotent.
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        image_url:
+          type: string
+          nullable: true
+          deprecated: true
+          description: Not stored yet. Requests containing this field are rejected with 400.
+        image_type:
+          type: string
+          nullable: true
+          deprecated: true
+          description: Not stored yet. Requests containing this field are rejected with 400.
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+
+    AppendEventsResult:
       type: object
       properties:
-        memories:
-          type: array
-          items:
-            $ref: '#/components/schemas/Memory'
-        graph:
-          $ref: '#/components/schemas/GraphResult'
-          nullable: true
-        episode_id:
-          type: string
-          nullable: true
         session_id:
           type: string
-          nullable: true
+        events_appended:
+          type: integer
+        events_replayed:
+          type: integer
+        embedding_pending:
+          type: integer
+          description: Events stored without vectors. Replay the same event IDs to retry backfill.
+        total_unprocessed:
+          type: integer
+        compact_needed:
+          type: boolean
 
     GraphResult:
       type: object
@@ -190,6 +218,20 @@ paths:
                     type: string
                     example: ok
 
+  /diagnose:
+    get:
+      summary: Diagnose storage, embedding, and LLM connectivity
+      description: |
+        Runs real provider checks and may consume embedding or LLM quota.
+        When MEMME_API_KEY is set, this endpoint requires the Bearer token.
+        Only /health remains public.
+      tags: [System]
+      responses:
+        '200':
+          description: Diagnostic report
+        '401':
+          description: Missing or invalid Bearer token
+
   /v1/config:
     get:
       summary: Get current configuration
@@ -222,19 +264,25 @@ paths:
           application/json:
             schema:
               type: object
-              required: [api_key]
+              required: [api_key, base_url]
               properties:
                 api_key:
                   type: string
+                  description: Used in memory only. It is not stored in SQLite.
                 model:
                   type: string
-                  default: gpt-4o-mini
+                  default: gpt-4.1-nano
                 base_url:
                   type: string
-                  default: https://api.openai.com
+                  description: |
+                    Full chat-completions endpoint URL. HTTPS and a public destination
+                    are required unless the hostname is explicitly listed in
+                    MEMME_LLM_ALLOWED_HOSTS by the server operator.
       responses:
         '200':
           description: LLM configured
+        '400':
+          description: Invalid or unsafe LLM endpoint
 
   /v1/memories:
     post:
@@ -522,7 +570,7 @@ paths:
                   description: Filter by user (optional, exports all if not set)
       responses:
         '200':
-          description: Full export including memories, entities, relationships
+          description: Memory records only. local_only records are omitted.
 
   /v1/memories/import:
     post:
@@ -547,32 +595,114 @@ paths:
         '200':
           description: Import result with count
 
-  /v1/memories/smart:
+  /v1/data/export:
     post:
-      summary: Smart add (LLM-powered)
-      description: Extract facts from text using LLM, deduplicate, and store as memories. Requires LLM configured.
-      tags: [Smart]
+      summary: Export all data for one user
+      description: |
+        Exports memories (including local_only records), sessions, events,
+        episodes, graph entities and relations, identity traits, sources,
+        mutation history, procedures, meditation and recall records,
+        memory-entity links, and cross-layer associations. The version 3 format
+        includes authoritative lifecycle, correction, scope, and sync fields.
+        No list-endpoint pagination limit is applied.
+      tags: [Data Safety]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [text, user_id]
+              required: [user_id]
               properties:
-                text:
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: Full portable user export
+        '400':
+          description: Missing or empty user_id
+
+  /v1/data/import:
+    post:
+      summary: Import a full export
+      description: |
+        Accepts only full export version 3.0 for the target collection. It validates
+        owner, session, episode, replacement, and pet scope references before commit.
+        All layers and rebuilt indexes are committed in one SQLite transaction; any
+        conflict rolls the whole import back. The target must not already contain any
+        imported primary-key ID. Admission happens before the JSON body is read, the
+        body limit is 32 MiB, imports are limited to 50,000 records and 128 MiB of
+        generated embedding vectors, and only one full import runs at a time. Use a
+        validated SQLite backup for larger moves or database replacement.
+      tags: [Data Safety]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm, export]
+              properties:
+                confirm:
+                  type: string
+                  const: import-full-export
+                export:
+                  type: object
+                  description: Full export returned by POST /v1/data/export.
+      responses:
+        '200':
+          description: Import counts for each data layer
+        '400':
+          description: Invalid confirmation or export
+        '413':
+          description: Request body exceeds 32 MiB
+        '422':
+          description: Request body is not valid JSON for this endpoint
+        '503':
+          description: Another full import is already running
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+
+  /v1/events:
+    post:
+      summary: Append conversation events safely
+      description: |
+        Stores raw messages immediately. Retrying the same event_id with the same
+        payload is safe. Reusing an event_id with different data returns 400. If the
+        embedding provider is temporarily unavailable, the raw event remains stored,
+        embedding_pending is non-zero, and replaying the same ID retries vector backfill.
+      tags: [Events]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, user_id, messages]
+              properties:
+                session_id:
                   type: string
                 user_id:
                   type: string
                 agent_id:
                   type: string
+                  description: Stable pet or companion ID. Recommended for pet integrations.
+                app_id:
+                  type: string
                 run_id:
                   type: string
                 metadata:
                   type: object
+                messages:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/IdentifiedChatMessage'
       responses:
         '200':
-          description: Extracted memories
+          description: Append or replay result
           content:
             application/json:
               schema:
@@ -581,44 +711,123 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/SmartAddResult'
+                        $ref: '#/components/schemas/AppendEventsResult'
+        '400':
+          description: Invalid scope, unsupported image input, session ownership conflict, duplicate request IDs, or conflicting event payload
+        '422':
+          description: Request body is not valid JSON for this endpoint
 
-  /v1/memories/smart/messages:
+  /v1/sessions/{session_id}/compact:
     post:
-      summary: Smart add from conversation
-      description: Append chat messages to a session, compact into episode, extract memories.
-      tags: [Smart]
+      summary: Compact one session into an episode
+      description: Requires an LLM provider. Run this after a conversation ends.
+      tags: [Events]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Compact result
+        '400':
+          description: Session not found or LLM is not configured
+
+  /v1/meditations:
+    post:
+      summary: Extract and reconcile durable memories
+      description: Requires an LLM provider.
+      tags: [Events]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [messages, user_id]
+              required: [user_id]
               properties:
-                messages:
-                  type: array
-                  items:
-                    type: object
-                    required: [role, content]
-                    properties:
-                      role:
-                        type: string
-                        enum: [user, assistant, system]
-                      content:
-                        type: string
                 user_id:
                   type: string
-                agent_id:
+                triggered_by:
                   type: string
-                run_id:
+                  default: rest_api
+                since:
                   type: string
-                  description: Used as session_id
-                metadata:
-                  type: object
+                  format: date-time
       responses:
         '200':
-          description: Compacted episode with extracted memories
+          description: Meditation result
+        '400':
+          description: Invalid request or LLM is not configured
+
+  /v1/backups:
+    post:
+      summary: Create a SQLite backup
+      description: The file is created under the configured MEMME_BACKUP_DIR only.
+      tags: [Data Safety]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+                  description: Plain filename ending in .db. A safe name is generated when omitted.
+      responses:
+        '200':
+          description: Backup metadata
+        '400':
+          description: Invalid filename or backup failed
+
+  /v1/backups/restore:
+    post:
+      summary: Restore a SQLite backup and restart the REST server
+      description: |
+        Only files inside MEMME_BACKUP_DIR can be restored. The backup is
+        checked for SQLite integrity and required MemMe tables before it is
+        accepted. Active requests finish, the database is restored, and the
+        server starts again on the same address.
+      tags: [Data Safety]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, confirm]
+              properties:
+                filename:
+                  type: string
+                  description: Plain filename ending in .db inside MEMME_BACKUP_DIR.
+                confirm:
+                  type: string
+                  description: Must be restore:<filename>.
+      responses:
+        '202':
+          description: Restore accepted; the server is restarting
+        '400':
+          description: Invalid confirmation, filename, or backup database
+        '409':
+          description: Another restore is already pending
+
+  /v1/replica/status:
+    get:
+      summary: Get primary and replica status
+      tags: [Data Safety]
+      responses:
+        '200':
+          description: Replica status
+
+  /v1/replica/sync:
+    post:
+      summary: Sync the primary SQLite file to its replica
+      tags: [Data Safety]
+      responses:
+        '200':
+          description: Replica sync result
 
   /v1/graph:
     post:
@@ -691,34 +900,26 @@ paths:
                   type: string
                 user_id:
                   type: string
+                agent_id:
+                  type: string
+                  description: Stable pet ID. Use this to prevent memories from different pets mixing.
+                app_id:
+                  type: string
+                run_id:
+                  type: string
                 limit:
                   type: integer
                   default: 10
+                threshold:
+                  type: number
+                  format: float
+                fields:
+                  type: array
+                  items:
+                    type: string
       responses:
         '200':
           description: Recall results with recall_id
-
-  /v1/recall/{recall_id}/feedback:
-    post:
-      summary: Submit recall feedback (deprecated)
-      tags: [Search]
-      parameters:
-        - name: recall_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                feedback:
-                  type: string
-      responses:
-        '200':
-          description: Feedback accepted (no-op)
 
   /v1/users/{user_id}/stats:
     get:
@@ -742,6 +943,33 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/UserStats'
+
+  /v1/users/{user_id}:
+    delete:
+      summary: Delete every data layer for one user
+      tags: [Data Safety]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_user_id]
+              properties:
+                confirm_user_id:
+                  type: string
+                  description: Must exactly match user_id in the path.
+      responses:
+        '200':
+          description: User data deleted across all data layers
+        '400':
+          description: Confirmation mismatch or deletion failure
 
   /v1/users/{user_id}/frequency:
     get:
@@ -796,8 +1024,10 @@ tags:
     description: CRUD operations on memories
   - name: Search
     description: Semantic and hybrid search
-  - name: Smart
-    description: LLM-powered memory extraction
+  - name: Events
+    description: Durable conversation ingestion and memory lifecycle
+  - name: Data Safety
+    description: Full data portability, user deletion, SQLite backups, restore, and replica management
   - name: Graph
     description: Knowledge graph operations
   - name: Analytics

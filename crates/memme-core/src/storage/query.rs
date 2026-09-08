@@ -6,23 +6,41 @@ use super::{EntityNeighborRow, MemoryRow, Storage};
 
 // ── FTS query sanitization ──
 
-/// Sanitize a query string for FTS5 MATCH: remove special characters that
-/// cause syntax errors (?, *, ^, ", :, etc.) while preserving OR keywords
-/// for graph-expanded queries.
+/// Build a safe FTS5 MATCH expression.
+///
+/// Every user term is quoted so punctuation such as `-` cannot become an FTS5
+/// operator. The internally generated `OR` token is preserved for graph query
+/// expansion.
 fn sanitize_fts_query(query: &str) -> String {
-    let mut result = String::with_capacity(query.len());
-    for ch in query.chars() {
-        match ch {
-            // FTS5 special chars that cause syntax errors
-            '?' | '*' | '^' | '"' | ':' | '{' | '}' | '(' | ')' | '!' | '~' => {
-                result.push(' ');
-            }
-            _ => result.push(ch),
+    let mut terms = Vec::new();
+    for raw in query.split_whitespace() {
+        if raw == "OR" {
+            continue;
         }
+
+        let cleaned = raw.trim_matches(|ch: char| ch.is_control());
+        if cleaned.is_empty() {
+            continue;
+        }
+        terms.push(format!("\"{}\"", cleaned.replace('"', "\"\"")));
     }
-    // Collapse multiple spaces
-    let parts: Vec<&str> = result.split_whitespace().collect();
-    parts.join(" ")
+    // FTS is a recall channel. Use OR for broad candidate generation; vector,
+    // word-overlap, and RRF decide the final order.
+    terms.join(" OR ")
+}
+
+/// SQL predicate shared by every memory recall channel.
+///
+/// Source rows stay available for history and audit, but only currently valid
+/// rows may enter search fusion.
+pub(crate) fn active_memory_condition(prefix: &str) -> String {
+    format!(
+        "{prefix}superseded_by IS NULL \
+         AND ({prefix}expiration_date IS NULL \
+              OR datetime({prefix}expiration_date) > datetime('now')) \
+         AND ({prefix}valid_until IS NULL \
+              OR datetime({prefix}valid_until) > datetime('now'))"
+    )
 }
 
 // ── Unified memory column definitions ──
@@ -89,6 +107,7 @@ pub(crate) fn map_memory_row(row: &dyn RowAccess) -> Result<MemoryRow> {
 impl Storage {
     // ── List ──
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn list_memories(
         &self,
         user_id: &str,
@@ -174,9 +193,28 @@ impl Storage {
         &self,
         memory_id: &str,
         user_id: &str,
+        agent_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<EntityNeighborRow>> {
-        let collection = &self.config.collection_name;
+        let active = active_memory_condition("m.");
+        let (agent_scope, params) = if let Some(agent_id) = agent_id {
+            (
+                "m.agent_id = $3",
+                vec![
+                    SqlParam::Text(memory_id.to_string()),
+                    SqlParam::Text(user_id.to_string()),
+                    SqlParam::Text(agent_id.to_string()),
+                ],
+            )
+        } else {
+            (
+                "m.agent_id IS NULL",
+                vec![
+                    SqlParam::Text(memory_id.to_string()),
+                    SqlParam::Text(user_id.to_string()),
+                ],
+            )
+        };
         let sql = format!(
             "SELECT me2.memory_id, m.content, \
                     COUNT(DISTINCT me2.entity_name) as shared_entities \
@@ -186,27 +224,21 @@ impl Storage {
              JOIN memories m ON m.id = me2.memory_id \
              WHERE me1.memory_id = $1 \
                AND m.user_id = $2 \
-               AND m.superseded_by IS NULL \
+               AND {agent_scope} \
+               AND {active} \
              GROUP BY me2.memory_id \
              HAVING shared_entities >= 1 \
              ORDER BY shared_entities DESC \
              LIMIT {limit}"
         );
 
-        self.backend.query_read(
-            &sql,
-            &[
-                SqlParam::Text(memory_id.to_string()),
-                SqlParam::Text(user_id.to_string()),
-            ],
-            |row| {
-                Ok(EntityNeighborRow {
-                    memory_id: row.get_string(0)?,
-                    content: row.get_string(1)?,
-                    shared_entities: row.get_i64(2)? as usize,
-                })
-            },
-        )
+        self.backend.query_read(&sql, &params, |row| {
+            Ok(EntityNeighborRow {
+                memory_id: row.get_string(0)?,
+                content: row.get_string(1)?,
+                shared_entities: row.get_i64(2)? as usize,
+            })
+        })
     }
 
     // ── Vector search (cosine distance) ──
@@ -220,30 +252,44 @@ impl Storage {
         embedding: &[f32],
         user_id: &str,
         agent_id: Option<&str>,
+        include_global_agent: bool,
         run_id: Option<&str>,
         app_id: Option<&str>,
         filter: Option<&FilterExpression>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let d = self.dialect();
         let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
-        let has_extra_filters =
-            agent_id.is_some() || run_id.is_some() || app_id.is_some() || filter.is_some();
 
-        // Use vec0 MATCH for simple user_id-only queries (fast KNN path).
-        // Fall back to brute-force scan when extra filters are present,
-        // since vec0 doesn't support arbitrary WHERE clauses.
-        if d.has_vec0_table() && !has_extra_filters {
-            return self.vector_search_vec0(embedding, user_id, limit);
+        // Common scope filters live in Vex metadata and stay on the indexed path.
+        // Arbitrary FilterExpression fields remain on the source table and use an exact scan.
+        if d.has_vector_index() && filter.is_none() {
+            return self.vector_search_index(
+                embedding,
+                user_id,
+                agent_id,
+                include_global_agent,
+                run_id,
+                app_id,
+                limit,
+            );
         }
 
-        let mut conditions = vec!["user_id = $1".to_string()];
+        let mut conditions = vec!["user_id = $1".to_string(), active_memory_condition("")];
         let mut dynamic_params: Vec<SqlParam> = vec![SqlParam::Text(user_id.to_string())];
         let mut param_idx: usize = 1;
 
         if let Some(aid) = agent_id {
             param_idx += 1;
-            conditions.push(format!("agent_id = ${param_idx}"));
+            let scope = if include_global_agent {
+                format!("(agent_id = ${param_idx} OR agent_id IS NULL)")
+            } else {
+                format!("agent_id = ${param_idx}")
+            };
+            conditions.push(scope);
             dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
@@ -282,30 +328,82 @@ impl Storage {
         Ok(rows)
     }
 
-    /// vec0 MATCH-based vector search (SQLite with sqlite-vec).
-    /// Queries both vec_memories and vec_events, merging results by distance.
-    fn vector_search_vec0(
+    /// MATCH-based vector search using the selected SQLite vector index.
+    /// Queries both VexDB-Lite memory and event indexes, merging by distance.
+    #[allow(clippy::too_many_arguments)]
+    fn vector_search_index(
         &self,
         embedding: &[f32],
         user_id: &str,
+        agent_id: Option<&str>,
+        include_global_agent: bool,
+        run_id: Option<&str>,
+        app_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
         let d = self.dialect();
         let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
 
-        let knn_sql = d
-            .vec0_knn_sql(&emb_literal, "$1", limit)
-            .expect("vec0_knn_sql should be available when has_vec0_table() is true");
+        let base_knn_sql = d
+            .vector_knn_sql(&emb_literal, "$1", limit)
+            .expect("vector_knn_sql should be available when has_vector_index() is true");
+        let mut params = vec![SqlParam::Text(user_id.to_string())];
+        let agent_param = agent_id.map(|value| {
+            params.push(SqlParam::Text(value.to_string()));
+            params.len()
+        });
+        let mut common_filters = String::new();
+        let mut event_filters = String::new();
+        for (column, value) in [("run_id", run_id), ("app_id", app_id)] {
+            if let Some(value) = value {
+                params.push(SqlParam::Text(value.to_string()));
+                let param_idx = params.len();
+                common_filters.push_str(&format!(" AND {column} = ${param_idx}"));
+                event_filters.push_str(&format!(" AND e.{column} = ${param_idx}"));
+            }
+        }
+
+        // An agent-scoped pet query needs both relationship memory and global
+        // user memory. Run two filtered KNN branches so memories owned by other
+        // agents cannot crowd either scope out of the candidate set.
+        let mem_knn_sql = if let Some(param_idx) = agent_param.filter(|_| include_global_agent) {
+            format!(
+                "{base_knn_sql} AND agent_id = ${param_idx}{common_filters} \
+                 UNION ALL \
+                 {base_knn_sql} AND agent_id IS NULL{common_filters}"
+            )
+        } else if let Some(param_idx) = agent_param {
+            format!("{base_knn_sql} AND agent_id = ${param_idx}{common_filters}")
+        } else {
+            format!("{base_knn_sql}{common_filters}")
+        };
 
         let mem_cols = memory_select_cols(Some("knn.distance"), "m.");
-        let event_knn_sql = d.vec0_event_knn_sql(&emb_literal, "$1", limit);
+        let event_knn_sql = d
+            .vector_event_knn_sql(&emb_literal, "$1", limit)
+            .map(|mut sql| {
+                if let Some(param_idx) = agent_param {
+                    // Events must mirror memory scoping: an agent-scoped pet
+                    // query also sees owner-global events (agent_id NULL).
+                    if include_global_agent {
+                        sql.push_str(&format!(
+                            " AND (agent_id = ${param_idx} OR agent_id IS NULL)"
+                        ));
+                    } else {
+                        sql.push_str(&format!(" AND agent_id = ${param_idx}"));
+                    }
+                }
+                sql
+            });
+        let active_memory = active_memory_condition("m.");
 
         let sql = if let Some(ref evt_knn) = event_knn_sql {
             format!(
-                r#"WITH mem_knn AS ({knn_sql}),
+                r#"WITH mem_knn AS ({mem_knn_sql}),
                      evt_knn AS ({evt_knn})
                 SELECT * FROM (
                     SELECT {mem_cols} FROM mem_knn knn JOIN memories m ON m.id = knn.memory_id
+                        WHERE {active_memory}
                     UNION ALL
                     SELECT e.event_id AS id,
                            COALESCE(e.purified_content, e.content) AS content,
@@ -316,9 +414,9 @@ impl Storage {
                            eknn.distance AS score,
                            0.5 AS importance,
                            0 AS access_count,
-                           NULL AS agent_id,
-                           NULL AS app_id,
-                           NULL AS run_id,
+                           e.agent_id,
+                           e.app_id,
+                           e.run_id,
                            0 AS immutable,
                            NULL AS expiration_date,
                            NULL AS categories,
@@ -330,30 +428,36 @@ impl Storage {
                            e.session_id,
                            'granular' AS resolution
                     FROM evt_knn eknn JOIN events e ON e.event_id = eknn.event_id
+                    WHERE 1 = 1{event_filters}
                 ) ORDER BY score ASC LIMIT {limit}"#
             )
         } else {
             format!(
-                "WITH knn AS ({knn_sql}) SELECT {mem_cols} FROM knn JOIN memories m ON m.id = knn.memory_id ORDER BY knn.distance ASC"
+                "WITH knn AS ({mem_knn_sql}) \
+                 SELECT {mem_cols} FROM knn JOIN memories m ON m.id = knn.memory_id \
+                 WHERE {active_memory} ORDER BY knn.distance ASC LIMIT {limit}"
             )
         };
 
-        let params = &[SqlParam::Text(user_id.to_string())];
-        self.backend.query_read(&sql, params, map_memory_row)
+        self.backend.query_read(&sql, &params, map_memory_row)
     }
 
     /// Find distinct session IDs from events matching a vector query.
     /// Used by lazy compact to scope compaction to relevant sessions only.
     /// Returns session IDs ordered by best match distance.
+    #[allow(dead_code)] // planned: session-aware retrieval
     pub(crate) fn find_relevant_event_sessions(
         &self,
         embedding: &[f32],
         user_id: &str,
         limit: usize,
     ) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let d = self.dialect();
         let emb_literal = d.format_embedding_literal(embedding, self.config.embedding_dims)?;
-        let event_knn = d.vec0_event_knn_sql(&emb_literal, "$1", limit * 3);
+        let event_knn = d.vector_event_knn_sql(&emb_literal, "$1", limit * 3);
         match event_knn {
             Some(knn_sql) => self.backend.query_read(
                 &format!(
@@ -376,9 +480,8 @@ impl Storage {
     /// Full-text search using BM25 scoring.
     /// Returns results ordered by relevance (highest BM25 score first).
     ///
-    /// Note: the FTS index must have been built via `create_fts_index()`
-    /// before calling this method. If the index doesn't exist, this will
-    /// return an error.
+    /// The online FTS indexes are initialized when storage opens and maintained
+    /// incrementally by normal memory and event writes.
     pub(crate) fn fts_search(
         &self,
         query: &str,
@@ -388,8 +491,7 @@ impl Storage {
         app_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
-        // Sanitize query for FTS5: remove characters that are FTS5 operators or
-        // cause syntax errors (?, *, ^, ", :, {, }, etc.)
+        // Quote user terms so punctuation cannot become FTS5 syntax.
         let sanitized_query = sanitize_fts_query(query);
         if sanitized_query.trim().is_empty() {
             return Ok(Vec::new());
@@ -399,6 +501,11 @@ impl Storage {
         let mut conditions = vec![
             "memories_fts MATCH $1".to_string(),
             "m.user_id = $2".to_string(),
+            active_memory_condition("m."),
+        ];
+        let mut event_conditions = vec![
+            "events_fts MATCH $1".to_string(),
+            "e.user_id = $2".to_string(),
         ];
         let mut dynamic_params: Vec<SqlParam> = vec![
             SqlParam::Text(sanitized_query.clone()),
@@ -408,29 +515,36 @@ impl Storage {
 
         if let Some(aid) = agent_id {
             param_idx += 1;
-            conditions.push(format!("m.agent_id = ${param_idx}"));
+            conditions.push(format!("(m.agent_id = ${param_idx} OR m.agent_id IS NULL)"));
+            // Owner-global events (agent_id NULL) stay visible to agent-scoped
+            // pet queries, matching durable-memory scoping above.
+            event_conditions.push(format!(
+                "(e.agent_id = ${param_idx} OR e.agent_id IS NULL)"
+            ));
             dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 
         if let Some(rid) = run_id {
             param_idx += 1;
             conditions.push(format!("m.run_id = ${param_idx}"));
+            event_conditions.push(format!("e.run_id = ${param_idx}"));
             dynamic_params.push(SqlParam::Text(rid.to_string()));
         }
 
         if let Some(appid) = app_id {
             param_idx += 1;
             conditions.push(format!("m.app_id = ${param_idx}"));
+            event_conditions.push(format!("e.app_id = ${param_idx}"));
             dynamic_params.push(SqlParam::Text(appid.to_string()));
         }
-        let _ = param_idx;
 
         let where_clause = conditions.join(" AND ");
+        let event_where_clause = event_conditions.join(" AND ");
         let cols = memory_select_cols(Some("memories_fts.rank"), "m.");
-        let has_extra_filters = agent_id.is_some() || run_id.is_some() || app_id.is_some();
 
-        // UNION with events_fts when no agent/run/app filters
-        if !has_extra_filters {
+        // Events use the same user/agent/app/run scope as durable memories.
+        // A query without agent_id still sees all events for the user.
+        {
             let unified_sql = format!(
                 r#"SELECT * FROM (
                     SELECT {cols} FROM memories_fts JOIN memories m ON m.id = memories_fts.id
@@ -445,9 +559,9 @@ impl Storage {
                            events_fts.rank AS score,
                            0.5 AS importance,
                            0 AS access_count,
-                           NULL AS agent_id,
-                           NULL AS app_id,
-                           NULL AS run_id,
+                           e.agent_id,
+                           e.app_id,
+                           e.run_id,
                            0 AS immutable,
                            NULL AS expiration_date,
                            NULL AS categories,
@@ -459,7 +573,7 @@ impl Storage {
                            e.session_id,
                            'granular' AS resolution
                     FROM events_fts JOIN events e ON e.event_id = events_fts.event_id
-                        WHERE events_fts MATCH $1 AND e.user_id = $2
+                        WHERE {event_where_clause}
                 ) ORDER BY score LIMIT {limit}"#
             );
             let result = self
@@ -486,8 +600,10 @@ impl Storage {
     #[allow(dead_code)] // V4 uses temporal as a filter, not a channel; kept for direct use
     pub(crate) fn temporal_search(&self, user_id: &str, limit: usize) -> Result<Vec<MemoryRow>> {
         let cols = memory_select_cols(None, "");
+        let active = active_memory_condition("");
         let sql = format!(
             "SELECT {cols} FROM memories WHERE user_id = $1 AND event_time IS NOT NULL \
+             AND {active} \
              ORDER BY event_time DESC LIMIT $2"
         );
 
@@ -535,9 +651,11 @@ impl Storage {
 
         // Search memories table
         let mem_cols = memory_select_cols(None, "");
+        let active = active_memory_condition("");
         let mem_sql = format!(
             "SELECT {mem_cols} FROM memories \
              WHERE user_id = $1 AND event_time IS NOT NULL AND ({range_where}) \
+             AND {active} \
              ORDER BY event_time DESC LIMIT {limit}"
         );
 
@@ -558,7 +676,7 @@ impl Storage {
                 NULL AS score,
                 0.5 AS importance,
                 0 AS access_count,
-                NULL AS agent_id,
+                e.agent_id,
                 NULL AS app_id,
                 NULL AS run_id,
                 0 AS immutable,
@@ -653,6 +771,18 @@ mod tests {
 
     use super::Storage;
 
+    #[test]
+    fn test_fts_query_quotes_hyphenated_identifier() {
+        assert_eq!(
+            super::sanitize_fts_query("PETFACT-001531 shared memory"),
+            "\"PETFACT-001531\" OR \"shared\" OR \"memory\""
+        );
+        assert_eq!(
+            super::sanitize_fts_query("birthday OR peanut"),
+            "\"birthday\" OR \"peanut\""
+        );
+    }
+
     fn test_config(dims: usize) -> MemoryConfig {
         MemoryConfig::new(":memory:", dims)
     }
@@ -727,7 +857,17 @@ mod tests {
 
         // List for user1 with agent_id filter
         let rows = storage
-            .list_memories("user1", Some("agent1"), None, None, None, 10, None, None, false)
+            .list_memories(
+                "user1",
+                Some("agent1"),
+                None,
+                None,
+                None,
+                10,
+                None,
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "id1");
@@ -788,7 +928,17 @@ mod tests {
             .unwrap();
 
         let rows = storage
-            .list_memories("user1", None, None, Some("app1"), None, 10, None, None, false)
+            .list_memories(
+                "user1",
+                None,
+                None,
+                Some("app1"),
+                None,
+                10,
+                None,
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "id1");
@@ -841,7 +991,17 @@ mod tests {
 
         let filter = FilterExpression::gte("importance", serde_json::json!(0.5));
         let rows = storage
-            .list_memories("user1", None, None, None, Some(&filter), 10, None, None, false)
+            .list_memories(
+                "user1",
+                None,
+                None,
+                None,
+                Some(&filter),
+                10,
+                None,
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(rows.len(), 2);
     }
@@ -886,7 +1046,7 @@ mod tests {
 
         let query_emb = vec![1.0, 0.0, 0.0, 0.0];
         let results = storage
-            .vector_search(&query_emb, "user1", None, None, None, None, 3)
+            .vector_search(&query_emb, "user1", None, false, None, None, None, 3)
             .unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].id, "id1");
@@ -924,7 +1084,7 @@ mod tests {
 
         let query_emb = vec![1.0, 0.0, 0.0, 0.0];
         let results = storage
-            .vector_search(&query_emb, "user1", None, None, None, None, 10)
+            .vector_search(&query_emb, "user1", None, false, None, None, None, 10)
             .unwrap();
         assert_eq!(results.len(), 2);
         let close: Vec<_> = results.iter().filter(|r| r.score.unwrap() < 0.5).collect();
@@ -970,7 +1130,16 @@ mod tests {
         let query_emb = vec![1.0, 0.0, 0.0, 0.0];
         let filter = FilterExpression::gte("importance", serde_json::json!(0.5));
         let results = storage
-            .vector_search(&query_emb, "user1", None, None, None, Some(&filter), 10)
+            .vector_search(
+                &query_emb,
+                "user1",
+                None,
+                false,
+                None,
+                None,
+                Some(&filter),
+                10,
+            )
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "id1");
@@ -1079,6 +1248,64 @@ mod tests {
             .fts_search("xylophone", "user1", None, None, None, 10)
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_fts_search_hyphenated_identifier() {
+        let storage = open_storage(4);
+        let emb = vec![1.0, 0.0, 0.0, 0.0];
+
+        storage
+            .insert_memory(
+                "id1",
+                "PETFACT-001531 shared memory",
+                &emb,
+                "user1",
+                "h1",
+                &InsertMemoryParams::default(),
+            )
+            .unwrap();
+        storage.create_fts_index().unwrap();
+
+        let results = storage
+            .fts_search("PETFACT-001531", "user1", None, None, None, 10)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "id1");
+    }
+
+    #[test]
+    fn test_fts_mixed_identifier_and_cjk_term_keeps_exact_hit() {
+        let storage = open_storage(4);
+        let emb = vec![1.0, 0.0, 0.0, 0.0];
+        for index in 0..2_000 {
+            storage
+                .insert_memory(
+                    &format!("id-{index}"),
+                    &format!("PETFACT-{index:06} 宠物日记：共同经历"),
+                    &emb,
+                    "user1",
+                    &format!("hash-{index}"),
+                    &InsertMemoryParams {
+                        agent_id: Some("pet-a".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        storage.create_fts_index().unwrap();
+
+        let results = storage
+            .fts_search(
+                "PETFACT-001531 共同经历",
+                "user1",
+                Some("pet-a"),
+                None,
+                None,
+                30,
+            )
+            .unwrap();
+        assert_eq!(results.first().map(|row| row.id.as_str()), Some("id-1531"));
     }
 
     #[test]

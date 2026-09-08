@@ -9,7 +9,7 @@ use crate::error::Result;
 
 use super::dialect::SqlDialect;
 
-/// SQLite SQL dialect.
+/// SQLite SQL dialect backed by VexDB-Lite `GRAPH_INDEX` tables.
 pub(crate) struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
@@ -40,8 +40,7 @@ impl SqlDialect for SqliteDialect {
     }
 
     fn cosine_distance_expr(&self, column: &str, embedding_literal: &str) -> String {
-        // Uses sqlite-vec's built-in vec_distance_cosine function
-        format!("vec_distance_cosine({column}, {embedding_literal})")
+        format!("vexdb_cosine_distance({column}, {embedding_literal})")
     }
 
     // ── HNSW index ──
@@ -153,67 +152,129 @@ impl SqlDialect for SqliteDialect {
         format!("pow({base}, {exponent})")
     }
 
-    // ── Vector index (vec0) ──
+    // ── Vector index ──
 
-    fn has_vec0_table(&self) -> bool {
+    fn has_vector_index(&self) -> bool {
         true
     }
 
-    fn create_vec0_table_sql(&self, dims: usize) -> Option<String> {
+    fn vector_backend_name(&self) -> &'static str {
+        "vexdb-lite"
+    }
+
+    fn memory_vector_table_name(&self) -> &'static str {
+        "vex_memories"
+    }
+
+    fn event_vector_table_name(&self) -> &'static str {
+        "vex_events"
+    }
+
+    fn create_vector_index_sql(&self, dims: usize) -> Option<String> {
         Some(format!(
-            r#"CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                memory_id TEXT PRIMARY KEY,
-                embedding float[{dims}] distance_metric=cosine,
-                user_id TEXT partition_key
+            r#"CREATE VIRTUAL TABLE IF NOT EXISTS vex_memories USING GRAPH_INDEX(
+                embedding FLOAT[{dims}],
+                memory_id TEXT,
+                user_id TEXT,
+                agent_id TEXT,
+                run_id TEXT,
+                app_id TEXT,
+                metric=cosine
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_events USING vec0(
-                event_id TEXT PRIMARY KEY,
-                content_vec float[{dims}] distance_metric=cosine,
-                user_id TEXT partition_key
+            CREATE VIRTUAL TABLE IF NOT EXISTS vex_events USING GRAPH_INDEX(
+                content_vec FLOAT[{dims}],
+                event_id TEXT,
+                user_id TEXT,
+                agent_id TEXT,
+                metric=cosine
             )"#
         ))
     }
 
-    fn vec0_insert_sql(&self, id_param: &str, embedding_literal: &str) -> Option<String> {
-        // $2 is user_id, passed directly by the caller
+    fn rebuild_vector_index_sql(&self) -> Option<String> {
+        let memories = self.memory_vector_table_name();
+        let events = self.event_vector_table_name();
         Some(format!(
-            "INSERT OR REPLACE INTO vec_memories(memory_id, embedding, user_id) \
-             VALUES ({id_param}, {embedding_literal}, $2)"
+            r#"DELETE FROM {memories};
+               DELETE FROM {events};
+               INSERT INTO {memories}(embedding, memory_id, user_id, agent_id, run_id, app_id)
+                   SELECT embedding, id, user_id, agent_id, run_id, app_id
+                   FROM memories
+                   WHERE embedding IS NOT NULL AND length(embedding) > 0;
+               INSERT INTO {events}(content_vec, event_id, user_id, agent_id)
+                   SELECT content_vec, event_id, user_id, agent_id
+                   FROM events
+                   WHERE content_vec IS NOT NULL AND length(content_vec) > 0;"#
         ))
     }
 
-    fn vec0_delete_sql(&self) -> Option<&str> {
-        Some("DELETE FROM vec_memories WHERE memory_id = $1")
+    fn vector_metadata_indexes_sql(&self) -> Option<String> {
+        Some(
+            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_vex_memories_memory_id
+                   ON vex_memories_vectors(memory_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_memories_user_id
+                   ON vex_memories_vectors(user_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_memories_user_agent
+                   ON vex_memories_vectors(user_id, agent_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_memories_user_run
+                   ON vex_memories_vectors(user_id, run_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_memories_user_app
+                   ON vex_memories_vectors(user_id, app_id);
+               CREATE UNIQUE INDEX IF NOT EXISTS idx_vex_events_event_id
+                   ON vex_events_vectors(event_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_events_user_id
+                   ON vex_events_vectors(user_id);
+               CREATE INDEX IF NOT EXISTS idx_vex_events_user_agent
+                   ON vex_events_vectors(user_id, agent_id);"#
+                .to_string(),
+        )
     }
 
-    fn vec0_knn_sql(
+    fn vector_insert_sql(&self, id_param: &str, embedding_literal: &str) -> Option<String> {
+        Some(format!(
+            "INSERT INTO vex_memories(embedding, memory_id, user_id, agent_id, run_id, app_id) \
+             VALUES ({embedding_literal}, {id_param}, $2, $3, $4, $5)"
+        ))
+    }
+
+    fn vector_delete_sql(&self) -> Option<&str> {
+        Some(
+            "DELETE FROM vex_memories WHERE rowid IN (\
+             SELECT rowid FROM vex_memories_vectors WHERE memory_id = $1)",
+        )
+    }
+
+    fn vector_knn_sql(
         &self,
         embedding_param: &str,
         user_id_param: &str,
         limit: usize,
     ) -> Option<String> {
-        // vec0 KNN query returns (memory_id, distance) ordered by distance
+        // VexDB-Lite KNN returns (memory_id, distance), nearest first.
         Some(format!(
             r#"SELECT memory_id, distance
-               FROM vec_memories
+               FROM vex_memories
                WHERE embedding MATCH {embedding_param}
                  AND k = {limit}
                  AND user_id = {user_id_param}"#
         ))
     }
 
-    fn vec0_event_insert_sql(&self, id_param: &str, embedding_literal: &str) -> Option<String> {
+    fn vector_event_insert_sql(&self, id_param: &str, embedding_literal: &str) -> Option<String> {
         Some(format!(
-            "INSERT INTO vec_events(event_id, content_vec, user_id) \
-             VALUES ({id_param}, {embedding_literal}, $2)"
+            "INSERT INTO vex_events(content_vec, event_id, user_id, agent_id) \
+             VALUES ({embedding_literal}, {id_param}, $2, $3)"
         ))
     }
 
-    fn vec0_event_delete_sql(&self) -> Option<&str> {
-        Some("DELETE FROM vec_events WHERE event_id = $1")
+    fn vector_event_delete_sql(&self) -> Option<&str> {
+        Some(
+            "DELETE FROM vex_events WHERE rowid IN (\
+             SELECT rowid FROM vex_events_vectors WHERE event_id = $1)",
+        )
     }
 
-    fn vec0_event_knn_sql(
+    fn vector_event_knn_sql(
         &self,
         embedding_param: &str,
         user_id_param: &str,
@@ -221,7 +282,7 @@ impl SqlDialect for SqliteDialect {
     ) -> Option<String> {
         Some(format!(
             r#"SELECT event_id, distance
-               FROM vec_events
+               FROM vex_events
                WHERE content_vec MATCH {embedding_param}
                  AND k = {limit}
                  AND user_id = {user_id_param}"#

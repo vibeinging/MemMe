@@ -101,7 +101,10 @@ const EN_PREFERENCE_MARKERS: &[&str] = &[
 ];
 
 const ZH_PREFERENCE_MARKERS: &[&str] = &[
+    "改成",
     "改成了",
+    "改为",
+    "换成",
     "换成了",
     "现在用",
     "不再用",

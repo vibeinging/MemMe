@@ -6,7 +6,7 @@
 //! Uses `reqwest::blocking` for synchronous HTTP — no tokio runtime required.
 
 use crate::error::LlmError;
-use crate::{GenerateOptions, LlmProvider, Message, MessageRole, ResponseFormat};
+use crate::{GenerateOptions, LlmProvider, Message, MessageRole};
 use serde::Deserialize;
 
 /// Configuration for the Anthropic provider.
@@ -50,7 +50,7 @@ impl AnthropicConfig {
 /// An LLM provider backed by the Anthropic Messages API.
 pub struct AnthropicProvider {
     config: AnthropicConfig,
-    client: reqwest::blocking::Client,
+    client: crate::http_client::SafeBlockingClient,
 }
 
 impl AnthropicProvider {
@@ -60,9 +60,13 @@ impl AnthropicProvider {
             .connect_timeout(std::time::Duration::from_secs(10))
             .tcp_keepalive(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(5)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        Self { config, client }
+            .expect("valid Anthropic HTTP client configuration");
+        Self {
+            config,
+            client: client.into(),
+        }
     }
 
     fn do_request(&self, url: &str, body: &serde_json::Value) -> Result<String, LlmError> {
@@ -94,25 +98,19 @@ impl AnthropicProvider {
         let body_text = response.text().unwrap_or_default();
 
         if status.as_u16() == 429 {
-            Err(LlmError::RequestFailed(format!(
-                "Rate limited (429): {body_text}"
-            )))
+            Err(LlmError::RequestFailed("Rate limited (429)".to_string()))
         } else if status.as_u16() == 400 && body_text.contains("max_tokens") {
-            Err(LlmError::InvalidFormat(format!(
-                "Context length exceeded: {body_text}"
-            )))
+            Err(LlmError::InvalidFormat(
+                "Context length exceeded".to_string(),
+            ))
         } else if status.is_server_error() || status.as_u16() == 529 {
-            Err(LlmError::RequestFailed(format!(
-                "Server error ({status}): {body_text}"
-            )))
+            Err(LlmError::RequestFailed(format!("Server error ({status})")))
         } else if status.as_u16() == 401 || status.as_u16() == 403 {
             Err(LlmError::ConfigError(format!(
                 "Authentication failed ({status}): check your API key"
             )))
         } else {
-            Err(LlmError::RequestFailed(format!(
-                "HTTP {status}: {body_text}"
-            )))
+            Err(LlmError::RequestFailed(format!("HTTP {status}")))
         }
     }
 

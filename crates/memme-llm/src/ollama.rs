@@ -28,7 +28,7 @@ impl Default for OllamaConfig {
 /// An LLM provider backed by a local Ollama instance.
 pub struct OllamaProvider {
     config: OllamaConfig,
-    client: reqwest::blocking::Client,
+    client: crate::http_client::SafeBlockingClient,
 }
 
 impl OllamaProvider {
@@ -37,9 +37,13 @@ impl OllamaProvider {
             .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(10))
             .tcp_keepalive(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        Self { config, client }
+            .expect("valid Ollama HTTP client configuration");
+        Self {
+            config,
+            client: client.into(),
+        }
     }
 }
 

@@ -12,6 +12,14 @@ pub mod generate;
 pub mod noop;
 pub mod prompts;
 
+#[cfg(any(
+    feature = "ollama",
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini"
+))]
+mod http_client;
+
 #[cfg(feature = "ollama")]
 pub mod ollama;
 

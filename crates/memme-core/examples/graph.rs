@@ -5,7 +5,8 @@
 //! In production, you would use OllamaProvider or OpenAIProvider instead.
 //!
 //! Run with:
-//!   cargo run -p memme-core --example graph
+//!   MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)" \
+//!     cargo run -p memme-core --example graph
 
 use std::sync::Arc;
 use std::sync::Mutex;

@@ -47,7 +47,8 @@ pub(crate) fn check_dedup(
     }
 
     // Slow path: vector similarity search for top-1 closest memory
-    let results = storage.vector_search(embedding, user_id, agent_id, None, None, None, 1)?;
+    let results =
+        storage.vector_search(embedding, user_id, agent_id, false, None, None, None, 1)?;
 
     if let Some(closest) = results.first() {
         if let Some(distance) = closest.score {

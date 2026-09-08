@@ -1,7 +1,118 @@
 use super::helpers::content_hash;
 use super::*;
 use crate::config::TuningConfig;
-use memme_embeddings::mock::MockEmbedder;
+use memme_embeddings::{mock::MockEmbedder, EmbedError, Embedder};
+
+struct CorrectionEmbedder;
+
+impl Embedder for CorrectionEmbedder {
+    fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, EmbedError> {
+        if text.contains("十点") {
+            Ok(vec![0.98, 0.2, 0.0, 0.0])
+        } else {
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        }
+    }
+
+    fn dimensions(&self) -> usize {
+        4
+    }
+
+    fn model_name(&self) -> &str {
+        "correction-test"
+    }
+}
+
+struct RawDistanceEmbedder;
+
+impl Embedder for RawDistanceEmbedder {
+    fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, EmbedError> {
+        if text.contains("far") {
+            Ok(vec![0.0, 1.0])
+        } else {
+            Ok(vec![1.0, 0.0])
+        }
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+
+    fn model_name(&self) -> &str {
+        "raw-distance-test"
+    }
+}
+
+struct TruncatedBatchEmbedder;
+
+impl Embedder for TruncatedBatchEmbedder {
+    fn embed(&self, _text: &str) -> std::result::Result<Vec<f32>, EmbedError> {
+        Ok(vec![1.0, 0.0, 0.0, 0.0])
+    }
+
+    fn embed_batch(&self, _texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+        Ok(Vec::new())
+    }
+
+    fn dimensions(&self) -> usize {
+        4
+    }
+
+    fn model_name(&self) -> &str {
+        "truncated-batch-test"
+    }
+}
+
+struct CountingEmbedder {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Embedder for CountingEmbedder {
+    fn embed(&self, _text: &str) -> std::result::Result<Vec<f32>, EmbedError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec![1.0, 0.0, 0.0, 0.0])
+    }
+
+    fn embed_batch(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0, 0.0]).collect())
+    }
+
+    fn dimensions(&self) -> usize {
+        4
+    }
+
+    fn model_name(&self) -> &str {
+        "counting-test"
+    }
+}
+
+struct RecoveringBatchEmbedder {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Embedder for RecoveringBatchEmbedder {
+    fn embed(&self, _text: &str) -> std::result::Result<Vec<f32>, EmbedError> {
+        Ok(vec![1.0, 0.0, 0.0, 0.0])
+    }
+
+    fn embed_batch(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            Err(EmbedError::ApiError("temporary outage".into()))
+        } else {
+            Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0, 0.0]).collect())
+        }
+    }
+
+    fn dimensions(&self) -> usize {
+        4
+    }
+
+    fn model_name(&self) -> &str {
+        "recovering-batch-test"
+    }
+}
 
 fn make_store(dims: usize) -> MemoryStore {
     let config = MemoryConfig::new(":memory:", dims);
@@ -17,6 +128,24 @@ fn test_add_new_memory() {
     assert!(!result.id.is_empty());
     assert_eq!(result.content, "hello world");
     assert_eq!(result.user_id, "user1");
+}
+
+#[test]
+fn test_llm_config_does_not_persist_api_key() {
+    let store = make_store(384);
+    store
+        .save_llm_config(
+            "must-not-be-stored",
+            "test-model",
+            "https://example.test/v1/chat/completions",
+        )
+        .unwrap();
+
+    assert_eq!(store.storage.get_config("llm_api_key").unwrap(), None);
+    assert_eq!(
+        store.storage.get_config("llm_model").unwrap().as_deref(),
+        Some("test-model")
+    );
 }
 
 #[test]
@@ -63,6 +192,23 @@ fn test_search_returns_relevant() {
     if results.len() >= 2 {
         assert!(results[0].score.unwrap() >= results[1].score.unwrap());
     }
+}
+
+#[test]
+fn test_pure_vector_search_sorts_raw_distance_ascending() {
+    let mut config = MemoryConfig::new(":memory:", 2);
+    config.enable_graph = false;
+    config.tuning.enable_forgetting_curve = false;
+    let store = MemoryStore::new(config, Arc::new(RawDistanceEmbedder)).unwrap();
+
+    store.add("near result", AddOptions::new("user1")).unwrap();
+    store.add("far result", AddOptions::new("user1")).unwrap();
+
+    let results = store
+        .search("query", SearchOptions::new("user1").limit(2))
+        .unwrap();
+    assert_eq!(results[0].content, "near result");
+    assert!(results[0].score.unwrap() < results[1].score.unwrap());
 }
 
 #[test]
@@ -282,6 +428,27 @@ fn test_keyword_search() {
 }
 
 #[test]
+fn test_fts_is_online_without_manual_rebuild() {
+    let store = make_store(384);
+    store
+        .add(
+            "PETFACT-ONLINE-42 searchable immediately",
+            AddOptions::new("user1"),
+        )
+        .unwrap();
+
+    let results = store
+        .storage
+        .fts_search("PETFACT-ONLINE-42", "user1", None, None, None, 10)
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].content,
+        "PETFACT-ONLINE-42 searchable immediately"
+    );
+}
+
+#[test]
 fn test_search_reranked() {
     let store = make_store(384);
     store
@@ -429,6 +596,467 @@ fn test_keyword_search_by_agent() {
         // Verify none of agent_b's memories leaked through
         assert_ne!(r.content, "quantum physics and relativity");
     }
+}
+
+#[test]
+fn test_agent_search_combines_global_and_relationship_memory() {
+    let store = make_store(384);
+    store
+        .add(
+            "global safety rule: severe peanut allergy",
+            AddOptions::new("user1"),
+        )
+        .unwrap();
+    store
+        .add(
+            "agent_a birthday is October 12",
+            AddOptions::new("user1").agent_id("agent_a"),
+        )
+        .unwrap();
+    store
+        .add(
+            "agent_b birthday is November 3",
+            AddOptions::new("user1").agent_id("agent_b"),
+        )
+        .unwrap();
+
+    let results = store
+        .search(
+            "birthday safety allergy",
+            SearchOptions::new("user1")
+                .agent_id("agent_a")
+                .keyword_search(true)
+                .limit(10),
+        )
+        .unwrap();
+    let contents: Vec<&str> = results
+        .iter()
+        .map(|result| result.content.as_str())
+        .collect();
+
+    assert!(contents.contains(&"global safety rule: severe peanut allergy"));
+    assert!(contents.contains(&"agent_a birthday is October 12"));
+    assert!(!contents.contains(&"agent_b birthday is November 3"));
+}
+
+#[test]
+fn test_search_excludes_expired_memory() {
+    let store = make_store(384);
+    store
+        .add(
+            "take expired medicine amoxicillin tonight",
+            AddOptions::new("user1").expiration_date("2020-01-01T00:00:00Z"),
+        )
+        .unwrap();
+    store
+        .add(
+            "there is currently no medicine to take",
+            AddOptions::new("user1"),
+        )
+        .unwrap();
+
+    let results = store
+        .search(
+            "medicine tonight",
+            SearchOptions::new("user1").keyword_search(true).limit(10),
+        )
+        .unwrap();
+    assert!(results
+        .iter()
+        .all(|result| !result.content.contains("amoxicillin")));
+}
+
+#[test]
+fn test_explicit_correction_supersedes_old_fact_without_graph() {
+    let mut config = MemoryConfig::new(":memory:", 4);
+    config.enable_graph = false;
+    config.tuning.dedup_threshold = 0.000_001;
+    let store = MemoryStore::new(config, Arc::new(CorrectionEmbedder)).unwrap();
+
+    let old = store
+        .add(
+            "明天遛狗时间是上午九点",
+            AddOptions::new("user1").agent_id("pet-a"),
+        )
+        .unwrap();
+    let new = store
+        .add(
+            "明天遛狗时间改成上午十点",
+            AddOptions::new("user1").agent_id("pet-a"),
+        )
+        .unwrap();
+    assert_ne!(old.id, new.id);
+
+    let results = store
+        .search(
+            "明天几点遛狗",
+            SearchOptions::new("user1").agent_id("pet-a").limit(10),
+        )
+        .unwrap();
+    let contents = results
+        .iter()
+        .map(|result| result.content.as_str())
+        .collect::<Vec<_>>();
+    assert!(contents.contains(&"明天遛狗时间改成上午十点"));
+    assert!(!contents.contains(&"明天遛狗时间是上午九点"));
+    assert!(store.get_trace(&old.id).unwrap().is_some());
+}
+
+#[test]
+fn test_agent_search_returns_only_scoped_events() {
+    let store = make_store(384);
+    let event_a = ChatMessage {
+        role: "user".to_string(),
+        content: "I bought agent_a a blue whale toy".to_string(),
+        image_url: None,
+        image_type: None,
+        timestamp: None,
+    };
+    let event_b = ChatMessage {
+        role: "user".to_string(),
+        content: "I bought agent_b a red rocket toy".to_string(),
+        image_url: None,
+        image_type: None,
+        timestamp: None,
+    };
+    store
+        .append_events(
+            "session-a",
+            &[event_a],
+            "user1",
+            Some(serde_json::json!({"agent_id": "agent_a"})),
+        )
+        .unwrap();
+    store
+        .append_events(
+            "session-b",
+            &[event_b],
+            "user1",
+            Some(serde_json::json!({"agent_id": "agent_b"})),
+        )
+        .unwrap();
+
+    let results = store
+        .search(
+            "what toy did I buy",
+            SearchOptions::new("user1")
+                .agent_id("agent_a")
+                .keyword_search(true)
+                .limit(10),
+        )
+        .unwrap();
+    let contents = results
+        .iter()
+        .map(|result| result.content.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(contents.contains(&"I bought agent_a a blue whale toy"));
+    assert!(!contents.contains(&"I bought agent_b a red rocket toy"));
+    assert!(results
+        .iter()
+        .filter(|result| result.content.contains("blue whale"))
+        .all(|result| result.agent_id.as_deref() == Some("agent_a")));
+}
+
+#[test]
+fn test_agent_search_includes_owner_global_events() {
+    let store = make_store(384);
+    let global_event = ChatMessage {
+        role: "user".to_string(),
+        content: "The owner has a severe peanut allergy".to_string(),
+        image_url: None,
+        image_type: None,
+        timestamp: None,
+    };
+    let momo_event = ChatMessage {
+        role: "user".to_string(),
+        content: "Momo and the owner agreed to watch a documentary together".to_string(),
+        image_url: None,
+        image_type: None,
+        timestamp: None,
+    };
+    let luna_event = ChatMessage {
+        role: "user".to_string(),
+        content: "Luna's favorite toy is a red yarn ball".to_string(),
+        image_url: None,
+        image_type: None,
+        timestamp: None,
+    };
+    store
+        .append_events("s-owner", &[global_event], "user1", None)
+        .unwrap();
+    store
+        .append_events(
+            "s-momo",
+            &[momo_event],
+            "user1",
+            Some(serde_json::json!({"agent_id": "momo"})),
+        )
+        .unwrap();
+    store
+        .append_events(
+            "s-luna",
+            &[luna_event],
+            "user1",
+            Some(serde_json::json!({"agent_id": "luna"})),
+        )
+        .unwrap();
+
+    let results = store
+        .search(
+            "what should I remember about snacks and allergies",
+            SearchOptions::new("user1")
+                .agent_id("momo")
+                .keyword_search(true)
+                .limit(10),
+        )
+        .unwrap();
+    let contents = results
+        .iter()
+        .map(|result| result.content.as_str())
+        .collect::<Vec<_>>();
+
+    // Owner-global events (no agent) must stay visible to an agent-scoped
+    // pet search, while another pet's events must not leak in.
+    assert!(contents.contains(&"The owner has a severe peanut allergy"));
+    assert!(contents.contains(&"Momo and the owner agreed to watch a documentary together"));
+    assert!(!contents.contains(&"Luna's favorite toy is a red yarn ball"));
+}
+
+#[test]
+fn test_append_events_idempotent_accepts_replay_and_rejects_conflict() {
+    let store = make_store(384);
+    let event = IdentifiedChatMessage {
+        event_id: "xiaozhi-session-1-user-1".to_string(),
+        message: ChatMessage {
+            role: "user".to_string(),
+            content: "小蓝最喜欢蓝色鲸鱼玩具".to_string(),
+            image_url: None,
+            image_type: None,
+            timestamp: None,
+        },
+    };
+    let metadata = Some(serde_json::json!({
+        "agent_id": "pet-blue",
+        "app_id": "xiaozhi",
+        "run_id": "websocket-1"
+    }));
+
+    let first = store
+        .append_events_idempotent(
+            "xiaozhi-session-1",
+            std::slice::from_ref(&event),
+            "owner-1",
+            metadata.clone(),
+        )
+        .unwrap();
+    assert_eq!(first.events_appended, 1);
+    assert_eq!(first.events_replayed, 0);
+
+    let replay = store
+        .append_events_idempotent(
+            "xiaozhi-session-1",
+            std::slice::from_ref(&event),
+            "owner-1",
+            metadata.clone(),
+        )
+        .unwrap();
+    assert_eq!(replay.events_appended, 0);
+    assert_eq!(replay.events_replayed, 1);
+
+    let events = store
+        .list_events(ListEventsOptions::new("owner-1").session_id("xiaozhi-session-1"))
+        .unwrap();
+    assert_eq!(events.len(), 1);
+
+    let scoped = store
+        .search(
+            "蓝色鲸鱼",
+            SearchOptions::new("owner-1")
+                .agent_id("pet-blue")
+                .app_id("xiaozhi")
+                .run_id("websocket-1")
+                .keyword_search(true),
+        )
+        .unwrap();
+    assert!(scoped
+        .iter()
+        .any(|result| result.content.contains("蓝色鲸鱼")));
+
+    let wrong_run = store
+        .search(
+            "蓝色鲸鱼",
+            SearchOptions::new("owner-1")
+                .agent_id("pet-blue")
+                .app_id("xiaozhi")
+                .run_id("websocket-2")
+                .keyword_search(true),
+        )
+        .unwrap();
+    assert!(wrong_run.is_empty());
+
+    let conflicting = IdentifiedChatMessage {
+        event_id: event.event_id,
+        message: ChatMessage {
+            content: "小蓝最喜欢红色火箭玩具".to_string(),
+            ..event.message
+        },
+    };
+    let error = store
+        .append_events_idempotent("xiaozhi-session-1", &[conflicting], "owner-1", metadata)
+        .unwrap_err();
+    assert!(error.to_string().contains("different payload"));
+}
+
+#[test]
+fn test_append_events_replay_backfills_embedding_after_provider_recovery() {
+    let store = MemoryStore::new(
+        MemoryConfig::new(":memory:", 4),
+        Arc::new(RecoveringBatchEmbedder {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }),
+    )
+    .unwrap();
+    let event = IdentifiedChatMessage {
+        event_id: "recoverable-event".into(),
+        message: ChatMessage {
+            role: "user".into(),
+            content: "可恢复的蓝色鲸鱼记忆".into(),
+            image_url: None,
+            image_type: None,
+            timestamp: Some("2026-09-02T00:00:00Z".into()),
+        },
+    };
+
+    let first = store
+        .append_events_idempotent(
+            "recoverable-session",
+            std::slice::from_ref(&event),
+            "owner-1",
+            Some(serde_json::json!({"agent_id": "pet-1", "app_id": "xiaozhi"})),
+        )
+        .unwrap();
+    assert_eq!(first.events_appended, 1);
+    assert_eq!(first.embedding_pending, 1);
+    assert!(!store
+        .storage()
+        .event_has_embedding("recoverable-event")
+        .unwrap());
+
+    let replay = store
+        .append_events_idempotent(
+            "recoverable-session",
+            std::slice::from_ref(&event),
+            "owner-1",
+            Some(serde_json::json!({"agent_id": "pet-1", "app_id": "xiaozhi"})),
+        )
+        .unwrap();
+    assert_eq!(replay.events_appended, 0);
+    assert_eq!(replay.events_replayed, 1);
+    assert_eq!(replay.embedding_pending, 0);
+    assert!(store
+        .storage()
+        .event_has_embedding("recoverable-event")
+        .unwrap());
+}
+
+#[test]
+fn test_append_events_rejects_session_owner_and_scope_conflicts() {
+    let store = make_store(384);
+    let first = IdentifiedChatMessage {
+        event_id: "scope-event-1".to_string(),
+        message: ChatMessage {
+            role: "user".to_string(),
+            content: "小蓝喜欢鲸鱼玩具".to_string(),
+            image_url: None,
+            image_type: None,
+            timestamp: None,
+        },
+    };
+    let scope = Some(serde_json::json!({
+        "agent_id": "pet-blue",
+        "app_id": "xiaozhi",
+        "run_id": "run-1"
+    }));
+    store
+        .append_events_idempotent("shared-session", &[first], "owner-1", scope.clone())
+        .unwrap();
+
+    let next_event = |id: &str| IdentifiedChatMessage {
+        event_id: id.to_string(),
+        message: ChatMessage {
+            role: "user".to_string(),
+            content: "不应该写入".to_string(),
+            image_url: None,
+            image_type: None,
+            timestamp: None,
+        },
+    };
+
+    let owner_error = store
+        .append_events_idempotent(
+            "shared-session",
+            &[next_event("scope-event-2")],
+            "owner-2",
+            scope.clone(),
+        )
+        .unwrap_err();
+    assert!(owner_error.to_string().contains("another user"));
+
+    for (id, conflicting_scope, field) in [
+        (
+            "scope-event-3",
+            serde_json::json!({
+                "agent_id": "pet-red",
+                "app_id": "xiaozhi",
+                "run_id": "run-1"
+            }),
+            "agent_id",
+        ),
+        (
+            "scope-event-4",
+            serde_json::json!({
+                "agent_id": "pet-blue",
+                "app_id": "other-app",
+                "run_id": "run-1"
+            }),
+            "app_id",
+        ),
+        (
+            "scope-event-5",
+            serde_json::json!({
+                "agent_id": "pet-blue",
+                "app_id": "xiaozhi",
+                "run_id": "run-2"
+            }),
+            "run_id",
+        ),
+    ] {
+        let error = store
+            .append_events_idempotent(
+                "shared-session",
+                &[next_event(id)],
+                "owner-1",
+                Some(conflicting_scope),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(field));
+    }
+
+    let missing_scope_error = store
+        .append_events_idempotent(
+            "shared-session",
+            &[next_event("scope-event-6")],
+            "owner-1",
+            None,
+        )
+        .unwrap_err();
+    assert!(missing_scope_error.to_string().contains("agent_id"));
+
+    let events = store
+        .list_events(ListEventsOptions::new("owner-1").session_id("shared-session"))
+        .unwrap();
+    assert_eq!(events.len(), 1);
 }
 
 #[test]
@@ -880,6 +1508,19 @@ fn test_append_events_and_compact() {
     assert!(
         listed[0].content.contains("Meeting Alice"),
         "Narrative should contain episode title"
+    );
+
+    // compact() relies on incremental FTS maintenance; it must not need a
+    // full index rebuild before the new narrative becomes searchable.
+    let fts_results = store
+        .storage
+        .fts_search("Meeting Alice", "user1", None, None, None, 10)
+        .unwrap();
+    assert!(
+        fts_results
+            .iter()
+            .any(|result| result.content.contains("Meeting Alice")),
+        "the compacted narrative should be present in the live FTS index"
     );
 }
 
@@ -2322,8 +2963,8 @@ fn test_count_user_memories() {
 fn test_db_size_bytes() {
     let store = make_store(384);
     let size = store.db_size_bytes().unwrap();
-    // In-memory DB returns estimated size
-    assert!(size >= 0);
+    // Empty in-memory DB uses the row-count estimate and therefore reports zero.
+    assert_eq!(size, 0);
 }
 
 #[test]
@@ -2484,6 +3125,800 @@ fn test_export_skips_local_only() {
         3,
         "export with include_local should include all"
     );
+}
+
+#[test]
+fn test_full_export_includes_local_only() {
+    let store = make_store(384);
+    store
+        .add(
+            "device-only safety preference",
+            AddOptions::new("user1").privacy(Privacy::LocalOnly),
+        )
+        .unwrap();
+
+    let exported = store.full_export(Some("user1")).unwrap();
+    assert_eq!(exported.memories.len(), 1);
+    assert_eq!(
+        exported.memories[0].content,
+        "device-only safety preference"
+    );
+}
+
+#[test]
+fn test_full_export_does_not_apply_list_pagination_limits() {
+    let store = make_store(4);
+    store
+        .storage()
+        .backend
+        .execute(
+            "INSERT INTO sources (source_id, source_type, name, user_id) VALUES ($1, $2, $3, NULL)",
+            &[
+                SqlParam::Text("legacy-source".into()),
+                SqlParam::Text("assistant".into()),
+                SqlParam::Text("legacy source".into()),
+            ],
+        )
+        .unwrap();
+    for index in 0..25 {
+        store
+            .storage()
+            .insert_session(
+                &format!("session-{index}"),
+                "user1",
+                (index == 0).then_some("legacy-source"),
+                "2026-09-02T00:00:00Z",
+                None,
+            )
+            .unwrap();
+    }
+    for index in 0..105 {
+        store
+            .storage()
+            .insert_event(
+                &format!("event-{index}"),
+                &format!("event content {index}"),
+                &[0.1, 0.2, 0.3, 0.4],
+                &IngestEventOptions::new("user1").timestamp("2026-09-02T00:00:00Z"),
+            )
+            .unwrap();
+        let options = CreateEpisodeOptions::new(
+            format!("episode {index}"),
+            format!("episode summary {index}"),
+            "user1",
+            "2026-09-02T00:00:00Z",
+        );
+        store
+            .storage()
+            .insert_episode(
+                &format!("episode-{index}"),
+                &options.title,
+                &options.summary,
+                &[0.1, 0.2, 0.3, 0.4],
+                &options,
+            )
+            .unwrap();
+    }
+
+    let export = store.full_export(Some("user1")).unwrap();
+    assert_eq!(export.version, "3.0");
+    assert_eq!(export.user_id.as_deref(), Some("user1"));
+    assert_eq!(export.sessions.len(), 25);
+    assert_eq!(export.events.len(), 105);
+    assert_eq!(export.episodes.len(), 105);
+    assert_eq!(export.sources.len(), 1);
+    assert_eq!(export.sources[0].source_id, "legacy-source");
+}
+
+#[test]
+fn test_full_import_rolls_back_earlier_layers_after_late_conflict() {
+    let target = make_store(4);
+    target
+        .storage()
+        .insert_session(
+            "existing-session",
+            "user1",
+            None,
+            "2026-09-02T00:00:00Z",
+            None,
+        )
+        .unwrap();
+    target
+        .storage()
+        .insert_event(
+            "conflicting-event",
+            "existing content",
+            &[0.1, 0.2, 0.3, 0.4],
+            &IngestEventOptions::new("user1")
+                .session_id("existing-session")
+                .timestamp("2026-09-02T00:00:00Z"),
+        )
+        .unwrap();
+
+    let source = make_store(4);
+    source
+        .storage()
+        .insert_session("new-session", "user1", None, "2026-09-02T01:00:00Z", None)
+        .unwrap();
+    source
+        .storage()
+        .insert_event(
+            "conflicting-event",
+            "different imported content",
+            &[0.4, 0.3, 0.2, 0.1],
+            &IngestEventOptions::new("user1")
+                .session_id("new-session")
+                .timestamp("2026-09-02T01:00:00Z"),
+        )
+        .unwrap();
+
+    let export = source.full_export(Some("user1")).unwrap();
+    let error = target.full_import(&export).unwrap_err();
+    assert!(error.to_string().contains("collision-free target"));
+    assert!(target
+        .storage()
+        .get_session("new-session")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        target
+            .get_event("conflicting-event")
+            .unwrap()
+            .unwrap()
+            .content,
+        "existing content"
+    );
+
+    target
+        .add("write after rollback", AddOptions::new("user1"))
+        .unwrap();
+}
+
+#[test]
+fn test_full_import_rejects_existing_session_owner_and_scope_conflict() {
+    let target = make_store(4);
+    target
+        .storage()
+        .insert_session(
+            "shared-session",
+            "user-a",
+            None,
+            "2026-09-02T00:00:00Z",
+            Some(r#"{"agent_id":"pet-a","app_id":"xiaozhi"}"#),
+        )
+        .unwrap();
+
+    let source = make_store(4);
+    source
+        .storage()
+        .insert_session(
+            "shared-session",
+            "user-b",
+            None,
+            "2026-09-02T00:00:00Z",
+            Some(r#"{"agent_id":"pet-b","app_id":"xiaozhi"}"#),
+        )
+        .unwrap();
+    source
+        .storage()
+        .insert_event(
+            "user-b-event",
+            "must not cross the session boundary",
+            &[0.1, 0.2, 0.3, 0.4],
+            &IngestEventOptions::new("user-b")
+                .session_id("shared-session")
+                .metadata(serde_json::json!({"agent_id": "pet-b", "app_id": "xiaozhi"}))
+                .timestamp("2026-09-02T00:01:00Z"),
+        )
+        .unwrap();
+
+    let export = source.full_export(Some("user-b")).unwrap();
+    let error = target.full_import(&export).unwrap_err();
+    assert!(error.to_string().contains("collision-free target"));
+    assert!(target.get_event("user-b-event").unwrap().is_none());
+}
+
+#[test]
+fn test_full_import_rejects_unknown_version_and_wrong_collection() {
+    let source = make_store(4);
+    source
+        .add("portable version marker", AddOptions::new("user1"))
+        .unwrap();
+    let export = source.full_export(Some("user1")).unwrap();
+
+    let mut unknown_version = export.clone();
+    unknown_version.version = "999.0".into();
+    let target = make_store(4);
+    let error = target.full_import(&unknown_version).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("unsupported full export version"));
+    assert!(target.full_export(None).unwrap().memories.is_empty());
+
+    let mut wrong_collection = export;
+    wrong_collection.collection = "another_collection".into();
+    let error = target.full_import(&wrong_collection).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("does not match target collection"));
+    assert!(target.full_export(None).unwrap().memories.is_empty());
+}
+
+#[test]
+fn test_full_import_rejects_cross_user_memory_references() {
+    let target = make_store(4);
+    target
+        .storage()
+        .insert_session(
+            "user-a-session",
+            "user-a",
+            None,
+            "2026-09-02T00:00:00Z",
+            None,
+        )
+        .unwrap();
+
+    let source = make_store(4);
+    source
+        .add("user-b portable memory", AddOptions::new("user-b"))
+        .unwrap();
+    let mut export = source.full_export(Some("user-b")).unwrap();
+    export.memories[0].session_id = Some("user-a-session".into());
+
+    let imported_id = export.memories[0].id.clone();
+    let error = target.full_import(&export).unwrap_err();
+    assert!(error.to_string().contains("missing session"));
+    assert!(target.storage().get_memory(&imported_id).unwrap().is_none());
+}
+
+#[test]
+fn test_full_import_validates_every_cross_layer_reference_before_embedding() {
+    let source = make_store(4);
+    source
+        .storage()
+        .insert_session(
+            "portable-session",
+            "user-b",
+            None,
+            "2026-09-02T00:00:00Z",
+            None,
+        )
+        .unwrap();
+    source
+        .storage()
+        .insert_event(
+            "portable-event",
+            "portable event",
+            &[0.1, 0.2, 0.3, 0.4],
+            &IngestEventOptions::new("user-b")
+                .session_id("portable-session")
+                .timestamp("2026-09-02T00:01:00Z"),
+        )
+        .unwrap();
+    let episode_options = CreateEpisodeOptions::new(
+        "portable episode",
+        "portable summary",
+        "user-b",
+        "2026-09-02T00:00:00Z",
+    )
+    .event_ids(vec!["portable-event".into()])
+    .session_ids(vec!["portable-session".into()]);
+    source
+        .storage()
+        .insert_episode(
+            "portable-episode",
+            &episode_options.title,
+            &episode_options.summary,
+            &[0.1, 0.2, 0.3, 0.4],
+            &episode_options,
+        )
+        .unwrap();
+    let memory = source
+        .add("portable memory", AddOptions::new("user-b"))
+        .unwrap();
+
+    let mut valid = source.full_export(Some("user-b")).unwrap();
+    valid.entities = vec![
+        Entity {
+            id: "entity-source".into(),
+            name: "source".into(),
+            entity_type: None,
+            user_id: "user-b".into(),
+            created_at: None,
+            updated_at: None,
+        },
+        Entity {
+            id: "entity-target".into(),
+            name: "target".into(),
+            entity_type: None,
+            user_id: "user-b".into(),
+            created_at: None,
+            updated_at: None,
+        },
+    ];
+    valid.relations = vec![GraphRelation {
+        id: "portable-relation".into(),
+        source: "source".into(),
+        source_id: "entity-source".into(),
+        target: "target".into(),
+        target_id: "entity-target".into(),
+        relation_type: "knows".into(),
+        user_id: "user-b".into(),
+        description: None,
+        created_at: None,
+        strength: None,
+        context: None,
+        episode_ids: Some(vec!["portable-episode".into()]),
+    }];
+    valid.identity_traits = vec![IdentityTrait {
+        trait_id: "portable-identity".into(),
+        trait_type: TraitType::Value,
+        content: "portable identity".into(),
+        confidence: 0.7,
+        evidence_ids: vec![memory.id.clone()],
+        user_id: "user-b".into(),
+        created_at: "2026-09-02T00:00:00Z".into(),
+        updated_at: None,
+    }];
+    valid.history = vec![HistoryExport {
+        id: "portable-history".into(),
+        memory_id: Some(memory.id.clone()),
+        user_id: "user-b".into(),
+        old_memory: None,
+        new_memory: Some("portable memory".into()),
+        event: Some("UPDATE".into()),
+        created_at: "2026-09-02T00:00:00Z".into(),
+    }];
+
+    let mut cases = Vec::new();
+    let mut bad = valid.clone();
+    bad.episodes[0].event_ids = vec!["user-a-event".into()];
+    cases.push(("missing event", bad));
+    let mut bad = valid.clone();
+    bad.episodes[0].session_ids = vec!["user-a-session".into()];
+    cases.push(("missing session", bad));
+    let mut bad = valid.clone();
+    bad.relations[0].episode_ids = Some(vec!["user-a-episode".into()]);
+    cases.push(("missing episode", bad));
+    let mut bad = valid.clone();
+    bad.identity_traits[0].evidence_ids = vec!["user-a-memory".into()];
+    cases.push(("missing memory", bad));
+    let mut bad = valid;
+    bad.history[0].memory_id = Some("user-a-memory".into());
+    cases.push(("missing memory", bad));
+
+    for (expected, export) in cases {
+        let counter = Arc::new(CountingEmbedder {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let target = MemoryStore::new(MemoryConfig::new(":memory:", 4), counter.clone()).unwrap();
+        let error = target.full_import(&export).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(
+            counter.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "invalid references must be rejected before embedding"
+        );
+    }
+}
+
+#[test]
+fn test_full_import_target_collision_is_rejected_before_embedding() {
+    let counter = Arc::new(CountingEmbedder {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let target = MemoryStore::new(MemoryConfig::new(":memory:", 4), counter.clone()).unwrap();
+    target
+        .add("already present", AddOptions::new("user1"))
+        .unwrap();
+    let export = target.full_export(Some("user1")).unwrap();
+    counter.calls.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    let error = target.full_import(&export).unwrap_err();
+    assert!(error.to_string().contains("collision-free target"));
+    assert_eq!(counter.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn test_episode_message_read_filters_referenced_events_by_episode_owner() {
+    let store = make_store(4);
+    store
+        .storage()
+        .insert_event(
+            "user-a-event",
+            "must not leak",
+            &[0.1, 0.2, 0.3, 0.4],
+            &IngestEventOptions::new("user-a").timestamp("2026-09-02T00:00:00Z"),
+        )
+        .unwrap();
+    let options = CreateEpisodeOptions::new(
+        "user-b episode",
+        "bad legacy reference",
+        "user-b",
+        "2026-09-02T00:00:00Z",
+    )
+    .event_ids(vec!["user-a-event".into()]);
+    store
+        .storage()
+        .insert_episode(
+            "user-b-episode",
+            &options.title,
+            &options.summary,
+            &[0.1, 0.2, 0.3, 0.4],
+            &options,
+        )
+        .unwrap();
+
+    let messages = store
+        .get_episode_messages("user-b-episode", EpisodeMessagesOptions::default())
+        .unwrap();
+    assert!(messages.is_empty());
+}
+
+#[test]
+fn test_delete_user_data_removes_associations_touching_every_owned_layer() {
+    let store = make_store(4);
+    let doomed_memory = store
+        .add("doomed memory", AddOptions::new("delete-me"))
+        .unwrap();
+    let survivor_memory = store
+        .add("survivor memory", AddOptions::new("keep-me"))
+        .unwrap();
+    store
+        .storage()
+        .insert_event(
+            "doomed-event",
+            "doomed event",
+            &[0.1, 0.2, 0.3, 0.4],
+            &IngestEventOptions::new("delete-me").timestamp("2026-09-02T00:00:00Z"),
+        )
+        .unwrap();
+    let episode = CreateEpisodeOptions::new(
+        "doomed episode",
+        "doomed episode",
+        "delete-me",
+        "2026-09-02T00:00:00Z",
+    );
+    store
+        .storage()
+        .insert_episode(
+            "doomed-episode",
+            &episode.title,
+            &episode.summary,
+            &[0.1, 0.2, 0.3, 0.4],
+            &episode,
+        )
+        .unwrap();
+    let identity = store
+        .add_identity_trait(
+            AddIdentityTraitOptions::new("value", "doomed identity", "delete-me")
+                .evidence_ids(vec![doomed_memory.id.clone()]),
+        )
+        .unwrap();
+    store
+        .storage()
+        .backend
+        .execute(
+            "INSERT INTO entities_default (id, name, user_id) VALUES ($1, $2, $3)",
+            &[
+                SqlParam::Text("doomed-entity".into()),
+                SqlParam::Text("doomed entity".into()),
+                SqlParam::Text("delete-me".into()),
+            ],
+        )
+        .unwrap();
+
+    let associations = [
+        (
+            "assoc-memory",
+            doomed_memory.id.as_str(),
+            "memory",
+            survivor_memory.id.as_str(),
+            "memory",
+        ),
+        (
+            "assoc-event",
+            survivor_memory.id.as_str(),
+            "memory",
+            "doomed-event",
+            "event",
+        ),
+        (
+            "assoc-episode",
+            "doomed-episode",
+            "episode",
+            survivor_memory.id.as_str(),
+            "memory",
+        ),
+        (
+            "assoc-identity",
+            survivor_memory.id.as_str(),
+            "memory",
+            identity.trait_id.as_str(),
+            "identity",
+        ),
+        (
+            "assoc-entity",
+            "doomed-entity",
+            "entity",
+            survivor_memory.id.as_str(),
+            "memory",
+        ),
+        (
+            "assoc-keep",
+            survivor_memory.id.as_str(),
+            "memory",
+            survivor_memory.id.as_str(),
+            "memory",
+        ),
+    ];
+    for (id, from_id, from_layer, to_id, to_layer) in associations {
+        store
+            .storage()
+            .backend
+            .execute(
+                "INSERT INTO associations (assoc_id, from_id, from_layer, to_id, to_layer, assoc_type, strength) VALUES ($1, $2, $3, $4, $5, 'test', 1.0)",
+                &[
+                    SqlParam::Text(id.into()),
+                    SqlParam::Text(from_id.into()),
+                    SqlParam::Text(from_layer.into()),
+                    SqlParam::Text(to_id.into()),
+                    SqlParam::Text(to_layer.into()),
+                ],
+            )
+            .unwrap();
+    }
+
+    store.delete_user_data("delete-me").unwrap();
+
+    let remaining = store
+        .storage()
+        .backend
+        .query_count("SELECT COUNT(*) FROM associations", &[])
+        .unwrap();
+    assert_eq!(remaining, 1);
+    let survivor = store.full_export(Some("keep-me")).unwrap();
+    assert_eq!(survivor.associations.len(), 1);
+    assert_eq!(survivor.associations[0].assoc_id, "assoc-keep");
+}
+
+#[test]
+fn test_full_import_rejects_authoritative_memory_field_conflict() {
+    let target = make_store(4);
+    target
+        .add("existing portable memory", AddOptions::new("user1"))
+        .unwrap();
+    let mut export = target.full_export(Some("user1")).unwrap();
+    export.memories[0].importance = 0.99;
+
+    let error = target.full_import(&export).unwrap_err();
+    assert!(error.to_string().contains("collision-free target"));
+}
+
+#[test]
+fn test_full_export_import_preserves_authoritative_fields_and_auxiliary_layers() {
+    let source = make_store(4);
+    source
+        .storage()
+        .insert_session(
+            "session-authoritative",
+            "user1",
+            None,
+            "2026-09-01T00:00:00Z",
+            None,
+        )
+        .unwrap();
+    let episode_options = CreateEpisodeOptions::new(
+        "authoritative episode",
+        "episode used by portable references",
+        "user1",
+        "2026-09-01T00:00:00Z",
+    )
+    .session_ids(vec!["session-authoritative".into()]);
+    source
+        .storage()
+        .insert_episode(
+            "episode-authoritative",
+            &episode_options.title,
+            &episode_options.summary,
+            &[0.1, 0.2, 0.3, 0.4],
+            &episode_options,
+        )
+        .unwrap();
+    let memory = source
+        .add("corrected preference", AddOptions::new("user1"))
+        .unwrap();
+    let newer_memory = source
+        .add("replacement preference", AddOptions::new("user1"))
+        .unwrap();
+    source
+        .storage()
+        .backend
+        .execute(
+            r#"UPDATE memories SET actor_id = $1, access_count = $2, memory_type = $3,
+                   event_time = $4, episode_id = $5, session_id = $6, resolution = $7,
+                   storage_strength = $8, retrieval_strength = $9, superseded_by = $10,
+                   valid_from = $11, valid_until = $12, confidence = $13, evidence = $14,
+                   episode_ids = $15, ingestion_time = $16, sync_version = $17,
+                   device_id = $18, sync_status = $19, pinned = $20
+               WHERE id = $21"#,
+            &[
+                SqlParam::Text("owner".into()),
+                SqlParam::Int(7),
+                SqlParam::Text("narrative".into()),
+                SqlParam::Text("2026-09-01".into()),
+                SqlParam::Text("episode-authoritative".into()),
+                SqlParam::Text("session-authoritative".into()),
+                SqlParam::Text("narrative".into()),
+                SqlParam::Float(2.5),
+                SqlParam::Float(0.8),
+                SqlParam::Text(newer_memory.id.clone()),
+                SqlParam::Text("2026-08-01".into()),
+                SqlParam::Text("2026-08-31".into()),
+                SqlParam::Float(0.91),
+                SqlParam::Text(r#"{"event":"event-1"}"#.into()),
+                SqlParam::Text(r#"["episode-authoritative"]"#.into()),
+                SqlParam::Text("2026-09-02T00:00:00Z".into()),
+                SqlParam::Int(42),
+                SqlParam::Text("device-a".into()),
+                SqlParam::Text("synced".into()),
+                SqlParam::Bool(true),
+                SqlParam::Text(memory.id.clone()),
+            ],
+        )
+        .unwrap();
+
+    let mut export = source.full_export(Some("user1")).unwrap();
+    export.history = vec![HistoryExport {
+        id: "history-portable".into(),
+        memory_id: Some(memory.id.clone()),
+        user_id: "user1".into(),
+        old_memory: Some("old preference".into()),
+        new_memory: Some("corrected preference".into()),
+        event: Some("UPDATE".into()),
+        created_at: "2026-09-02T00:00:00Z".into(),
+    }];
+    export.procedures = vec![crate::procedural::Procedure {
+        id: "procedure-portable".into(),
+        name: "bedtime".into(),
+        description: "wind down".into(),
+        steps: vec![crate::procedural::ProcedureStep {
+            order: 1,
+            action: "dim lights".into(),
+            parameters: None,
+        }],
+        user_id: "user1".into(),
+        trigger: Some("bedtime".into()),
+        confidence: 0.8,
+        usage_count: 3,
+        created_at: "2026-09-02T00:00:00Z".into(),
+        updated_at: "2026-09-02T00:00:00Z".into(),
+    }];
+    export.meditations = vec![MeditationRecord {
+        meditation_id: "meditation-portable".into(),
+        triggered_by: "test".into(),
+        started_at: "2026-09-02T00:00:00Z".into(),
+        status: MeditationStatus::Completed,
+        user_id: "user1".into(),
+        ..Default::default()
+    }];
+    export.recalls = vec![RecallExport {
+        recall_id: "recall-portable".into(),
+        query: "preference".into(),
+        timestamp: "2026-09-02T00:00:00Z".into(),
+        source_id: None,
+        user_id: "user1".into(),
+        results: Some(serde_json::json!([memory.id.clone()])),
+        feedback: Some("useful".into()),
+    }];
+    export.entities = vec![Entity {
+        id: "entity-portable".into(),
+        name: "鲸鱼玩具".into(),
+        entity_type: Some("object".into()),
+        user_id: "user1".into(),
+        created_at: Some("2026-09-02T00:00:00Z".into()),
+        updated_at: Some("2026-09-02T00:00:00Z".into()),
+    }];
+    export.memory_entities = vec![MemoryEntityExport {
+        memory_id: memory.id.clone(),
+        entity_id: "entity-portable".into(),
+        entity_name: "鲸鱼玩具".into(),
+        user_id: "user1".into(),
+    }];
+    export.associations = vec![AssociationExport {
+        assoc_id: "association-portable".into(),
+        from_id: memory.id.clone(),
+        from_layer: "memory".into(),
+        to_id: "entity-portable".into(),
+        to_layer: "entity".into(),
+        assoc_type: "mentions".into(),
+        strength: 0.7,
+        created_at: "2026-09-02T00:00:00Z".into(),
+    }];
+
+    let restored = make_store(4);
+    let result = restored.full_import(&export).unwrap();
+    assert_eq!(result.history, 1);
+    assert_eq!(result.procedures, 1);
+    assert_eq!(result.meditations, 1);
+    assert_eq!(result.recalls, 1);
+    assert_eq!(result.memory_entities, 1);
+    assert_eq!(result.associations, 1);
+
+    let reexport = restored.full_export(Some("user1")).unwrap();
+    let restored_memory = reexport
+        .memories
+        .iter()
+        .find(|row| row.id == memory.id)
+        .unwrap();
+    assert_eq!(
+        restored_memory.superseded_by.as_deref(),
+        Some(newer_memory.id.as_str())
+    );
+    assert_eq!(restored_memory.valid_until.as_deref(), Some("2026-08-31"));
+    assert_eq!(restored_memory.resolution.as_deref(), Some("narrative"));
+    assert_eq!(
+        restored_memory.session_id.as_deref(),
+        Some("session-authoritative")
+    );
+    assert_eq!(restored_memory.sync_version, Some(42));
+    assert_eq!(restored_memory.pinned, Some(true));
+    assert_eq!(reexport.history.len(), 1);
+    assert_eq!(reexport.procedures.len(), 1);
+    assert_eq!(reexport.meditations.len(), 1);
+    assert_eq!(reexport.recalls.len(), 1);
+    assert_eq!(reexport.memory_entities.len(), 1);
+    assert_eq!(reexport.associations.len(), 1);
+}
+
+#[test]
+fn test_full_import_rebuilds_vectors_and_preserves_privacy() {
+    let store = make_store(384);
+    store
+        .add(
+            "portable vector marker",
+            AddOptions::new("user1")
+                .agent_id("pet-a")
+                .privacy(Privacy::LocalOnly),
+        )
+        .unwrap();
+    let export = store.full_export(Some("user1")).unwrap();
+
+    let restored = make_store(384);
+    let result = restored.full_import(&export).unwrap();
+    assert_eq!(result.memories, 1);
+
+    let found = restored
+        .search(
+            "portable vector marker",
+            SearchOptions::new("user1")
+                .agent_id("pet-a")
+                .keyword_search(false),
+        )
+        .unwrap();
+    assert!(found
+        .iter()
+        .any(|memory| memory.content == "portable vector marker"));
+    assert_eq!(found[0].privacy, "local_only");
+}
+
+#[test]
+fn test_import_rejects_incomplete_embedding_batch_before_writing() {
+    let source = make_store(4);
+    source
+        .add("portable marker", AddOptions::new("user1"))
+        .unwrap();
+    let export = source.full_export(Some("user1")).unwrap();
+
+    let restored = MemoryStore::new(
+        MemoryConfig::new(":memory:", 4),
+        Arc::new(TruncatedBatchEmbedder),
+    )
+    .unwrap();
+    assert!(restored.full_import(&export).is_err());
+    assert!(restored.full_export(None).unwrap().memories.is_empty());
+    assert!(restored.import_memories(&export.memories).is_err());
+    assert!(restored.full_export(None).unwrap().memories.is_empty());
 }
 
 #[test]
@@ -2707,6 +4142,27 @@ fn test_chat_message_with_image_url() {
         Some("https://example.com/image.png")
     );
     assert_eq!(msg.image_type.as_deref(), Some("url"));
+}
+
+#[test]
+fn test_append_events_rejects_images_instead_of_silently_dropping_them() {
+    let store = make_store(4);
+    let message = IdentifiedChatMessage {
+        event_id: "image-event".into(),
+        message: ChatMessage {
+            role: "user".into(),
+            content: "look at this".into(),
+            image_url: Some("https://example.com/image.png".into()),
+            image_type: Some("url".into()),
+            timestamp: None,
+        },
+    };
+
+    let error = store
+        .append_events_idempotent("image-session", &[message], "user1", None)
+        .unwrap_err();
+    assert!(error.to_string().contains("not supported"));
+    assert!(store.get_event("image-event").unwrap().is_none());
 }
 
 #[test]

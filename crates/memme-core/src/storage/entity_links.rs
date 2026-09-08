@@ -37,6 +37,7 @@ impl Storage {
         &self,
         entity_names: &[&str],
         user_id: &str,
+        agent_id: Option<&str>,
         query_embedding: Option<&[f32]>,
         limit: usize,
     ) -> Result<Vec<MemoryRow>> {
@@ -60,18 +61,24 @@ impl Storage {
         };
 
         let cols = super::query::memory_select_cols(score_expr.as_deref(), "m.");
+        let mut params = vec![SqlParam::Text(user_id.to_string())];
+        let agent_scope = if let Some(agent_id) = agent_id {
+            params.push(SqlParam::Text(agent_id.to_string()));
+            "AND (m.agent_id = $2 OR m.agent_id IS NULL)"
+        } else {
+            ""
+        };
+        let active = super::query::active_memory_condition("m.");
         let sql = format!(
             "SELECT DISTINCT {cols} FROM memories m \
              JOIN memory_entities me ON m.id = me.memory_id \
              WHERE me.user_id = $1 AND LOWER(me.entity_name) IN ({in_clause}) \
+             AND {active} {agent_scope} \
              {order_clause} LIMIT {limit}"
         );
 
-        self.backend.query_read(
-            &sql,
-            &[SqlParam::Text(user_id.to_string())],
-            super::query::map_memory_row,
-        )
+        self.backend
+            .query_read(&sql, &params, super::query::map_memory_row)
     }
 
     /// Find episodes whose title or summary mention any of the given entity names.

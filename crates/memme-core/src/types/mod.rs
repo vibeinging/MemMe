@@ -171,7 +171,8 @@ impl AddOptions {
 pub struct SearchOptions {
     /// Owner whose memories to search (required).
     pub user_id: String,
-    /// Restrict results to a specific agent.
+    /// Search the selected agent's relationship memory together with global
+    /// user memory (`agent_id IS NULL`). Memories owned by other agents are excluded.
     pub agent_id: Option<String>,
     /// Restrict results to a specific application.
     pub app_id: Option<String>,
@@ -201,7 +202,7 @@ impl SearchOptions {
         }
     }
 
-    /// Restrict results to a specific agent.
+    /// Search one agent's relationship memory plus global user memory.
     pub fn agent_id(mut self, agent_id: impl Into<String>) -> Self {
         self.agent_id = Some(agent_id.into());
         self
@@ -545,6 +546,20 @@ pub struct ChatMessage {
     pub timestamp: Option<String>,
 }
 
+/// A chat message with a caller-provided event ID.
+///
+/// Use this with [`crate::MemoryStore::append_events_idempotent`] when the caller may
+/// retry a request. Reusing the same `event_id` with the same payload is safe;
+/// reusing it with different content is rejected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentifiedChatMessage {
+    /// Stable ID chosen by the caller.
+    pub event_id: String,
+    /// Message payload stored as the event.
+    #[serde(flatten)]
+    pub message: ChatMessage,
+}
+
 /// An entity extracted from text (knowledge graph node).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
@@ -556,6 +571,12 @@ pub struct Entity {
     pub entity_type: Option<String>,
     /// Owner of this entity.
     pub user_id: String,
+    /// When this entity was created. Older exports may omit it.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// When this entity was last updated. Older exports may omit it.
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// A relationship between two entities (knowledge graph edge).
@@ -578,6 +599,18 @@ pub struct GraphRelation {
     /// Natural language description of the relationship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// When this relationship was created. Older exports may omit it.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// Relationship strength. Older exports may omit it.
+    #[serde(default)]
+    pub strength: Option<f32>,
+    /// Structured relationship context. Older exports may omit it.
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+    /// Episodes that support this relationship. Older exports may omit it.
+    #[serde(default)]
+    pub episode_ids: Option<Vec<String>>,
 }
 
 /// Result of a graph search, containing matched entities and their relationships.
@@ -613,6 +646,13 @@ pub struct AppendEventsResult {
     pub session_id: String,
     /// Number of events successfully appended.
     pub events_appended: usize,
+    /// Number of events that were already present with the same ID and payload.
+    #[serde(default)]
+    pub events_replayed: usize,
+    /// Events stored without an embedding because the embedding provider was
+    /// unavailable. Replaying the same event IDs will retry and backfill them.
+    #[serde(default)]
+    pub embedding_pending: usize,
     /// Total unprocessed events in the session after appending.
     pub total_unprocessed: u64,
     /// True when unprocessed events exceed `compact_threshold`.
@@ -690,6 +730,115 @@ pub struct MemoryExport {
     pub updated_at: String,
     /// Forgetting curve stability in days.
     pub stability: Option<f32>,
+    /// Privacy policy for this memory. Older exports may omit this field.
+    #[serde(default)]
+    pub privacy: Option<String>,
+    /// Actor that created the memory.
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    /// Number of times the memory has been accessed.
+    #[serde(default)]
+    pub access_count: Option<u32>,
+    /// Memory scope/type such as session or long_term.
+    #[serde(default)]
+    pub memory_type: Option<String>,
+    /// Time described by the memory.
+    #[serde(default)]
+    pub event_time: Option<String>,
+    /// Episode that produced this memory.
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    /// Session that produced this memory.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Granularity of this memory.
+    #[serde(default)]
+    pub resolution: Option<String>,
+    /// Long-term storage strength.
+    #[serde(default)]
+    pub storage_strength: Option<f32>,
+    /// Current retrieval strength.
+    #[serde(default)]
+    pub retrieval_strength: Option<f32>,
+    /// Newer memory that replaced this memory.
+    #[serde(default)]
+    pub superseded_by: Option<String>,
+    /// Start of the fact's validity window.
+    #[serde(default)]
+    pub valid_from: Option<String>,
+    /// End of the fact's validity window.
+    #[serde(default)]
+    pub valid_until: Option<String>,
+    /// Confidence in the fact.
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    /// Evidence attached to the fact.
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
+    /// All episodes that support this memory.
+    #[serde(default)]
+    pub episode_ids: Option<Vec<String>>,
+    /// Time the memory entered the store.
+    #[serde(default)]
+    pub ingestion_time: Option<String>,
+    /// Incremental sync version.
+    #[serde(default)]
+    pub sync_version: Option<u64>,
+    /// Device that last wrote the memory.
+    #[serde(default)]
+    pub device_id: Option<String>,
+    /// Incremental sync status.
+    #[serde(default)]
+    pub sync_status: Option<String>,
+    /// Whether the memory is pinned.
+    #[serde(default)]
+    pub pinned: Option<bool>,
+}
+
+/// One audit-history row included in a portable export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryExport {
+    pub id: String,
+    pub memory_id: Option<String>,
+    pub user_id: String,
+    pub old_memory: Option<String>,
+    pub new_memory: Option<String>,
+    pub event: Option<String>,
+    pub created_at: String,
+}
+
+/// One memory-to-entity link included in a portable export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEntityExport {
+    pub memory_id: String,
+    pub entity_id: String,
+    pub entity_name: String,
+    pub user_id: String,
+}
+
+/// One cross-layer association included in a portable export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssociationExport {
+    pub assoc_id: String,
+    pub from_id: String,
+    pub from_layer: String,
+    pub to_id: String,
+    pub to_layer: String,
+    pub assoc_type: String,
+    pub strength: f32,
+    pub created_at: String,
+}
+
+/// One recall audit row included in a portable export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallExport {
+    pub recall_id: String,
+    pub query: String,
+    pub timestamp: String,
+    pub source_id: Option<String>,
+    pub user_id: String,
+    pub results: Option<serde_json::Value>,
+    pub feedback: Option<String>,
 }
 
 /// Result of syncing the replica.
@@ -750,6 +899,9 @@ pub struct FullExport {
     pub collection: String,
     /// When the export was created (ISO 8601).
     pub exported_at: String,
+    /// User filter used to produce this export. Version 2 exports omit it.
+    #[serde(default)]
+    pub user_id: Option<String>,
     /// All memories in the collection.
     pub memories: Vec<MemoryExport>,
     /// All entities from the knowledge graph.
@@ -771,6 +923,24 @@ pub struct FullExport {
     /// All data sources.
     #[serde(default)]
     pub sources: Vec<Source>,
+    /// Memory mutation audit history.
+    #[serde(default)]
+    pub history: Vec<HistoryExport>,
+    /// Learned procedures.
+    #[serde(default)]
+    pub procedures: Vec<crate::procedural::Procedure>,
+    /// Meditation run records.
+    #[serde(default)]
+    pub meditations: Vec<MeditationRecord>,
+    /// Recall audit records.
+    #[serde(default)]
+    pub recalls: Vec<RecallExport>,
+    /// Memory-to-entity graph links.
+    #[serde(default)]
+    pub memory_entities: Vec<MemoryEntityExport>,
+    /// Cross-layer associations.
+    #[serde(default)]
+    pub associations: Vec<AssociationExport>,
 }
 
 /// Result of a full import operation, with counts for each data layer.
@@ -792,6 +962,12 @@ pub struct FullImportResult {
     pub relations: u64,
     /// Number of identity traits imported.
     pub identity_traits: u64,
+    pub history: u64,
+    pub procedures: u64,
+    pub meditations: u64,
+    pub recalls: u64,
+    pub memory_entities: u64,
+    pub associations: u64,
 }
 
 #[cfg(test)]
@@ -915,6 +1091,7 @@ mod tests {
             version: "2.0".into(),
             collection: "default".into(),
             exported_at: "2026-03-17".into(),
+            user_id: None,
             memories: vec![],
             entities: vec![],
             relations: vec![],
@@ -923,6 +1100,12 @@ mod tests {
             events: vec![],
             identity_traits: vec![],
             sources: vec![],
+            history: vec![],
+            procedures: vec![],
+            meditations: vec![],
+            recalls: vec![],
+            memory_entities: vec![],
+            associations: vec![],
         };
         let json = serde_json::to_string(&export).unwrap();
         assert!(json.contains("\"version\":\"2.0\""));

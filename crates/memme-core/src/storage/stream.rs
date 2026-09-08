@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{MemoryError, Result};
 use crate::types::{Event, EventType, IngestEventOptions, ListEventsOptions, Source, SqlParam};
 
 use super::backend::RowAccess;
@@ -7,7 +7,7 @@ use super::Storage;
 
 /// Generate event SELECT columns.
 fn event_cols() -> &'static str {
-    "event_id, source_id, session_id, timestamp, event_type, content, parent_id, metadata, user_id, processed, processed_at, purified_content, purified, event_time, location"
+    "event_id, source_id, session_id, timestamp, event_type, content, parent_id, metadata, user_id, processed, processed_at, purified_content, purified, event_time, location, agent_id, app_id, run_id"
 }
 
 /// Map a row to an Event struct. Expects columns in standard order:
@@ -27,6 +27,9 @@ fn map_event_row(row: &dyn RowAccess) -> Result<Event> {
             .get_opt_string(7)?
             .and_then(|s| serde_json::from_str(&s).ok()),
         user_id: row.get_string(8)?,
+        agent_id: row.get_opt_string(15)?,
+        app_id: row.get_opt_string(16)?,
+        run_id: row.get_opt_string(17)?,
         processed: row.get_opt_bool(9)?.unwrap_or(false),
         processed_at: row.get_opt_string(10)?,
         purified_content: row.get_opt_string(11)?,
@@ -45,6 +48,7 @@ fn map_source_row(row: &dyn RowAccess) -> Result<Source> {
         metadata: row
             .get_opt_string(4)?
             .and_then(|s| serde_json::from_str(&s).ok()),
+        user_id: row.get_opt_string(5)?,
     })
 }
 
@@ -78,7 +82,7 @@ impl Storage {
     #[allow(dead_code)] // planned API: stream source management
     pub(crate) fn get_source(&self, source_id: &str) -> Result<Option<Source>> {
         self.backend.query_one(
-            "SELECT source_id, source_type, name, registered_at, metadata FROM sources WHERE source_id = $1",
+            "SELECT source_id, source_type, name, registered_at, metadata, user_id FROM sources WHERE source_id = $1",
             &[SqlParam::Text(source_id.to_string())],
             |row| map_source_row(row),
         )
@@ -88,7 +92,7 @@ impl Storage {
     #[allow(dead_code)] // planned API: stream source management
     pub(crate) fn list_sources(&self, user_id: &str) -> Result<Vec<Source>> {
         self.backend.query_read(
-            "SELECT source_id, source_type, name, registered_at, metadata FROM sources WHERE user_id = $1 ORDER BY registered_at DESC",
+            "SELECT source_id, source_type, name, registered_at, metadata, user_id FROM sources WHERE user_id = $1 ORDER BY registered_at DESC",
             &[SqlParam::Text(user_id.to_string())],
             |row| map_source_row(row),
         )
@@ -103,6 +107,28 @@ impl Storage {
         content_vec: &[f32],
         options: &IngestEventOptions,
     ) -> Result<()> {
+        self.insert_event_idempotent(event_id, content, content_vec, options)
+            .map(|_| ())
+    }
+
+    /// Insert an event, or accept an exact replay of an existing event.
+    ///
+    /// Returns `true` when a row was inserted and `false` for an exact replay.
+    /// Reusing an event ID with a different payload is rejected.
+    pub(crate) fn insert_event_idempotent(
+        &self,
+        event_id: &str,
+        content: &str,
+        content_vec: &[f32],
+        options: &IngestEventOptions,
+    ) -> Result<bool> {
+        if !content_vec.is_empty() && content_vec.len() != self.config.embedding_dims {
+            return Err(MemoryError::Config(format!(
+                "embedding dimension mismatch: expected {}, got {}",
+                self.config.embedding_dims,
+                content_vec.len()
+            )));
+        }
         let emb_literal = if content_vec.is_empty() {
             "NULL".to_string()
         } else {
@@ -113,6 +139,27 @@ impl Storage {
         let source_val = opt_text(options.source_id.as_deref());
         let session_val = opt_text(options.session_id.as_deref());
         let parent_val = opt_text(options.parent_id.as_deref());
+        let agent_id = options
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agent_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let agent_val = opt_text(agent_id.as_deref());
+        let app_id = options
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("app_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let app_val = opt_text(app_id.as_deref());
+        let run_id = options
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("run_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let run_val = opt_text(run_id.as_deref());
         let meta_val = opt_text(
             options
                 .metadata
@@ -122,36 +169,102 @@ impl Storage {
 
         let now_expr = self.dialect().current_timestamp_expr();
         let sql = format!(
-            r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type, content, content_vec, parent_id, metadata, user_id)
-               VALUES ($1, $2, $3, CASE WHEN $4 IS NULL THEN {now_expr} ELSE $4 END, $5, $6, {emb_literal}, $7, $8, $9)"#
+            r#"INSERT INTO events (event_id, source_id, session_id, timestamp, event_type, content, content_vec, parent_id, metadata, user_id, agent_id, app_id, run_id)
+               VALUES ($1, $2, $3, CASE WHEN $4 IS NULL THEN {now_expr} ELSE $4 END, $5, $6, {emb_literal}, $7, $8, $9, $10, $11, $12)"#
         );
-        self.backend.execute(
-            &sql,
-            &[
-                SqlParam::Text(event_id.to_string()),
-                source_val,
-                session_val,
-                timestamp_val,
-                SqlParam::Text(event_type.to_string()),
-                SqlParam::Text(content.to_string()),
-                parent_val,
-                meta_val,
-                SqlParam::Text(options.user_id.clone()),
-            ],
-        )?;
-        // Sync vec_events virtual table for unified vector search
-        if !content_vec.is_empty() {
-            if let Some(vec0_sql) = self.dialect().vec0_event_insert_sql("$1", &emb_literal) {
-                self.backend.execute(
-                    &vec0_sql,
+        let event_params = vec![
+            SqlParam::Text(event_id.to_string()),
+            source_val,
+            session_val,
+            timestamp_val,
+            SqlParam::Text(event_type.to_string()),
+            SqlParam::Text(content.to_string()),
+            parent_val,
+            meta_val,
+            SqlParam::Text(options.user_id.clone()),
+            agent_val,
+            app_val,
+            run_val,
+        ];
+        let vector_sql = if content_vec.is_empty() {
+            None
+        } else {
+            self.dialect().vector_event_insert_sql("$1", &emb_literal)
+        };
+        self.backend.transaction(|tx| {
+            let existing = tx.query_one(
+                "SELECT source_id, session_id, timestamp, event_type, content, parent_id, metadata, user_id FROM events WHERE event_id = $1",
+                &[SqlParam::Text(event_id.to_string())],
+                |row| {
+                    Ok((
+                        row.get_opt_string(0)?,
+                        row.get_opt_string(1)?,
+                        row.get_string(2)?,
+                        row.get_string(3)?,
+                        row.get_string(4)?,
+                        row.get_opt_string(5)?,
+                        row.get_opt_string(6)?,
+                        row.get_string(7)?,
+                    ))
+                },
+            )?;
+            if let Some((
+                source_id,
+                session_id,
+                timestamp,
+                stored_event_type,
+                stored_content,
+                parent_id,
+                stored_metadata,
+                stored_user_id,
+            )) = existing
+            {
+                let stored_metadata = stored_metadata
+                    .as_deref()
+                    .map(serde_json::from_str::<serde_json::Value>)
+                    .transpose()?;
+                let timestamp_matches = match options.timestamp.as_deref() {
+                    Some(expected) => expected == timestamp,
+                    None => true,
+                };
+                let exact_replay = source_id == options.source_id
+                    && session_id == options.session_id
+                    && timestamp_matches
+                    && stored_event_type == event_type
+                    && stored_content == content
+                    && parent_id == options.parent_id
+                    && stored_metadata == options.metadata
+                    && stored_user_id == options.user_id;
+                if exact_replay {
+                    return Ok(false);
+                }
+                return Err(MemoryError::Config(format!(
+                    "event_id '{event_id}' already exists with a different payload"
+                )));
+            }
+
+            tx.execute(&sql, &event_params)?;
+            if let Some(vector_sql) = vector_sql.as_deref() {
+                tx.execute(
+                    vector_sql,
                     &[
                         SqlParam::Text(event_id.to_string()),
                         SqlParam::Text(options.user_id.clone()),
+                        opt_text(agent_id.as_deref()),
                     ],
                 )?;
             }
-        }
-        Ok(())
+            if tx.table_exists("events_fts")? {
+                tx.execute(
+                    "INSERT OR REPLACE INTO events_fts(event_id, content) VALUES ($1, $2)",
+                    &[
+                        SqlParam::Text(event_id.to_string()),
+                        SqlParam::Text(content.to_string()),
+                    ],
+                )?;
+            }
+            Ok(true)
+        })
     }
 
     /// Update event with purified content and its embedding.
@@ -163,6 +276,13 @@ impl Storage {
         event_time: Option<&str>,
         location: Option<&str>,
     ) -> Result<()> {
+        if content_vec.len() != self.config.embedding_dims {
+            return Err(MemoryError::Config(format!(
+                "embedding dimension mismatch: expected {}, got {}",
+                self.config.embedding_dims,
+                content_vec.len()
+            )));
+        }
         // Normalize incomplete date formats for TIMESTAMP compatibility
         let normalized_time = event_time.map(|t| {
             let t = t.trim();
@@ -184,40 +304,48 @@ impl Storage {
                 location = $3
                WHERE event_id = $4"#
         );
-        self.backend.execute(
-            &sql,
-            &[
-                SqlParam::Text(purified_content.to_string()),
-                opt_text(normalized_time.as_deref()),
-                opt_text(location),
-                SqlParam::Text(event_id.to_string()),
-            ],
-        )?;
-        // Sync vec_events virtual table (delete + insert since vec0 doesn't support REPLACE)
-        if !content_vec.is_empty() {
-            if let Some(del_sql) = self.dialect().vec0_event_delete_sql() {
-                let _ = self.backend.execute(
-                    del_sql,
+        let update_params = vec![
+            SqlParam::Text(purified_content.to_string()),
+            opt_text(normalized_time.as_deref()),
+            opt_text(location),
+            SqlParam::Text(event_id.to_string()),
+        ];
+        let delete_sql = self.dialect().vector_event_delete_sql();
+        let insert_sql = self.dialect().vector_event_insert_sql("$1", &emb_literal);
+        self.backend.transaction(|tx| {
+            let (user_id, agent_id) = tx
+                .query_one(
+                    "SELECT user_id, agent_id FROM events WHERE event_id = $1",
                     &[SqlParam::Text(event_id.to_string())],
-                );
+                    |row| Ok((row.get_string(0)?, row.get_opt_string(1)?)),
+                )?
+                .ok_or_else(|| MemoryError::NotFound(event_id.to_string()))?;
+
+            tx.execute(&sql, &update_params)?;
+            if let Some(delete_sql) = delete_sql {
+                tx.execute(delete_sql, &[SqlParam::Text(event_id.to_string())])?;
             }
-            if let Some(vec0_sql) = self.dialect().vec0_event_insert_sql("$1", &emb_literal) {
-                let user_id = self.backend.query_one(
-                    "SELECT user_id FROM events WHERE event_id = $1",
-                    &[SqlParam::Text(event_id.to_string())],
-                    |row| row.get_string(0),
+            if let Some(insert_sql) = insert_sql.as_deref() {
+                tx.execute(
+                    insert_sql,
+                    &[
+                        SqlParam::Text(event_id.to_string()),
+                        SqlParam::Text(user_id),
+                        opt_text(agent_id.as_deref()),
+                    ],
                 )?;
-                if let Some(uid) = user_id {
-                    self.backend.execute(
-                        &vec0_sql,
-                        &[SqlParam::Text(event_id.to_string()), SqlParam::Text(uid)],
-                    )?;
-                }
             }
-        }
-        // Incrementally update events FTS index
-        self.fts_insert_event(event_id, purified_content);
-        Ok(())
+            if tx.table_exists("events_fts")? {
+                tx.execute(
+                    "INSERT OR REPLACE INTO events_fts(event_id, content) VALUES ($1, $2)",
+                    &[
+                        SqlParam::Text(event_id.to_string()),
+                        SqlParam::Text(purified_content.to_string()),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// List events with filters.
@@ -271,6 +399,62 @@ impl Storage {
         )
     }
 
+    pub(crate) fn event_has_embedding(&self, event_id: &str) -> Result<bool> {
+        self.backend
+            .query_one(
+                "SELECT content_vec IS NOT NULL FROM events WHERE event_id = $1",
+                &[SqlParam::Text(event_id.to_string())],
+                |row| row.get_bool(0),
+            )?
+            .ok_or_else(|| MemoryError::NotFound(event_id.to_string()))
+    }
+
+    /// Backfill only the raw event embedding. This leaves purification and
+    /// lifecycle fields unchanged, so an exact event replay remains harmless.
+    pub(crate) fn backfill_event_embedding(
+        &self,
+        event_id: &str,
+        content_vec: &[f32],
+    ) -> Result<()> {
+        if content_vec.len() != self.config.embedding_dims {
+            return Err(MemoryError::Config(format!(
+                "embedding dimension mismatch: expected {}, got {}",
+                self.config.embedding_dims,
+                content_vec.len()
+            )));
+        }
+        let emb_literal = self.format_embedding(content_vec, self.config.embedding_dims)?;
+        let delete_sql = self.dialect().vector_event_delete_sql();
+        let insert_sql = self.dialect().vector_event_insert_sql("$1", &emb_literal);
+        self.backend.transaction(|tx| {
+            let (user_id, agent_id) = tx
+                .query_one(
+                    "SELECT user_id, agent_id FROM events WHERE event_id = $1",
+                    &[SqlParam::Text(event_id.to_string())],
+                    |row| Ok((row.get_string(0)?, row.get_opt_string(1)?)),
+                )?
+                .ok_or_else(|| MemoryError::NotFound(event_id.to_string()))?;
+            tx.execute(
+                &format!("UPDATE events SET content_vec = {emb_literal} WHERE event_id = $1"),
+                &[SqlParam::Text(event_id.to_string())],
+            )?;
+            if let Some(delete_sql) = delete_sql {
+                tx.execute(delete_sql, &[SqlParam::Text(event_id.to_string())])?;
+            }
+            if let Some(insert_sql) = insert_sql.as_deref() {
+                tx.execute(
+                    insert_sql,
+                    &[
+                        SqlParam::Text(event_id.to_string()),
+                        SqlParam::Text(user_id),
+                        opt_text(agent_id.as_deref()),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// Mark events as processed (batch UPDATE with WHERE IN).
     pub(crate) fn mark_events_processed(&self, event_ids: &[&str]) -> Result<()> {
         if event_ids.is_empty() {
@@ -289,22 +473,25 @@ impl Storage {
         Ok(())
     }
 
-    /// Get events by a list of IDs, preserving insertion order.
-    pub(crate) fn get_events_by_ids(&self, event_ids: &[String]) -> Result<Vec<Event>> {
+    /// Get one user's events by a list of IDs, preserving timestamp order.
+    pub(crate) fn get_events_by_ids_for_user(
+        &self,
+        event_ids: &[String],
+        user_id: &str,
+    ) -> Result<Vec<Event>> {
         if event_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Build IN clause with positional params
-        let placeholders: Vec<String> = (1..=event_ids.len()).map(|i| format!("${i}")).collect();
+        let placeholders: Vec<String> =
+            (2..=event_ids.len() + 1).map(|i| format!("${i}")).collect();
         let sql = format!(
-            "SELECT {} FROM events WHERE event_id IN ({}) ORDER BY timestamp ASC",
+            "SELECT {} FROM events WHERE user_id = $1 AND event_id IN ({}) ORDER BY timestamp ASC",
             event_cols(),
             placeholders.join(", ")
         );
-        let param_vals: Vec<SqlParam> = event_ids
-            .iter()
-            .map(|id| SqlParam::Text(id.clone()))
-            .collect();
+        let mut param_vals = Vec::with_capacity(event_ids.len() + 1);
+        param_vals.push(SqlParam::Text(user_id.to_string()));
+        param_vals.extend(event_ids.iter().cloned().map(SqlParam::Text));
         self.backend
             .query_read(&sql, &param_vals, |row| map_event_row(row))
     }
@@ -370,7 +557,7 @@ impl Storage {
         self.backend
             .query_read(&sql, &[SqlParam::Text(user_id.to_string())], |row| {
                 let event = map_event_row(row)?;
-                let distance: f32 = row.get_f64(15).unwrap_or(2.0) as f32;
+                let distance: f32 = row.get_f64(18).unwrap_or(2.0) as f32;
                 Ok((event, distance))
             })
     }
@@ -452,11 +639,26 @@ impl Storage {
     /// Delete all events for a user.
     #[allow(dead_code)] // planned API: user data cleanup
     pub(crate) fn delete_user_events(&self, user_id: &str) -> Result<()> {
-        self.backend.execute(
-            "DELETE FROM events WHERE user_id = $1",
-            &[SqlParam::Text(user_id.to_string())],
-        )?;
-        Ok(())
+        let vector_table = self.dialect().event_vector_table_name();
+        self.backend.transaction(|tx| {
+            let params = &[SqlParam::Text(user_id.to_string())];
+            tx.execute(
+                &format!(
+                    "DELETE FROM {vector_table} WHERE rowid IN (\
+                     SELECT rowid FROM {vector_table}_vectors WHERE user_id = $1)"
+                ),
+                params,
+            )?;
+            if tx.table_exists("events_fts")? {
+                tx.execute(
+                    "DELETE FROM events_fts WHERE event_id IN (\
+                     SELECT event_id FROM events WHERE user_id = $1)",
+                    params,
+                )?;
+            }
+            tx.execute("DELETE FROM events WHERE user_id = $1", params)?;
+            Ok(())
+        })
     }
 
     /// Get all events in a session ordered by timestamp (oldest first).

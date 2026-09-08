@@ -1,7 +1,48 @@
-use crate::error::Result;
+use crate::error::{MemoryError, Result};
+use crate::storage::portable_import::{validate_full_import_envelope, FullImportEmbeddings};
 use crate::types::{FullExport, FullImportResult, MemoryExport};
 
 use super::helpers::chrono_now;
+
+fn validate_embedding_batch(
+    layer: &str,
+    text_count: usize,
+    embeddings: &[Vec<f32>],
+    expected_dimensions: usize,
+) -> Result<()> {
+    if embeddings.len() != text_count {
+        return Err(MemoryError::Config(format!(
+            "embedder returned {} {layer} embeddings for {text_count} texts",
+            embeddings.len()
+        )));
+    }
+    if let Some((index, embedding)) = embeddings
+        .iter()
+        .enumerate()
+        .find(|(_, embedding)| embedding.len() != expected_dimensions)
+    {
+        return Err(MemoryError::Config(format!(
+            "embedder returned a {layer} embedding with {} dimensions at index {index}; expected {expected_dimensions}",
+            embedding.len()
+        )));
+    }
+    Ok(())
+}
+
+fn embed_in_batches(
+    embedder: &dyn memme_embeddings::Embedder,
+    layer: &str,
+    texts: &[&str],
+) -> Result<Vec<Vec<f32>>> {
+    const BATCH_SIZE: usize = 128;
+    let mut result = Vec::with_capacity(texts.len());
+    for chunk in texts.chunks(BATCH_SIZE) {
+        let embeddings = embedder.embed_batch(chunk)?;
+        validate_embedding_batch(layer, chunk.len(), &embeddings, embedder.dimensions())?;
+        result.extend(embeddings);
+    }
+    Ok(result)
+}
 
 impl super::MemoryStore {
     /// Export memories with optional user_id filter.
@@ -11,7 +52,12 @@ impl super::MemoryStore {
 
     /// Import memories from an export. Returns the number of imported memories.
     pub fn import_memories(&self, memories: &[MemoryExport]) -> Result<u64> {
-        self.storage.import_memories(memories)
+        let texts: Vec<&str> = memories
+            .iter()
+            .map(|memory| memory.content.as_str())
+            .collect();
+        let embeddings = embed_in_batches(self.embedder.as_ref(), "memory", &texts)?;
+        self.storage.import_memories_atomic(memories, &embeddings)
     }
 
     /// Export memories with control over including local_only privacy memories.
@@ -34,28 +80,58 @@ impl super::MemoryStore {
     /// Import all data layers from a `FullExport`.
     /// Inserts in dependency order: sources -> sessions -> events -> episodes ->
     /// memories -> entities -> relations -> identity traits.
-    /// Existing records (by primary key) are skipped.
+    /// The export version and collection must match. Any existing primary-key ID
+    /// rejects the whole import so no authoritative fields are silently skipped.
     pub fn full_import(&self, export: &FullExport) -> Result<FullImportResult> {
-        let sources = self.storage.import_sources(&export.sources)?;
-        let sessions = self.storage.import_sessions(&export.sessions)?;
-        let events = self.storage.import_events(&export.events)?;
-        let episodes = self.storage.import_episodes(&export.episodes)?;
-        let memories = self.storage.import_memories(&export.memories)?;
-        let entities = self.storage.import_entities(&export.entities)?;
-        let relations = self.storage.import_relations(&export.relations)?;
-        let identity_traits = self
-            .storage
-            .import_identity_traits(&export.identity_traits)?;
-        Ok(FullImportResult {
-            sources,
-            sessions,
-            events,
-            episodes,
-            memories,
-            entities,
-            relations,
-            identity_traits,
-        })
+        validate_full_import_envelope(
+            export,
+            self.embedder.dimensions(),
+            &self.config.collection_name,
+        )?;
+        self.storage.preflight_full_import_target(export)?;
+        let memory_texts: Vec<&str> = export
+            .memories
+            .iter()
+            .map(|memory| memory.content.as_str())
+            .collect();
+        let event_texts: Vec<&str> = export
+            .events
+            .iter()
+            .map(|event| {
+                event
+                    .purified_content
+                    .as_deref()
+                    .unwrap_or(event.content.as_str())
+            })
+            .collect();
+        let episode_texts: Vec<&str> = export
+            .episodes
+            .iter()
+            .map(|episode| episode.summary.as_str())
+            .collect();
+        let identity_texts: Vec<&str> = export
+            .identity_traits
+            .iter()
+            .map(|identity| identity.content.as_str())
+            .collect();
+        // Finish all embedding calls before writing any imported rows. A remote
+        // embedding failure therefore cannot leave a half-imported data set.
+        let memory_embeddings = embed_in_batches(self.embedder.as_ref(), "memory", &memory_texts)?;
+        let event_embeddings = embed_in_batches(self.embedder.as_ref(), "event", &event_texts)?;
+        let episode_embeddings =
+            embed_in_batches(self.embedder.as_ref(), "episode", &episode_texts)?;
+        let identity_embeddings =
+            embed_in_batches(self.embedder.as_ref(), "identity", &identity_texts)?;
+
+        self.storage.import_full_atomic(
+            export,
+            FullImportEmbeddings {
+                memories: &memory_embeddings,
+                events: &event_embeddings,
+                episodes: &episode_embeddings,
+                identity_traits: &identity_embeddings,
+            },
+        )
     }
 
     /// Export all changes since the given sync version as a `SyncDelta`.

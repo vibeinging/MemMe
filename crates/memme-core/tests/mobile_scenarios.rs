@@ -544,6 +544,12 @@ fn test_four_level_scoping() {
             AddOptions::new("u1").agent_id("agent1"),
         )
         .unwrap();
+    store
+        .add(
+            "other agent memory unique content epsilon",
+            AddOptions::new("u1").agent_id("agent2"),
+        )
+        .unwrap();
 
     // App-level
     store
@@ -561,13 +567,18 @@ fn test_four_level_scoping() {
         )
         .unwrap();
 
-    // Searching with agent_id filter should only see agent-scoped memories
+    // Agent search combines user-global memories with the selected agent, while
+    // still excluding memories owned by another agent.
     let agent_results = store
         .search("memory", SearchOptions::new("u1").agent_id("agent1"))
         .unwrap();
-    for r in &agent_results {
-        assert_eq!(r.agent_id.as_deref(), Some("agent1"));
-    }
+    assert!(agent_results.iter().any(|r| r.agent_id.is_none()));
+    assert!(agent_results
+        .iter()
+        .any(|r| r.agent_id.as_deref() == Some("agent1")));
+    assert!(agent_results
+        .iter()
+        .all(|r| r.agent_id.as_deref() != Some("agent2")));
 
     // Searching with app_id filter should only see app-scoped memories
     let app_results = store

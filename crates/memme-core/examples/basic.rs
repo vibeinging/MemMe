@@ -1,7 +1,8 @@
 //! Basic example: demonstrates core memory operations without LLM.
 //!
 //! Run with:
-//!   cargo run -p memme-core --example basic
+//!   MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)" \
+//!     cargo run -p memme-core --example basic
 
 use std::sync::Arc;
 

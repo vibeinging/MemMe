@@ -55,6 +55,8 @@ jobs:
             ~/.cargo/git
             target
           key: test-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Download and verify VexDB-Lite SQLite extension
+        run: bash scripts/download-vexdb-lite-extension.sh
       - name: Unit tests
         run: cargo test -p memme-core
       - name: Embeddings tests

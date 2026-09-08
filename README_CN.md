@@ -2,384 +2,337 @@
 
 # MemMe
 
-**Memories that are actually yours.**
+**给 AI 宠物用的本地长期记忆体。**
 
-一个可嵌入的 AI 记忆引擎。一个文件。你的设备。你说了算。
+记住主人，分清每只宠物的关系，数据留在设备里。
 
-[![Website](https://img.shields.io/badge/Website-vibeinging.github.io/MemMe-8b7cf6?style=flat-square&logo=github)](https://vibeinging.github.io/MemMe/)
 [![CI](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeinging/MemMe/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40wjmwjmwb%2Fmemme.svg)](https://www.npmjs.com/package/@wjmwjmwb/memme)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/memme-core.svg)](https://crates.io/crates/memme-core)
 
-**Rust 内核** · **SQLite 单文件** · **<10ms 检索** · **6 语言绑定** · **LoCoMo 82.92%**
+**Rust 内核** · **SQLite 单文件** · **VexDB-Lite** · **macOS / Linux** · **本地优先**
 
 [English](README.md) | 中文
 
-<img src="docs/images/hero.png" alt="MemMe Hero" width="720">
-
 </div>
 
 ---
 
-你和 AI 助手聊了三个月。它知道你的工作、你的口味、你的思考方式。
+MemMe 是 AI 宠物和 AI 陪伴设备的本地长期记忆体。它让 AI 宠物记住主人、保留
+共同经历、分清每一段关系，并在重启、断网或更换模型后继续保持记忆。
 
-然后有一天，平台修改了隐私政策。或者你想换一个模型。或者服务停了。
+整个引擎围绕 AI 宠物的关系连续性、安全、隔离、低延迟和端侧运行来设计。Rust
+内核也可以嵌入其他陪伴类产品。
 
-你的三个月记忆，蒸发了。
+## 在本地试用
 
-不是因为技术做不到。是因为**那些记忆从来就不属于你。**
-
-MemMe 想改变这件事。
-
-## 你的记忆，凭什么在别人的服务器上？
-
-你的日记、照片、通讯录，存在你自己的手机里。你可以备份、迁移、删除。
-
-但你和 AI 的全部对话记忆呢？存在 OpenAI 的服务器上。存在 Claude 的云端。你不知道谁能访问它们，不知道它们被用来训练了什么，不知道明天它们还在不在。
-
-AI 记忆比普通数据敏感得多。它不只是你说了什么，更是你**是什么样的人**——你的思维模式、决策习惯、情感状态、人际关系。这是最私密的个人画像。
-
-**这样的数据，应该放在你自己的设备上。**
-
-## MemMe：一个文件，装下全部记忆
-
-```
-memory.db                  <- 你的全部记忆，一个文件
-memory.db.replica          <- 自动备份副本，防丢失
-|
-├── memories               内容 + 向量 + 元数据
-├── entities / relationships   知识图谱（人、地、事 + 关系）
-├── sessions / events      原始对话流
-├── episodes               情景记忆（对话压缩后的故事）
-├── identity               身份特征（你是谁）
-├── procedures             程序性记忆（技能、习惯）
-├── meditations            冥想日志（记忆整合记录）
-├── history                变更审计（每次读写都有记录）
-└── memme_config           运行时配置
-```
-
-要备份？`sync_replica()` 自动双副本，`backup_to_path()` 生成云备份快照。要迁移？`full_export()` 导出全部数据为 JSON。要导入 ChatGPT 历史？一行代码搞定。要彻底删除？删除文件。
-
-Rust 写的内核。接上 LLM 做智能提取，不接也能跑——纯向量模式延迟低于 10ms。Python、Node.js、Swift/Kotlin 原生绑定（UniFFI），嵌入式设备和机器人也能跑，不是 HTTP 套壳。
-
-应用倒了，记忆还在。模型换了，记忆还在。平台跑了，记忆还在。
-
-## 试一下
+最快的路径完全运行在你自己的机器上——不需要 API Key，不连云。需要
+macOS 或 Linux（x64 / arm64）和 Rust 工具链：
 
 ```bash
-pip install memme
-python demos/playground/server.py
+git clone https://github.com/vibeinging/MemMe.git
+cd MemMe
+bash demos/rest-demo.sh
 ```
 
-浏览器自动打开。存记忆、搜记忆、跟记忆对话。数据就在你的机器上。
+脚本会下载固定版本的 VexDB-Lite 扩展、构建使用本地 ONNX 向量模型的 REST
+服务，写入一位主人和两只宠物的记忆，完整重启进程后再次检索——重启后记忆
+还在、不同宠物不串记忆，这两件事你可以亲自验证。首次运行会下载约 100 MB
+的本地向量模型（仅一次）；之后启动是即时的，并且完全离线。Node.js 和手动
+REST 路径见下面的快速开始。
 
-## 跑分
+## AI 宠物真正需要记住什么
 
-[LoCoMo 基准测试](https://github.com/snap-stanford/locomo)（1540 题，10 组对话，GPT-4o-mini 评判）：
+AI 宠物的记忆，不应该只是一堆相似的聊天片段：
 
-<div align="center">
-<img src="docs/images/benchmark.png" alt="MemMe Benchmark" width="720">
-</div>
+- **主人记忆**：稳定资料、喜好、边界和安全信息，可以被主人的多只宠物共享。
+- **关系记忆**：称呼、共同经历、只有彼此懂的梗和互动习惯，只属于一只宠物和
+  主人的关系，不能串给另一只宠物。
+- **即时事件**：刚刚说过的话、刚刚发生的动作，不需要等后台总结就能找到。
+- **变化中的事实**：已经过期或被新事实替代的内容不能继续影响回答，但历史记录
+  仍然保留。
+- **本地持久状态**：重启、断网、换模型、升级应用后，记忆仍然存在。
 
-**总分：82.92%** · *无 rerank 版本：80.91（仍全面超越所有基线）*
+## 核心能力
 
-流水线：append_events → compact → meditate（逐 episode 事实提取 + 向量去重）。四通道检索（向量 + BM25 + 实体扩散 + 时序）经 RRF 融合 + 交叉编码器重排。
+- 一次搜索合并主人全局记忆和当前宠物的关系记忆。
+- 刚写入的事件可以立即在正确的主人和宠物范围内找回。
+- 默认隔离不同主人、不同宠物的关系记忆。
+- 过期和已经被替代的事实不会进入回答上下文。
+- 使用 SQLite 单文件保存权威数据，VexDB-Lite 提供向量索引。
+- 组合向量、全文、实体、时间和精确编号检索。
+- 保留历史、不可变安全记忆、备份和可搬走的导出数据。
+- 可选的 LLM 提取和整理放在回复热路径之外运行。
 
-## 它能做什么
+## 记忆模型
 
-### 四层记忆架构
-
-<div align="center">
-<img src="docs/images/pipeline.png" alt="MemMe Pipeline" width="720">
-</div>
-
-模拟人类从感知到认知的完整层次：
-
-- **Stream（感知流）** — 原始输入，忠实记录
-- **Episode（情景记忆）** — 事件聚合成有意义的"故事"
-- **Semantic（语义记忆）** — 从故事中提炼知识和事实
-- **Identity（身份记忆）** — 最高阶抽象：你是谁
-
-### "冥想"机制
-
-人在睡眠时整理白天的经历。MemMe 也一样——空闲时自动：
-
-1. 衰减旧记忆（FSRS 遗忘曲线）
-2. 从情景中提炼事实
-3. 向量去重：新事实与已有记忆自动比对，相似则跳过
-4. 构建知识图谱，关联实体与记忆
-5. 自动循环直到所有未冥想的情景处理完毕
-
-三个月前随口提的餐厅自然淡出，反复提及的偏好越来越牢固。冥想前自动备份副本，失败不会丢数据。
-
-### 反思与反馈学习
-
-- **反思（Reflect）** — 基于近期记忆和身份特征，LLM 生成主题洞察和聚焦建议
-- **反馈学习（Learn from Feedback）** — 从用户纠正中提炼行为原则，存为高重要度记忆和身份特征
-- **健康诊断（Diagnose）** — 一键检测存储、Embedder、LLM 连通性，每项附带延迟报告
-
-### 数据保护
-
-你的记忆绝对不能丢。MemMe 提供四层保护：
-
-- **双副本** — 主文件 + `.replica` 备份，CHECKPOINT + 原子复制，冥想前自动同步
-- **自动恢复** — 主文件损坏时，启动时自动从副本恢复
-- **云备份** — `backup_to_path()` 生成可移植快照（含记忆条数、schema 版本、文件大小等元数据），宿主应用负责上传到 iCloud/S3/云盘；`restore_from_backup()` 验证并恢复
-- **完整导出** — 8 层数据（记忆、会话、事件、情景、实体、关系、身份、来源）一键导出为 JSON，可完整导入
-
-```rust
-store.sync_replica()?;                         // 同步副本
-let info = store.backup_to_path("/path/to/backup.db")?;  // 云备份
-store.full_export(Some("alice"))?;             // 导出全部数据
-store.full_import(&data)?;                     // 导入全部数据
+```text
+消息 / 动作
+    │
+    ▼
+只追加的事件流 ─────────────────► 立即可以搜索
+    │
+    ▼
+会话 ── compact ──► 共同经历 ── meditate ──► 长期事实
+                                               │
+                     ┌─────────────────────────┴──────────────┐
+                     │                                        │
+               主人全局记忆                           当前宠物关系记忆
+               agent_id = NULL                       agent_id = 当前宠物
+                     │                                        │
+                     └────────────── 搜索 ────────────────────┘
+                                          │
+                                VexDB 向量 + SQLite FTS
 ```
 
-### 聊天记录导入
+正常回复时，不需要额外调用一次“记忆 LLM”。热路径只负责保存原始事件、读取小块
+状态并取回少量相关记忆。事实提取、冲突整理、图谱和反思可以在回复后或设备空闲时
+运行。
 
-把你在其他平台的对话历史带回来：
+SQLite 表是权威数据。向量索引和全文索引都是派生数据，可以重新生成。
 
-```rust
-use memme_core::import::{parse_chatgpt, parse_claude_export, parse_gemini};
+## PetMemBench
 
-// ChatGPT：设置 > 导出数据 > conversations.json
-let convs = parse_chatgpt(&json_string)?;
+`PetMemBench` 是 MemMe 的产品 Benchmark，场景覆盖主人安全、每只宠物的关系、
+即时事件、隐私隔离、中文检索、过期、纠正和删除。
 
-// Claude：设置 > 导出数据 > conversations.jsonl
-let convs = parse_claude_export(&jsonl_string)?;
+`0.1.2` 发布 Benchmark，2,000 条记忆，独立运行三次后的中位数：
 
-// Gemini：Google Takeout > Gemini Apps
-let convs = parse_gemini(&json_string)?;
+| 指标 | 结果 |
+|---|---:|
+| 必须场景 | 11 / 11 |
+| 扩展场景 | 3 / 3 |
+| Recall@10 | 100% |
+| 查询 p50 | 1.999 ms |
+| 查询 p95 | 3.062 ms |
+| 查询 p99 | 17.128 ms |
+| 写入速度 | 445.7 条/秒 |
+| SQLite 文件大小 | 10.4 MB |
 
-// 导入到 MemMe
-store.import_conversations(&convs, "alice")?;
-// 然后运行 compact + meditate 提取记忆
+这些数字只证明当前存储和检索约定已经跑通，**不能代表最终回答质量或生产性能**。
+当前 Benchmark 使用确定性的本地测试向量，数据量为 2,000 条，并且在 Apple
+Silicon 上用 x86_64/Rosetta 进程运行。
+
+- [0.1.2 发布报告](docs/reports/2026-09-01_release-0.1.2.md)
+- [测试场景](benchmarks/petmem/scenarios.json)
+- [AI 宠物记忆架构调研](docs/research/2026-09-01_ai-pet-memory-architecture.md)
+
+## Node.js 快速开始
+
+当前 npm 包支持 macOS、Linux 的 arm64 和 x64：
+
+```bash
+npm install @wjmwjmwb/memme
 ```
 
-### 四通道混合检索
+MemMe 不会把 VexDB-Lite SQLite 扩展打进 npm 包。请下载匹配架构、来源可信的
+VexDB-Lite v0.0.17 动态库，并提供绝对路径：
 
-<div align="center">
-<img src="docs/images/search.png" alt="MemMe Search" width="720">
-</div>
-
-向量语义搜索 + BM25 全文搜索 + 实体图谱导航 + 时间维度，四路并行，RRF 融合后经 cross-encoder 重排序。支持自适应 RRF 权重缩放和分辨率加权评分（Granular/Narrative/Identity 三级粒度）。
-
-### 知识图谱
-
-LLM 自动提取实体和关系，存在 SQLite 里，SQL 直接查。不需要外挂 Neo4j。
-
-### 隐私控制
-
-每条记忆独立设置隐私级别——仅本地、可同步、加密同步。医疗记录锁在手机里，咖啡偏好同步到所有设备。完整审计日志，每次读写都有记录。
-
-### 语言绑定
-
-<div align="center">
-<img src="docs/images/bindings.png" alt="MemMe Bindings" width="720">
-</div>
-
-### 全端原生
-
-| 平台 | 方式 |
-|------|------|
-| Mac / Linux / Windows | Rust 原生 |
-| iPhone / iPad | Swift 绑定 (UniFFI) |
-| Android | NDK 原生 |
-| Web / Electron | Node.js 绑定 (NAPI-RS) |
-| Python 生态 | PyO3 绑定 |
-| 机器人 / IoT | Rust 编译到 ARM |
-
-所有平台共享同一个 Rust 内核，同一个 `.db` 文件格式。
-
-### 生态集成
-
-| 集成 | 状态 | 说明 |
-|------|------|------|
-| **Claude Desktop / Cursor** | 已完成 | MCP 协议接入，作为 AI 的长期记忆 |
-| **REST API** | 已完成 | axum 服务，23 个端点，Bearer 认证 |
-| **[YiYi](https://github.com/vibeinging/YiYi)** | 已集成 | 桌面 AI 个人助手——能操作电脑、执行任务、管理文件，记忆系统由 MemMe 驱动（以作者女儿名字命名的产品，MemMe 的最佳实践项目之一，持续更新中） |
-| **OpenClaw** | 初步搭建 | 开源 Agent 框架的记忆插件 |
-| **Dora-rs** | 初步搭建 | Rust 机器人框架的记忆节点 |
-| **LeRobot** | 初步搭建 | Hugging Face 机器人框架的记忆封装 |
-| **Copper-rs** | 初步搭建 | 实时机器人框架的 CuTask 集成 |
-| **LangChain / LlamaIndex** | 规划中 | 主流 LLM 框架适配 |
-
-## 对比
-
-| | **MemMe** | **mem0** | **Zep** |
-|---|---|---|---|
-| 部署 | 一个 `.db` 文件 | 服务器 + Qdrant + Neo4j | 托管云 |
-| 移动端 | 原生支持 | 不支持 | 不支持 |
-| 离线 | 完整支持 | 需要云 API | 仅云端 |
-| 无 LLM 延迟 | <10ms | 必须有 LLM | 必须有 LLM |
-| 语言 | Rust | 仅 Python | Go |
-| 知识图谱 | 内置 | 外挂 Neo4j | 无 |
-| 混合检索 | 四通道 + RRF | 无 | 部分 |
-| 遗忘曲线 | 内置 | 无 | 无 |
-| 数据保护 | 双副本 + 云备份 + 完整导出 | 无 | SOC2/HIPAA（云） |
-| 聊天导入 | ChatGPT / Claude / Gemini | 无 | 无 |
-
-## 谁应该用 MemMe
-
-- **在意数据主权的人** — 记忆在你的设备上，不在别人的服务器里
-- **想带走聊天历史的人** — 从 ChatGPT/Claude/Gemini 导入，数据属于你
-- **数字分身开发者** — 跨年的人格一致性，应用迭代但"我是谁"不丢
-- **端侧 AI 助手** — 手机上的私人助理，完全离线
-- **隐私敏感场景** — 医疗、法律、金融，数据不出设备
-- **非 Python 开发者** — Rust / Swift / Node.js 终于有了原生记忆引擎
-- **具身智能** — 10ms 以内的端侧记忆，单文件部署无网络依赖；机器人记住走过的路线、抓过的物体、听到的指令；原生集成 Dora-rs / LeRobot / Copper-rs，ARM 交叉编译直接跑在嵌入式设备上
-
----
-
-## 技术文档
-
-以下是面向开发者的技术细节。
-
-### 快速上手
-
-**Python**
-
-```python
-from memme import MemoryStore
-
-store = MemoryStore("memory.db")
-store.add("Alex 喜欢喝燕麦拿铁", user_id="alex")
-store.add("女儿 Mia 的生日是 3 月 15 日", user_id="alex")
-
-results = store.search("家人的生日", user_id="alex")
-for r in results:
-    print(r["content"], r["score"])
+```bash
+export MEMME_VEXDB_LITE_EXTENSION=/absolute/path/to/vexdb_lite.dylib
 ```
 
-**Rust**
+```javascript
+const { MemoryStore } = require("@wjmwjmwb/memme");
+
+const store = MemoryStore.newOpenai(
+  process.env.OPENAI_API_KEY,
+  "momo-memory.db",
+);
+
+// 主人全局记忆：主人选中的宠物都能取到。
+await store.add("主人对花生严重过敏。", "owner-001");
+
+// 关系记忆：只有默默能取到。
+await store.add(
+  "默默和主人第一次见面是在银杏树下。",
+  "owner-001",
+  "momo",
+);
+
+const context = await store.search(
+  "给默默准备生日零食，要注意什么？",
+  "owner-001",
+  "momo",
+  null,
+  5,
+);
+
+console.log(context);
+```
+
+不想调用向量服务的测试，可以使用 `MemoryStore.newMock()`。
+
+## Rust 快速开始
+
+Rust 项目可以直接从本仓库构建 SQLite 引擎：
+
+```bash
+git clone https://github.com/vibeinging/MemMe.git
+cd MemMe
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+cargo build -p memme-core
+cargo test -p memme-core
+```
 
 ```rust
 use std::sync::Arc;
-use memme_core::{MemoryConfig, MemoryStore, AddOptions, SearchOptions};
+use memme_core::{AddOptions, MemoryConfig, MemoryStore, SearchOptions};
 use memme_embeddings::onnx::OnnxEmbedder;
 
 fn main() -> memme_core::Result<()> {
-    let config = MemoryConfig::new("memory.db", 384);
+    let config = MemoryConfig::new("momo-memory.db", 384);
     let embedder = Arc::new(OnnxEmbedder::new()?);
     let store = MemoryStore::new(config, embedder)?;
 
-    store.add("Alex 喜欢喝燕麦拿铁", AddOptions::new("alex"))?;
-    let results = store.search("饮品偏好", SearchOptions::new("alex").limit(5))?;
+    store.add(
+        "主人对花生严重过敏。",
+        AddOptions::new("owner-001").immutable(true),
+    )?;
+
+    store.add(
+        "默默和主人第一次见面是在银杏树下。",
+        AddOptions::new("owner-001").agent_id("momo"),
+    )?;
+
+    let memories = store.search(
+        "给默默准备生日零食，要注意什么？",
+        SearchOptions::new("owner-001").agent_id("momo").limit(5),
+    )?;
+
+    for memory in memories {
+        println!("{}", memory.content);
+    }
+
     Ok(())
 }
 ```
 
-**Node.js**
+## REST 服务快速开始
 
-```javascript
-const { MemoryStore } = require("memme");
-
-// OpenAI embedding（或 newMock() 免 API 测试）
-const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "memory.db");
-await store.add("Alex 喜欢喝燕麦拿铁", "alex");
-const results = await store.search("饮品偏好", "alex");
-```
-
-**Swift (UniFFI)**
-
-```swift
-import MemMe
-
-// 宿主 App 提供 HTTP 传输（URLSession / OkHttp）
-let store = try MemoryStore.newWithHttpClient(
-    dbPath: "memory.db",
-    httpClient: myHttpClient,  // 实现 HttpClient 协议
-    apiKey: "sk-...",
-    model: "text-embedding-3-small",
-    dims: 1536
-)
-try store.add("Alex 喜欢喝燕麦拿铁", userId: "alex")
-let results = try store.search("饮品偏好", userId: "alex")
-```
-
-### 架构
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                      语言绑定                              │
-│  Python (PyO3)  │  Node.js (NAPI-RS)  │  Swift (UniFFI)  │
-├──────────────────────────────────────────────────────────┤
-│  REST API (axum)          │  MCP 服务 (stdio)             │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│                   memme-core (Rust)                       │
-│                                                          │
-│  事件流 ──► 会话 ──► 片段 ──► 记忆                         │
-│                   compact  meditate │                     │
-│                          ┌─────────┤                     │
-│                          ▼         ▼                     │
-│                      身份特征    知识图谱                   │
-│                                                          │
-│  搜索：向量 + BM25 + 图谱 + 时间                           │
-│        ──► RRF 融合 ──► 重排序                             │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  SQLite（.db 单文件 + .replica 备份）                │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  memme-embeddings          memme-llm                     │
-│  (ONNX / OpenAI / Ollama)  (OpenAI / Anthropic / Gemini  │
-│                             / Ollama / Noop)             │
-└──────────────────────────────────────────────────────────┘
-```
-
-### REST API
+服务默认使用体积较小的本地 `bge-small-zh-v1.5` ONNX 模型，不需要云端 Key。
+多语言数据可以改用 `--onnx-embedding-model multilingual-e5-small`。LLM 是可选项：
+事件写入和召回不需要 LLM；`compact` 和 `meditate` 需要配置 LLM。
 
 ```bash
-cargo run -p memme-server -- --db-path memory.db --port 8080
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+export MEMME_API_KEY=change-me
+cargo run --release -p memme-server -- --db-path momo-memory.db
 ```
+
+每条消息都使用稳定的 `event_id`。同一请求重试不会重复写入：
 
 ```bash
-# 存记忆
-curl -X POST http://localhost:8080/v1/memories \
-  -H "Content-Type: application/json" \
-  -d '{"content": "Alex 喜欢喝燕麦拿铁", "user_id": "alex"}'
-
-# 搜索
-curl -X POST http://localhost:8080/v1/memories/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "饮品偏好", "user_id": "alex"}'
+curl -s http://127.0.0.1:8080/v1/events \
+  -H "Authorization: Bearer $MEMME_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id":"voice-session-001",
+    "user_id":"owner-001",
+    "agent_id":"momo",
+    "app_id":"xiaozhi",
+    "messages":[{
+      "event_id":"voice-session-001-user-001",
+      "role":"user",
+      "content":"我给默默买了一个蓝色鲸鱼玩具。"
+    }]
+  }'
 ```
 
-完整 API：[docs/openapi.yaml](docs/openapi.yaml) — 粘贴到 [Swagger Editor](https://editor.swagger.io) 浏览 23 个端点。
+召回时继续使用同一个 `user_id` 和 `agent_id`，不同宠物的关系记忆不会混在一起。
+完整接口见 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
-### MCP 服务
+REST API 也提供完整的用户数据操作：
 
-```json
-{
-  "mcpServers": {
-    "memme": {
-      "command": "/path/to/memme-mcp",
-      "args": ["--db-path", "memory.db"]
-    }
-  }
-}
-```
+- `POST /v1/data/export` 生成不受分页限制的 v3 用户导出，包含生命周期、
+  纠错、图谱、审计、流程、冥想和召回数据。
+- `POST /v1/data/import` 只接受同 collection 的 v3 导出，先校验主人、宠物和
+  跨层引用，再用一个事务导入全部数据层；目标库不能已有待导入 ID。服务会在读取
+  JSON 前取得唯一导入名额，并限制请求体、记录数和向量内存；更大的数据库或整库
+  替换应使用 SQLite 备份。
+- `DELETE /v1/users/{user_id}` 在精确确认后，删除该用户的记忆、原始事件、
+  会话、情景、图谱、身份和历史。
+- `POST /v1/backups` 使用 SQLite 在线备份接口，在服务可用时创建一致的快照。
+- `POST /v1/backups/restore` 会先按当前向量维度、VexDB-Lite 和 collection 配置
+  打开候选库。新库确认可用前会保留旧库；失败时继续使用旧库并自动重启 REST。
 
-### 从源码构建
+远程 embedding 暂时不可用时，`/v1/events` 仍会保存原始文字，并返回
+`embedding_pending`。服务恢复后用同一个 `event_id` 重试，会补写向量，不会因为
+幂等重放而跳过。
+
+配置 `MEMME_API_KEY` 后，只有 `/health` 可以匿名访问。`/diagnose` 会真实检查
+embedding 和 LLM，因此也必须携带 Bearer Token。
+
+一个 `session_id` 会永久绑定第一次写入的 `user_id`、`agent_id`、`app_id` 和
+`run_id`。换主人或换宠物复用同一个会话会返回 `400`。
+
+## VexDB-Lite 存储
+
+MemMe 使用普通 SQLite 数据库保存权威数据，使用 VexDB-Lite 的持久化
+`GRAPH_INDEX` 做向量检索。当前源码不再使用 `sqlite-vec` 或 DuckDB。
+
+仓库里的脚本会根据当前 macOS/Linux 架构下载固定的 VexDB-Lite v0.0.17，并
+同时校验压缩包和动态库的 SHA-256：
 
 ```bash
-git clone --recurse-submodules https://github.com/vibeinging/MemMe.git
-cd MemMe
-cargo build --release
-cargo test   # 340+ 测试
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
 ```
 
-| Feature | 说明 |
+当前动态扩展支持 macOS、Linux 的 x64 和 arm64。VexDB-Lite v0.0.17 没有
+Windows SQLite 扩展。移动端和 WASM crate 已经存在，但还没有接到同一个
+VexDB-Lite SQLite 运行时。
+
+只加载来源可信的扩展。SQLite 扩展会作为原生代码运行在应用进程里。
+
+## 数据和隐私
+
+```text
+momo-memory.db             全部权威记忆数据
+momo-memory.db.replica     可选的本地副本
+```
+
+- 一个主人的记忆不会进入另一个主人的查询。
+- 一只宠物的关系记忆不会进入另一只宠物的查询。
+- 过期和已被替代的事实会在融合前被过滤。
+- 不可变的安全记忆不能被静默修改或删除。
+- `backup_to_path()` 生成可以搬走的 SQLite 快照。
+- `full_export()` / `full_import()` 和 REST 数据接口可以在不依赖云服务的情况下
+  搬移全部用户数据层。
+- 宿主应用决定是否同步、如何加密、保存多久、是否保留原始音频。语音玩具只保存
+  文本事件也能做长期记忆，没有必要默认保存原始音频。
+
+## 包和 API
+
+| 组件 | 当前用途 |
 |---|---|
-| `api-rerank` | API 重排序 (Jina/Cohere) |
-| `onnx-rerank` | 本地 ONNX 重排序 |
+| `memme-core` | Rust 记忆内核、生命周期、检索、图谱、备份 |
+| `memme-embeddings` | ONNX、OpenAI 兼容接口、Ollama 向量 |
+| `memme-llm` | 可选的 OpenAI、Anthropic、Gemini、Ollama 提取 |
+| [`@wjmwjmwb/memme`](https://www.npmjs.com/package/@wjmwjmwb/memme) | macOS / Linux 的 Node.js、Electron 绑定 |
+| `memme-python` | PyO3 绑定；当前 SQLite 版本需要从源码构建 |
+| `memme-ffi` | Swift/C UniFFI；VexDB-Lite 移动端接线还没完成 |
+| `memme-server` | 自托管 REST API |
+| `memme-mcp` | MCP stdio 服务 |
 
----
+Node.js 项目使用带作用域的 npm 包。Rust 和 Python 项目请固定一个源码版本，并从
+本仓库构建 SQLite 引擎。
+
+## 运行 PetMemBench
+
+```bash
+export MEMME_VEXDB_LITE_EXTENSION="$(bash scripts/download-vexdb-lite-extension.sh)"
+cargo run --release -p memme-core --example pet_memory_benchmark -- \
+  --dataset benchmarks/petmem/scenarios.json \
+  --output benchmarks/petmem/results/latest.json
+```
 
 ## 参与贡献
 
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。[路线图](docs/ROADMAP_CN.md)。
+现在最有价值的贡献是 AI 宠物真实场景。一个好的测试应明确主人、宠物、时间、
+应该找回的记忆、禁止出现的记忆和隐私范围。
+
+参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 
-Apache-2.0 — 见 [LICENSE](LICENSE)。
+Apache-2.0，参见 [LICENSE](LICENSE)。

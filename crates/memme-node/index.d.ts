@@ -33,6 +33,13 @@ export interface ChatMessage {
   role: string
   content: string
 }
+/** A chat message with a stable caller-provided event ID for safe replay. */
+export interface IdentifiedChatMessage {
+  eventId: string
+  role: string
+  content: string
+  timestamp?: string
+}
 /** Entity in the knowledge graph. */
 export interface Entity {
   id: string
@@ -49,6 +56,7 @@ export interface GraphRelation {
   targetId: string
   relationType: string
   userId: string
+  description?: string
 }
 /** A history record. */
 export interface HistoryRecord {
@@ -170,6 +178,8 @@ export interface MeditationRecord {
 export interface AppendEventsResult {
   sessionId: string
   eventsAppended: number
+  eventsReplayed: number
+  embeddingPending: number
   totalUnprocessed: number
   compactNeeded: boolean
 }
@@ -180,11 +190,6 @@ export interface CompactResult {
   memories: Array<MemoryResult>
   eventsProcessed: number
 }
-/** Smart add result with episode. */
-export interface SmartMessagesResult {
-  memories: Array<MemoryResult>
-  episodeId?: string
-}
 /** Graph search result. */
 export interface GraphSearchResult {
   entities: Array<Entity>
@@ -192,18 +197,34 @@ export interface GraphSearchResult {
 }
 /** The main MemMe memory store. */
 export declare class MemoryStore {
-  /** Create a new MemoryStore with mock embedder (for testing). */
-  static newMock(dbPath?: string | undefined | null, dims?: number | undefined | null): MemoryStore
+  /**
+   * Create a new MemoryStore with mock embedder (for testing).
+   * Pass a trusted VexDB-Lite extension path explicitly, or omit it to use
+   * MEMME_VEXDB_LITE_EXTENSION.
+   */
+  static newMock(dbPath?: string | undefined | null, dims?: number | undefined | null, vexdbExtensionPath?: string | undefined | null): MemoryStore
   /**
    * Create a new MemoryStore with mock embedder AND mock LLM (for E2E testing).
    * The mock LLM returns pre-scripted responses in order.
    * Pass an array of JSON strings that the LLM should return.
    */
-  static newMockWithLlm(responses: Array<string>, dbPath?: string | undefined | null, dims?: number | undefined | null): MemoryStore
+  static newMockWithLlm(responses: Array<string>, dbPath?: string | undefined | null, dims?: number | undefined | null, vexdbExtensionPath?: string | undefined | null): MemoryStore
   /** Create a new MemoryStore with OpenAI-compatible embedder. */
-  static newOpenai(apiKey: string, dbPath?: string | undefined | null, baseUrl?: string | undefined | null, model?: string | undefined | null, dims?: number | undefined | null): MemoryStore
+  static newOpenai(apiKey: string, dbPath?: string | undefined | null, baseUrl?: string | undefined | null, model?: string | undefined | null, dims?: number | undefined | null, vexdbExtensionPath?: string | undefined | null): MemoryStore
   /** Configure LLM provider at runtime. Call once after construction. */
   setLlmProvider(apiKey: string, model: string, baseUrl?: string | undefined | null): void
+  /**
+   * Backup the database to a file path.
+   * Returns metadata about the backup (size, memory count, schema version).
+   */
+  backupToPath(path: string): any
+  /**
+   * Restore the database from a backup file.
+   * **Warning**: The caller must re-create the MemoryStore after calling this.
+   */
+  restoreFromBackup(backupPath: string): void
+  /** Run diagnostic checks on storage, embedder, and LLM. */
+  diagnose(): any
   /** Check if an LLM provider is configured. */
   hasLlm(): boolean
   /** Persist LLM configuration to the database. */
@@ -222,12 +243,14 @@ export declare class MemoryStore {
   delete(id: string): Promise<void>
   /** List memories. */
   list(userId: string, agentId?: string | undefined | null, runId?: string | undefined | null, limit?: number | undefined | null): Promise<Array<MemoryResult>>
-  /** Hybrid search (vector + FTS). */
-  hybridSearch(query: string, userId: string, agentId?: string | undefined | null, runId?: string | undefined | null, limit?: number | undefined | null, vectorWeight?: number | undefined | null, ftsWeight?: number | undefined | null): Promise<Array<MemoryResult>>
+  /**
+   * Hybrid search (vector + FTS with RRF fusion).
+   *
+   * RRF weights are configured at store construction time.
+   */
+  hybridSearch(query: string, userId: string, agentId?: string | undefined | null, runId?: string | undefined | null, limit?: number | undefined | null): Promise<Array<MemoryResult>>
   /** Rebuild FTS index. */
   rebuildFtsIndex(): Promise<void>
-  /** Smart add with LLM (per-call credentials). */
-  addSmart(text: string, userId: string, llmApiKey: string, llmModel?: string | undefined | null, llmBaseUrl?: string | undefined | null, agentId?: string | undefined | null, runId?: string | undefined | null, metadata?: string | undefined | null): Promise<Array<MemoryResult>>
   /** Delete all memories matching filters. */
   deleteAll(userId: string, agentId?: string | undefined | null, runId?: string | undefined | null, appId?: string | undefined | null): Promise<number>
   /** Get change history for a memory. */
@@ -236,6 +259,8 @@ export declare class MemoryStore {
   reset(): Promise<void>
   /** Append chat messages as events to a session. Returns whether compact is needed. */
   appendEvents(sessionId: string, messages: Array<ChatMessage>, userId: string, metadata?: string | undefined | null): Promise<AppendEventsResult>
+  /** Append events with stable IDs. Exact replays are accepted; conflicting reuse of an ID is rejected. */
+  appendEventsIdempotent(sessionId: string, messages: Array<IdentifiedChatMessage>, userId: string, metadata?: string | undefined | null): Promise<AppendEventsResult>
   /** Compact a session: extract memories + create episode from unprocessed events. */
   compact(sessionId: string): Promise<CompactResult>
   /** Get a session by ID. */
@@ -248,8 +273,6 @@ export declare class MemoryStore {
   getSessionEvents(sessionId: string, limit?: number | undefined | null, offset?: number | undefined | null): Promise<Array<StreamEvent>>
   /** Assemble session context for RAG with token budget. */
   getSessionContext(sessionId: string, tokenBudget?: number | undefined | null, includeSummary?: boolean | undefined | null, maxEvents?: number | undefined | null): Promise<SessionContext>
-  /** Smart add from chat messages (append + compact bundled). Returns memories + episode_id. */
-  addSmartMessages(messages: Array<ChatMessage>, userId: string, llmApiKey: string, llmModel?: string | undefined | null, llmBaseUrl?: string | undefined | null, agentId?: string | undefined | null, runId?: string | undefined | null, metadata?: string | undefined | null): Promise<SmartMessagesResult>
   /** List episodes for a user. */
   listEpisodes(userId: string, limit?: number | undefined | null, offset?: number | undefined | null, since?: string | undefined | null, until?: string | undefined | null): Promise<Array<Episode>>
   /** Get an episode by ID. */
