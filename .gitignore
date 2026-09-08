@@ -110,3 +110,14 @@ CLAUDE.md
 
 # Misc
 nohup.out
+
+# Internal study material and tool caches (not for public)
+.gstack/
+references/
+deploy/
+
+# Per-crate build artifacts
+crates/*/target/
+
+# Agent instructions (kept local, like CLAUDE.md)
+AGENTS.md

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MemMe — How It Works</title>
-  <meta name="description" content="Technical deep dive into MemMe, an edge-first AI memory engine built in Rust.">
+  <title>MemMe — Local long-term memory for AI pets</title>
+  <meta name="description" content="MemMe gives AI pets and companion apps durable local memory: remember the owner, keep each pet relationship separate, survive restarts and model changes. Rust core, SQLite single file, offline-first.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -25,6 +25,7 @@
         MemMe
       </a>
       <div class="nav-links">
+        <a href="#quickstart">Quick start</a>
         <a href="#pipeline">Pipeline</a>
         <a href="#search">Search</a>
         <a href="#meditation">Meditation</a>
@@ -44,33 +45,37 @@
   <header class="hero">
     <canvas id="heroCanvas" class="hero-canvas"></canvas>
     <div class="hero-content">
-      <div class="hero-badge">Edge-First AI Memory Engine</div>
+      <div class="hero-badge">Local long-term memory for AI pets</div>
       <h1 class="hero-title">
         <span class="hero-title-line">Mem</span><span class="hero-title-accent">Me</span>
       </h1>
       <p class="hero-subtitle">
-        Rust core. SQLite single-file storage. Sub-10ms retrieval.<br>
-        A complete memory architecture for AI agents &mdash; from raw events to knowledge graph.
+        Remember the owner. Keep each pet relationship separate. Stay on the device.<br>
+        A Rust core in one SQLite file &mdash; memory that survives restarts, model changes, and network loss.
       </p>
+      <div class="hero-cta">
+        <a href="#quickstart" class="cta-btn cta-primary">Try it locally</a>
+        <a href="https://github.com/vibeinging/MemMe" class="cta-btn cta-secondary" target="_blank" rel="noopener">GitHub</a>
+      </div>
       <div class="hero-stats">
         <div class="stat" style="--delay: 0">
-          <span class="stat-value">&lt;10<small>ms</small></span>
-          <span class="stat-label">Search Latency</span>
+          <span class="stat-value">~2<small>ms</small></span>
+          <span class="stat-label">Search p50 &middot; PetMemBench</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat" style="--delay: 1">
-          <span class="stat-value">1<small> File</small></span>
-          <span class="stat-label">Deployment</span>
+          <span class="stat-value">100<small>%</small></span>
+          <span class="stat-label">Recall@10 &middot; required scenarios</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat" style="--delay: 2">
-          <span class="stat-value">6</span>
-          <span class="stat-label">Language Bindings</span>
+          <span class="stat-value">1<small> File</small></span>
+          <span class="stat-label">SQLite &middot; portable</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat" style="--delay: 3">
-          <span class="stat-value">4<small>-ch</small></span>
-          <span class="stat-label">Hybrid Search</span>
+          <span class="stat-value">0</span>
+          <span class="stat-label">Cloud API keys required</span>
         </div>
       </div>
     </div>
@@ -83,12 +88,93 @@
     </div>
   </header>
 
-  <!-- ═══════════════════ 01 PIPELINE ═══════════════════ -->
-  <section id="pipeline" class="section">
+  <!-- ═══════════════════ 00 QUICK START ═══════════════════ -->
+  <section id="quickstart" class="section">
+    <div class="section-orb section-orb--blue"></div>
+    <div class="section-inner">
+      <div class="section-header">
+        <span class="section-number">00</span>
+        <div class="section-line"></div>
+      </div>
+      <h2 class="section-title">Try it locally</h2>
+      <p class="section-desc">One preferred path: the self-hosted REST server with a local ONNX embedding model &mdash; no API key, no cloud. Requires macOS or Linux (x64 / arm64) and a Rust toolchain.</p>
+
+      <div class="qs-steps">
+        <div class="qs-step">
+          <div class="qs-num">1</div>
+          <h4>Get the engine and the vector extension</h4>
+          <div class="terminal">
+            <div class="terminal-chrome"><span></span><span></span><span></span></div>
+            <pre><code>git clone https://github.com/vibeinging/MemMe.git
+<span class="tk-kw">cd</span> MemMe
+<span class="tk-kw">export</span> MEMME_VEXDB_LITE_EXTENSION=<span class="tk-str">"$(bash scripts/download-vexdb-lite-extension.sh)"</span></code></pre>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">2</div>
+          <h4>Start the server</h4>
+          <div class="terminal">
+            <div class="terminal-chrome"><span></span><span></span><span></span></div>
+            <pre><code><span class="tk-kw">export</span> MEMME_API_KEY=change-me
+cargo run --release -p memme-server -- --db-path momo-memory.db</code></pre>
+          </div>
+          <p class="qs-note">First run downloads the compact <code>bge-small-zh-v1.5</code> ONNX model; later runs start instantly and work offline.</p>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">3</div>
+          <h4>Write, recall, restart, recall again</h4>
+          <div class="terminal">
+            <div class="terminal-chrome"><span></span><span></span><span></span></div>
+            <pre><code>curl -s http://127.0.0.1:8080/v1/events -H <span class="tk-str">"Authorization: Bearer $MEMME_API_KEY"</span> \
+  -H <span class="tk-str">'Content-Type: application/json'</span> -d <span class="tk-str">'{
+    "session_id":"s1","user_id":"owner-001","agent_id":"momo","app_id":"demo",
+    "messages":[{"event_id":"e1","role":"user","content":"我给默默买了一个蓝色鲸鱼玩具。"}]
+  }'</span></code></pre>
+          </div>
+          <p class="qs-note">Or run the scripted version: <code>bash demos/rest-demo.sh</code>. It starts the server, writes memories for two pets, restarts the process, and shows that both the memory and the per-pet isolation survive.</p>
+        </div>
+      </div>
+      <p class="qs-alt">Prefer Node.js? <code>npm install @wjmwjmwb/memme</code> (macOS / Linux) &mdash; full guide in the <a href="https://github.com/vibeinging/MemMe#quick-start-with-nodejs" target="_blank" rel="noopener">README</a>.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ 01 WHAT IT GUARANTEES ═══════════════════ -->
+  <section id="why" class="section">
     <div class="section-orb section-orb--amber"></div>
     <div class="section-inner">
       <div class="section-header">
         <span class="section-number">01</span>
+        <div class="section-line"></div>
+      </div>
+      <h2 class="section-title">What an AI pet gets</h2>
+      <p class="section-desc">Three behaviors you can verify yourself in the quick start above.</p>
+
+      <div class="why-grid">
+        <div class="why-card">
+          <div class="why-icon">&#x1f501;</div>
+          <h3>Memory survives restarts</h3>
+          <p>Everything durable lives in one SQLite file. Quit the process, reopen the same database, and the recall results are unchanged &mdash; even after switching to a different model.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-icon">&#x1f43e;</div>
+          <h3>Pets never cross memories</h3>
+          <p>Owner-global facts are shared across the owner&rsquo;s pets; each pet&rsquo;s relationship memory is scoped to that pet. Ask as Momo, and another pet&rsquo;s promise never appears.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-icon">&#x270f;&#xfe0f;</div>
+          <h3>Corrections take effect</h3>
+          <p>Expired and superseded facts are filtered before they can reach a reply, while the full change history stays auditable in the same file.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ 02 PIPELINE ═══════════════════ -->
+  <section id="pipeline" class="section">
+    <div class="section-orb section-orb--amber"></div>
+    <div class="section-inner">
+      <div class="section-header">
+        <span class="section-number">02</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">The Memory Pipeline</h2>
@@ -171,12 +257,12 @@
     </div>
   </section>
 
-  <!-- ═══════════════════ 02 SEARCH ═══════════════════ -->
+  <!-- ═══════════════════ 03 SEARCH ═══════════════════ -->
   <section id="search" class="section">
     <div class="section-orb section-orb--blue"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">02</span>
+        <span class="section-number">03</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Search Pipeline</h2>
@@ -258,12 +344,12 @@
     </div>
   </section>
 
-  <!-- ═══════════════════ 03 MEDITATION ═══════════════════ -->
+  <!-- ═══════════════════ 04 MEDITATION ═══════════════════ -->
   <section id="meditation" class="section">
     <div class="section-orb section-orb--green"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">03</span>
+        <span class="section-number">04</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Meditation</h2>
@@ -306,13 +392,14 @@
         <div class="phase" style="--phase-delay: 2">
           <div class="phase-number">3</div>
           <div class="phase-content">
-            <h3>Vector Dedup</h3>
-            <p>Extracted facts stored via <code>add()</code>. Cosine similarity against existing memories handles dedup automatically &mdash; no extra LLM call needed.</p>
+            <h3>Reconciliation</h3>
+            <p>Extracted facts are reconciled against existing memories. The LLM proposes <strong>ADD / UPDATE / DELETE</strong> against integer-indexed IDs; without an LLM, deterministic cosine dedup applies.</p>
             <div class="recon-grid">
-              <div class="recon-item add"><span class="recon-dot"></span>NEW<span class="recon-desc">No similar memory exists</span></div>
-              <div class="recon-item update"><span class="recon-dot"></span>DEDUP<span class="recon-desc">Similar memory found, skip</span></div>
+              <div class="recon-item add"><span class="recon-dot"></span>ADD<span class="recon-desc">No similar memory exists</span></div>
+              <div class="recon-item update"><span class="recon-dot"></span>UPDATE<span class="recon-desc">Fact changed &mdash; supersede the old one</span></div>
+              <div class="recon-item"><span class="recon-dot"></span>DELETE<span class="recon-desc">Contradicted or expired</span></div>
             </div>
-            <p class="phase-note">Threshold: cosine distance &lt; 0.15 &rarr; considered duplicate. Deterministic, no hallucination risk.</p>
+            <p class="phase-note">No-LLM fallback: cosine distance &lt; 0.15 &rarr; considered duplicate. Deterministic, no hallucination risk.</p>
           </div>
         </div>
 
@@ -334,12 +421,12 @@
     </div>
   </section>
 
-  <!-- ═══════════════════ 04 FORGETTING CURVE ═══════════════════ -->
+  <!-- ═══════════════════ 05 FORGETTING CURVE ═══════════════════ -->
   <section id="forgetting" class="section">
     <div class="section-orb section-orb--red"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">04</span>
+        <span class="section-number">05</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Forgetting Curve</h2>
@@ -382,12 +469,12 @@
     </div>
   </section>
 
-  <!-- ═══════════════════ 05 ARCHITECTURE ═══════════════════ -->
+  <!-- ═══════════════════ 06 ARCHITECTURE ═══════════════════ -->
   <section id="architecture" class="section">
     <div class="section-orb section-orb--amber"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">05</span>
+        <span class="section-number">06</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Architecture</h2>
@@ -457,68 +544,76 @@
     </div>
   </section>
 
-  <!-- ═══════════════════ 06 BINDINGS ═══════════════════ -->
+  <!-- ═══════════════════ 07 BINDINGS ═══════════════════ -->
   <section id="bindings" class="section">
     <div class="section-orb section-orb--purple"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">06</span>
+        <span class="section-number">07</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Bindings &amp; API</h2>
-      <p class="section-desc">One Rust core, six ways to use it. Every binding gets the full engine.</p>
+      <p class="section-desc">One Rust core, several ways to use it &mdash; each route labeled with its real status.</p>
 
       <div class="bindings-grid">
         <div class="binding-card" style="--card-delay: 0">
-          <div class="binding-lang">Python</div>
-          <p>PyO3 + maturin. Native speed in Jupyter, FastAPI, Django.</p>
+          <div class="binding-lang">Node.js</div>
+          <span class="binding-status ok">Published &middot; macOS &amp; Linux</span>
+          <p>NAPI-RS binding for Electron and Node services.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">from</span> memme <span class="tk-kw">import</span> MemoryStore
-store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
+            <pre><code>npm install <span class="tk-str">@wjmwjmwb/memme</span>
+<span class="tk-kw">const</span> { MemoryStore } = <span class="tk-fn">require</span>(<span class="tk-str">'@wjmwjmwb/memme'</span>);</code></pre>
           </div>
         </div>
         <div class="binding-card" style="--card-delay: 1">
-          <div class="binding-lang">Node.js</div>
-          <p>NAPI-RS. Zero-copy bindings for Express, Next.js, Electron.</p>
+          <div class="binding-lang">Rust</div>
+          <span class="binding-status ok">From source</span>
+          <p>The core engine, used directly as a workspace crate.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">const</span> { MemoryStore } = <span class="tk-fn">require</span>(<span class="tk-str">'memme'</span>);
-<span class="tk-kw">const</span> store = <span class="tk-kw">new</span> <span class="tk-fn">MemoryStore</span>(<span class="tk-str">':memory:'</span>);</code></pre>
+            <pre><code><span class="tk-kw">use</span> memme_core::{MemoryStore, AddOptions};
+store.add(<span class="tk-str">"主人对花生严重过敏。"</span>, AddOptions::new(<span class="tk-str">"owner-001"</span>))?;</code></pre>
           </div>
         </div>
         <div class="binding-card" style="--card-delay: 2">
-          <div class="binding-lang">Swift</div>
-          <p>UniFFI. Native iOS/macOS integration with type-safe Swift API.</p>
+          <div class="binding-lang">Python</div>
+          <span class="binding-status warn">Build from source</span>
+          <p>PyO3 + maturin. The PyPI <code>0.1.1</code> wheel is the legacy DuckDB build.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">let</span> store = <span class="tk-kw">try</span> <span class="tk-fn">MemoryStore</span>(
-    dbPath: <span class="tk-str">"memory.db"</span>
-)</code></pre>
+            <pre><code>git clone https://github.com/vibeinging/MemMe.git
+<span class="tk-kw">cd</span> MemMe &amp;&amp; maturin develop --release</code></pre>
           </div>
         </div>
         <div class="binding-card" style="--card-delay: 3">
-          <div class="binding-lang">WebAssembly</div>
-          <p>wasm-bindgen. Run the full engine in the browser.</p>
+          <div class="binding-lang">Swift / C</div>
+          <span class="binding-status warn">Mobile wiring pending</span>
+          <p>UniFFI bindings exist; VexDB-Lite mobile runtime wiring is still in progress.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">import</span> init, { MemoryStore }
-  <span class="tk-kw">from</span> <span class="tk-str">'memme-wasm'</span>;</code></pre>
+            <pre><code>cargo build -p memme-ffi</code></pre>
           </div>
         </div>
         <div class="binding-card" style="--card-delay: 4">
-          <div class="binding-lang">REST API</div>
-          <p>Axum server. Self-hosted with auth, CORS, OpenAPI.</p>
-          <div class="terminal">
-            <div class="terminal-chrome"><span></span><span></span><span></span></div>
-            <pre><code><span class="tk-kw">POST</span> <span class="tk-str">/v1/memories</span>
-<span class="tk-kw">POST</span> <span class="tk-str">/v1/memories/search</span>
-<span class="tk-kw">POST</span> <span class="tk-str">/v1/recall</span></code></pre>
-          </div>
+          <div class="binding-lang">WebAssembly</div>
+          <span class="binding-status warn">Not yet on VexDB-Lite</span>
+          <p>wasm-bindgen crate exists, but is not yet wired to the VexDB-Lite SQLite runtime.</p>
         </div>
         <div class="binding-card" style="--card-delay: 5">
+          <div class="binding-lang">REST API</div>
+          <span class="binding-status ok">Self-hosted</span>
+          <p>Axum server with Bearer auth, backups, and OpenAPI. Local ONNX embeddings by default.</p>
+          <div class="terminal">
+            <div class="terminal-chrome"><span></span><span></span><span></span></div>
+            <pre><code>POST /v1/events      POST /v1/recall
+POST /v1/backups    GET  /diagnose</code></pre>
+          </div>
+        </div>
+        <div class="binding-card" style="--card-delay: 6">
           <div class="binding-lang">MCP Server</div>
-          <p>Model Context Protocol. Works with Claude Desktop, Cursor.</p>
+          <span class="binding-status ok">Available</span>
+          <p>Model Context Protocol stdio server for Codex Desktop, Cursor, Claude Desktop.</p>
           <div class="terminal">
             <div class="terminal-chrome"><span></span><span></span><span></span></div>
             <pre><code>{
@@ -531,12 +626,12 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
     </div>
   </section>
 
-  <!-- ═══════════════════ 07 SECURITY ═══════════════════ -->
+  <!-- ═══════════════════ 08 SECURITY ═══════════════════ -->
   <section id="security" class="section">
     <div class="section-orb section-orb--red"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">07</span>
+        <span class="section-number">08</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Security</h2>
@@ -597,12 +692,12 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
     </div>
   </section>
 
-  <!-- ═══════════════════ 08 BACKUP & SYNC ═══════════════════ -->
+  <!-- ═══════════════════ 09 BACKUP & SYNC ═══════════════════ -->
   <section id="backup" class="section">
     <div class="section-orb section-orb--green"></div>
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">08</span>
+        <span class="section-number">09</span>
         <div class="section-line"></div>
       </div>
       <h2 class="section-title">Backup &amp; Sync</h2>
@@ -652,55 +747,38 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
     </div>
   </section>
 
-  <!-- ═══════════════════ 09 BENCHMARK ═══════════════════ -->
+  <!-- ═══════════════════ 10 BENCHMARK ═══════════════════ -->
   <section id="benchmark" class="section">
     <div class="section-inner">
       <div class="section-header">
-        <span class="section-number">09</span>
+        <span class="section-number">10</span>
         <div class="section-line"></div>
       </div>
-      <h2 class="section-title">Benchmark</h2>
-      <p class="section-desc">LoCoMo long-context memory benchmark. MemMe vs baselines across four categories.</p>
+      <h2 class="section-title">PetMemBench</h2>
+      <p class="section-desc">MemMe&rsquo;s product benchmark. Scenarios cover owner safety, per-pet relationships, fresh events, privacy isolation, Chinese retrieval, expiration, correction, and deletion.</p>
 
-      <div class="benchmark-chart">
-        <div class="bench-category">
-          <div class="bench-label">Single-Hop</div>
-          <div class="bench-bars">
-            <div class="bench-bar memme" data-width="85.82"><span>MemMe 85.82%</span></div>
-            <div class="bench-bar baseline" data-width="67.1"><span>mem0 67.1%</span></div>
-            <div class="bench-bar baseline baseline--alt" data-width="61.7"><span>zep 61.7%</span></div>
-          </div>
-        </div>
-        <div class="bench-category">
-          <div class="bench-label">Multi-Hop</div>
-          <div class="bench-bars">
-            <div class="bench-bar memme" data-width="71.96"><span>MemMe 71.96%</span></div>
-            <div class="bench-bar baseline" data-width="51.2"><span>mem0 51.2%</span></div>
-            <div class="bench-bar baseline baseline--alt" data-width="41.4"><span>zep 41.4%</span></div>
-          </div>
-        </div>
-        <div class="bench-category">
-          <div class="bench-label">Temporal</div>
-          <div class="bench-bars">
-            <div class="bench-bar memme" data-width="65.62"><span>MemMe 65.62%</span></div>
-            <div class="bench-bar baseline" data-width="58.1"><span>mem0g 58.1%</span></div>
-            <div class="bench-bar baseline baseline--alt" data-width="55.5"><span>mem0 55.5%</span></div>
-          </div>
-        </div>
-        <div class="bench-category">
-          <div class="bench-label">Open-Domain</div>
-          <div class="bench-bars">
-            <div class="bench-bar memme" data-width="88.11"><span>MemMe 88.11%</span></div>
-            <div class="bench-bar baseline" data-width="76.6"><span>zep 76.6%</span></div>
-            <div class="bench-bar baseline baseline--alt" data-width="72.9"><span>mem0 72.9%</span></div>
-          </div>
+      <div class="pmb-card">
+        <table class="pmb-table">
+          <thead>
+            <tr><th>Metric</th><th>0.1.2 release</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Required scenarios</td><td><strong>11 / 11</strong></td></tr>
+            <tr><td>Extended scenarios</td><td><strong>3 / 3</strong></td></tr>
+            <tr><td>Recall@10</td><td><strong>100%</strong></td></tr>
+            <tr><td>Search p50</td><td>1.999 ms</td></tr>
+            <tr><td>Search p95</td><td>3.062 ms</td></tr>
+            <tr><td>Search p99</td><td>17.128 ms</td></tr>
+            <tr><td>Write throughput</td><td>445.7 memories/s</td></tr>
+            <tr><td>SQLite file size</td><td>10.4 MB</td></tr>
+          </tbody>
+        </table>
+        <p class="pmb-note">2,000 memories &middot; median of three independent runs &middot; deterministic local test embeddings &middot; x86_64 process under Rosetta on Apple Silicon. These numbers validate the storage and retrieval contract &mdash; they do <strong>not</strong> prove final reply quality or production performance.</p>
+        <div class="pmb-links">
+          <a href="https://github.com/vibeinging/MemMe/blob/main/benchmarks/petmem/scenarios.json" target="_blank" rel="noopener">Scenarios</a>
+          <a href="https://github.com/vibeinging/MemMe/blob/main/docs/reports/2026-09-01_release-0.1.2.md" target="_blank" rel="noopener">0.1.2 release report</a>
         </div>
       </div>
-      <div class="bench-overall">
-        <span class="bench-overall-value">82.92<small>%</small></span>
-        <span class="bench-overall-label">Overall Judge Score</span>
-      </div>
-      <p class="bench-note">v20 configuration &middot; GPT-4o-mini judge &middot; 4-channel adaptive RRF + rerank &middot; Full LoCoMo 10-conversation benchmark<br><em>Without reranking: 80.91 (still outperforms all baselines)</em></p>
     </div>
   </section>
 
@@ -709,12 +787,12 @@ store = MemoryStore(<span class="tk-str">":memory:"</span>)</code></pre>
     <div class="footer-inner">
       <div class="footer-brand">
         <span class="footer-logo">MemMe</span>
-        <span class="footer-tagline">Edge-first AI memory engine</span>
+        <span class="footer-tagline">Local long-term memory for AI pets</span>
       </div>
       <div class="footer-links">
         <a href="https://github.com/vibeinging/MemMe" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/vibeinging/MemMe/blob/main/README.md" target="_blank" rel="noopener">Docs</a>
-        <a href="https://github.com/vibeinging/MemMe/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        <a href="https://github.com/vibeinging/MemMe/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0 License</a>
       </div>
     </div>
   </footer>

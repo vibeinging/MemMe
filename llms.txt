@@ -1,37 +1,38 @@
 # MemMe
 
-> Edge-first AI memory engine. Rust-native, single-file SQLite storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
+> Local long-term memory for AI pets and companion apps. Rust core, one SQLite file with a VexDB-Lite vector index, offline-first. Owner-global and per-pet relationship memory that survives restarts and model changes.
 
 ## Core Concepts
 
-- **Single-file SQLite storage**: One `.db` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
-- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
+- **AI-pet memory model**: Owner-global memory (stable facts, preferences, safety rules — shared across the owner's pets) + per-pet relationship memory (isolated per `agent_id`) + fresh events that are searchable immediately, before background summarization.
+- **Single-file SQLite storage**: One `.db` file holds authoritative data — memories, knowledge graph, FTS index, and change history. Vector search uses the VexDB-Lite persistent `GRAPH_INDEX` SQLite extension (v0.0.17, desktop macOS/Linux x64+arm64). Set `MEMME_VEXDB_LITE_EXTENSION` to the extension library's absolute path.
+- **Pluggable LLM**: Works without an LLM (deterministic vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction. The REST server defaults to local ONNX embeddings (`bge-small-zh-v1.5`) — no API key.
 - **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
-- **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.
+- **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional reranking.
 - **FSRS forgetting curve**: Power-law memory decay `R(t,S) = (1 + t/(c·S))^(-p)` with stability reinforcement on access.
-- **Meditation**: 4-phase memory consolidation — decay, per-episode fact extraction, vector dedup (cosine similarity, no LLM needed), graph + entity linking.
+- **Meditation**: 5-phase consolidation — decay, per-episode fact extraction, LLM reconciliation (ADD/UPDATE/DELETE; deterministic cosine dedup when no LLM is configured), graph extraction, entity linking via Aho-Corasick.
 
 ## Workspace Crates (9)
 
 - `memme-core` — Core engine: CRUD, search, graph, dedup, meditation, forgetting curve, backup, export/import, analytics
 - `memme-embeddings` — Embedding trait + ONNX/OpenAI/Ollama backends
 - `memme-llm` — LLM trait + Ollama/OpenAI/Anthropic/Gemini backends for fact extraction
-- `memme-python` — Python bindings via PyO3 + maturin
-- `memme-ffi` — Swift/Kotlin/C bindings via UniFFI
-- `memme-node` — Node.js bindings via NAPI-RS
-- `memme-wasm` — WASM bindings via wasm-bindgen
-- `memme-server` — REST API server (axum) with Bearer auth, CORS
+- `memme-server` — Self-hosted REST API server (axum) with Bearer auth, backups, OpenAPI
 - `memme-mcp` — MCP stdio server for Claude Desktop / Cursor
+- `memme-node` — Node.js binding via NAPI-RS — published to npm as `@wjmwjmwb/memme` (macOS/Linux)
+- `memme-python` — Python binding via PyO3 + maturin — build from source; PyPI still serves the legacy 0.1.1 build
+- `memme-ffi` — Swift/C binding via UniFFI — mobile wiring to the VexDB-Lite runtime pending
+- `memme-wasm` — WASM binding — not yet wired to the VexDB-Lite runtime
 
 ## Key API Methods
 
-- `add(content, AddOptions)` — Add a memory with automatic vector dedup
-- `search(query, SearchOptions)` — 4-channel retrieval with RRF fusion
+- `add(content, AddOptions)` — Add a memory; `AddOptions::new(user_id).agent_id(pet_id)` scopes it; `.immutable(true)` locks it
+- `search(query, SearchOptions)` — 4-channel retrieval with RRF fusion, owner + current-pet scope
 - `get_trace(id)` / `update_trace(id, content)` / `delete_trace(id)` — CRUD
 - `list_traces(ListOptions)` — List with filters
-- `append_events(session_id, messages, user_id)` — Primary ingestion
+- `append_events(session_id, messages, user_id)` — Primary ingestion; fresh events searchable immediately
 - `compact(session_id)` — Purify events, create Episode
-- `meditate(user_id)` — 4-phase consolidation: decay → extract → dedup → graph
+- `meditate(user_id)` — 5-phase consolidation: decay → extract → reconcile → graph → link
 - `reflect(user_id)` — LLM-powered analysis of recent memories for themes/patterns
 - `learn_from_feedback(user_id, feedback)` — Extract behavioral principles from corrections
 - `diagnose()` — Health checks for storage, embedder, LLM with latency
@@ -43,21 +44,26 @@
 ## Security
 
 - Memory immutability (lock memories from modification/deletion)
+- Owner/pet scope isolation enforced in every query
 - Privacy levels: LocalOnly / Syncable / EncryptedSync per-memory
-- Data expiration (TTL) with automatic cleanup
+- Data expiration (TTL); superseded facts filtered before fusion
 - Audit trail (history table logs every change)
 - Bearer token auth + CORS on REST server
 - Exclusion prompts (tell LLM what not to extract)
 - Parameterized SQL queries + collection name whitelist
 - Webhook notifications (feature-gated)
 
-## Multi-Platform Bindings
+## Try It
 
-Python (PyO3) / Node.js (NAPI-RS) / Swift & Kotlin (UniFFI) / WASM (wasm-bindgen)
+```bash
+git clone https://github.com/vibeinging/MemMe.git && cd MemMe
+bash demos/rest-demo.sh   # write → recall → restart → recall again, fully local
+```
 
 ## Links
 
 - Website: https://vibeinging.github.io/MemMe/
 - GitHub: https://github.com/vibeinging/MemMe
+- npm: https://www.npmjs.com/package/@wjmwjmwb/memme
 - Crates.io: https://crates.io/crates/memme-core
 - License: Apache-2.0

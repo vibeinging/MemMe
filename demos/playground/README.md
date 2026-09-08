@@ -1,11 +1,21 @@
 # MemMe Playground
 
+> **Legacy demo.** This playground targets the old `pip install memme` (0.1.1,
+> DuckDB) build and is not maintained. For the current engine, use the
+> verified local trial path instead:
+>
+> ```bash
+> bash demos/rest-demo.sh
+> ```
+>
+> or follow the quick starts in the top-level README.
+
 Interactive local web demo. All data stays on your device.
 
-## Quick Start
+## Quick Start (legacy)
 
 ```bash
-pip install memme
+pip install memme==0.1.1
 python demos/playground/server.py
 ```
 

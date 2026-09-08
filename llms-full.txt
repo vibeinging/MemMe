@@ -1,27 +1,28 @@
 # MemMe
 
-> Edge-first AI memory engine. Rust-native, single-file SQLite storage, pluggable LLM, offline-first. LoCoMo benchmark: 82.92% (outperforms mem0, Zep).
+> Local long-term memory for AI pets and companion apps. Rust core, one SQLite file with a VexDB-Lite vector index, offline-first. Owner-global and per-pet relationship memory that survives restarts and model changes.
 
 ## Core Concepts
 
-- **Single-file SQLite storage**: One `.db` file holds vectors, knowledge graph, FTS index, and change history. No external databases.
-- **Pluggable LLM**: Works without LLM (<10ms vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
+- **AI-pet memory model**: Owner-global memory (stable facts, safety rules — shared across the owner's pets) + per-pet relationship memory (isolated per `agent_id`) + fresh events searchable immediately, before background summarization.
+- **Single-file SQLite storage**: One `.db` file holds authoritative data — memories, knowledge graph, FTS index, and change history. Vector search uses the VexDB-Lite persistent `GRAPH_INDEX` SQLite extension (v0.0.17, desktop macOS/Linux x64+arm64); set `MEMME_VEXDB_LITE_EXTENSION` to its absolute path.
+- **Pluggable LLM**: Works without an LLM (deterministic vector dedup) or with any LLM (Ollama, OpenAI, Anthropic, Gemini) for fact extraction.
 - **Session/Episode architecture**: Raw events → Sessions → Episodes (LLM purification) → Atomic memory traces → Identity traits.
 - **4-channel RRF retrieval**: Vector similarity + BM25 FTS + Entity spreading activation + Temporal search, fused via adaptive Reciprocal Rank Fusion + optional cross-encoder reranking.
 - **FSRS forgetting curve**: Power-law memory decay `R(t,S) = (1 + t/(c·S))^(-p)` with stability reinforcement on access. Memories that are never recalled gradually lose relevance.
-- **Meditation**: 4-phase memory consolidation — decay, per-episode fact extraction, vector dedup (cosine similarity, no LLM needed), graph + entity linking via Aho-Corasick.
+- **Meditation**: 5-phase consolidation — decay, per-episode fact extraction, LLM reconciliation (ADD/UPDATE/DELETE; deterministic cosine dedup when no LLM is configured), graph extraction, entity linking via Aho-Corasick.
 
 ## Workspace Crates (9)
 
 - `memme-core` — Core engine: CRUD, search, graph, dedup, meditation, forgetting curve, backup, export/import, analytics
 - `memme-embeddings` — Embedding trait + ONNX/OpenAI/Ollama backends
 - `memme-llm` — LLM trait + Ollama/OpenAI/Anthropic/Gemini backends for fact extraction
-- `memme-python` — Python bindings via PyO3 + maturin
-- `memme-ffi` — Swift/Kotlin/C bindings via UniFFI
-- `memme-node` — Node.js bindings via NAPI-RS
-- `memme-wasm` — WASM bindings via wasm-bindgen
-- `memme-server` — REST API server (axum) with Bearer auth, CORS
+- `memme-server` — Self-hosted REST API server (axum) with Bearer auth, backups, OpenAPI
 - `memme-mcp` — MCP stdio server for Claude Desktop / Cursor
+- `memme-node` — Node.js binding via NAPI-RS — published to npm as `@wjmwjmwb/memme` (macOS/Linux)
+- `memme-python` — Python binding via PyO3 + maturin — build from source; PyPI still serves the legacy 0.1.1 build
+- `memme-ffi` — Swift/C binding via UniFFI — mobile wiring to the VexDB-Lite runtime pending
+- `memme-wasm` — WASM binding — not yet wired to the VexDB-Lite runtime
 
 ## Links
 
@@ -776,40 +777,66 @@ fn main() -> memme_core::Result<()> {
 ```python
 from memme import MemoryStore
 
-# Create store (uses local ONNX embeddings by default)
-store = MemoryStore("memory.db")
+# Create store. Requires MEMME_VEXDB_LITE_EXTENSION in the environment.
+# Build the current version from source (PyPI still serves legacy 0.1.1):
+#   pip install maturin && maturin develop --release
+store = MemoryStore("memory.db", embedder="mock")
 
-# Add memories
-store.add("User prefers dark mode", user_id="alice")
-store.add("User drinks coffee every morning", user_id="alice")
+# Owner-global memory is shared across this owner's pets.
+store.add("The owner has a severe peanut allergy.", user_id="owner-001")
 
-# Search
-results = store.search("morning routine", user_id="alice", limit=5)
-for r in results:
-    print(r["content"], r["score"])
+# Relationship memory belongs to one pet only.
+store.add(
+    "Momo and the owner first met under the ginkgo tree.",
+    user_id="owner-001",
+    agent_id="momo",
+)
 
-# Session/Episode flow
-messages = [
-    ("user", "I just moved to Tokyo for a new job."),
-    ("assistant", "Welcome to Tokyo! What kind of job?"),
-    ("user", "AI startup, building memory systems."),
-]
-store.add_smart_messages(messages, user_id="alice", run_id="session-001")
+# Search — owner scope + current pet scope, fused.
+memories = store.search(
+    "What should I remember for Momo's birthday snack?",
+    user_id="owner-001",
+    agent_id="momo",
+    limit=5,
+)
 
-# Hybrid search (vector + BM25)
-store.rebuild_fts_index()
-results = store.hybrid_search("Tokyo startup", user_id="alice", limit=5)
+# Session/Episode flow (requires an LLM)
+# store.set_llm(api_key, base_url, model)
+# store.append_events("session-1", messages, "owner-001")
+# store.compact("session-1")
+# store.meditate("owner-001", "demo")
 ```
 
 ### Node.js
 
 ```javascript
-const { MemoryStore } = require("memme");
+// npm install @wjmwjmwb/memme  (macOS / Linux)
+// Requires MEMME_VEXDB_LITE_EXTENSION in the environment.
+const { MemoryStore } = require("@wjmwjmwb/memme");
 
-const store = new MemoryStore("memory.db");
-await store.add("User prefers dark mode", { userId: "alice" });
-const results = await store.search("preferences", { userId: "alice" });
-console.log(results);
+// Tests without an embedding service:
+const store = MemoryStore.newMock("momo-memory.db");
+// Or with an OpenAI-compatible embedding provider:
+// const store = MemoryStore.newOpenai(process.env.OPENAI_API_KEY, "momo-memory.db");
+
+// Owner-global memory
+await store.add("The owner has a severe peanut allergy.", "owner-001");
+
+// Relationship memory, scoped to Momo
+await store.add(
+  "Momo and the owner first met under the ginkgo tree.",
+  "owner-001",
+  "momo",
+);
+
+const memories = await store.search(
+  "What should I remember for Momo's birthday snack?",
+  "owner-001",
+  "momo",
+  null,
+  5,
+);
+console.log(memories);
 ```
 
 ---
@@ -878,12 +905,24 @@ let config = MemoryConfig {
 
 ## Benchmark
 
-LoCoMo long-context memory benchmark (1540 questions, 10 conversations, GPT-4o-mini judge):
+PetMemBench — MemMe's product benchmark for AI-pet memory. Scenarios cover
+owner safety, per-pet relationships, fresh events, privacy isolation, Chinese
+retrieval, expiration, correction, and deletion. Release benchmark for 0.1.2,
+2,000 memories, median of three independent runs:
 
-| Category | **MemMe** | mem0 | mem0-graph | Zep |
-|---|---|---|---|---|
-| Single-hop | **85.82** | 67.13 | 65.71 | 61.70 |
-| Multi-hop | **71.96** | 51.15 | 47.19 | 41.35 |
-| Temporal | **65.62** | 55.51 | 58.13 | 49.31 |
-| Open-domain | **88.11** | 72.93 | 75.71 | 76.60 |
-| **Overall** | **82.92** | — | — | — |
+| Metric | Result |
+|---|---|
+| Required scenarios | 11 / 11 |
+| Extended scenarios | 3 / 3 |
+| Recall@10 | 100% |
+| Search p50 | 1.999 ms |
+| Search p95 | 3.062 ms |
+| Search p99 | 17.128 ms |
+| Write throughput | 445.7 memories/s |
+| SQLite file size | 10.4 MB |
+
+These numbers use deterministic local test embeddings and an x86_64 process
+under Rosetta on Apple Silicon. They validate the storage and retrieval
+contract, not final reply quality or production performance. Scenarios:
+`benchmarks/petmem/scenarios.json`; release report:
+`docs/reports/2026-09-01_release-0.1.2.md`.
