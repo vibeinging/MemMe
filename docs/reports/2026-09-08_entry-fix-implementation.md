@@ -61,6 +61,7 @@
 
 ## 遗留观察
 
+- **macos-13 runner 已退役**：`v0.1.2` tag 触发的 npm 工作流中，`x86_64-apple-darwin` 构建在 macos-13 上排队 50+ 分钟无 runner 接单（同时 macos-14 秒级开跑）。已把该构建迁到 macos-14 交叉编译（`7a1ddab`），并为 publish-node 增加手动触发（可对既有 tag 重跑）。原死锁 run 已取消，v0.1.2 的发布工作流改由手动触发完成，publish 阶段按守卫跳过已发布的 0.1.2。
 - 历史 dependabot 依赖升级 PR 的 CI 为红色（早于本次改动）。不影响 main 分支 CI，但会在 PR 列表形成负面观感，建议下一轮集中处理或关闭过期 PR。
 - 本机工具链（1.93.1）落后于 CI（1.98.0）：本机 fmt/clippy 通过不能替代远端结论，建议升级本机 stable 或以远端为准。
 
