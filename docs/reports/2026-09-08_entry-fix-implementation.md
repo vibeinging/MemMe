@@ -35,19 +35,34 @@
 - `llms.txt` / `llms-full.txt` 同步：移除 LoCoMo/mem0/Zep 对比说法与过时 API（`add_smart_messages`）、补齐 VexDB-Lite/ONNX Runtime 运行时要求、绑定状态如实标注。
 - GitHub About / Topics / homepage 通过 API 更新为 AI 宠物 + SQLite 定位（见"远端操作"）。
 
-## 验证（2026-09-08 本机，x86_64-apple-darwin）
+## 验证（2026-09-08 本机，x86_64-apple-darwin，rustc 1.93.1）
 
 - `cargo fmt --all -- --check`：通过。
-- `cargo clippy -p memme-core -p memme-embeddings -p memme-llm -- -D warnings`：通过。
+- `cargo clippy -p memme-core -p memme-embeddings -p memme-llm -- -D warnings`：本机通过。
 - `cargo test -p memme-core`：372 通过、0 失败（1 项设备场景与 23 项真实 LLM 测试按设计忽略）；embeddings 9 项、llm 49 项通过。
 - `demos/rest-demo.sh` 全新运行：7/7 检查 PASS（写入、Momo 检索、不泄漏到 Luna、Luna 检索、主人全局记忆对宠物可见、重启后记忆保持、重启后隔离保持）。
 - 首次运行成本实测：server release 构建 2m34s（后续增量 0.5s）；VexDB-Lite 扩展与 ONNX Runtime 一次性下载并缓存；首次检索触发 embedding 模型下载。
 
-## 远端操作
+### CI 迭代记录（如实）
 
-- 推送 main（两次提交）与 `v0.1.2` tag；创建 GitHub Release `v0.1.2`（注明 npm 0.1.2 溯源与 PyPI/crates 现状）。
-- 更新仓库 About 描述、Topics（`ai-memory` `long-term-memory` `ai-companion` `ai-pets` `local-first` `sqlite` `rust`）、homepage 指向 Pages。
-- 启用 GitHub Pages（workflow 模式）并验证官网返回 200。
+- 第一次推送（`c2cf6d3`）后远端 CI 失败：Format 与 Clippy 两个门禁。原因有二：
+  1. 初次验证脚本用管道接 `tail`/`grep`，`$?` 取到的是管道末命令的退出码，掩盖了本机 fmt 的实际 diff（query.rs 缩进）——验证脚本本身的错误，已改为直接检查退出码。
+  2. 远端 clippy 为 1.98.0，新 lint `unnecessary_sort_by` 报在既有代码 `search.rs:42`；本机 1.93.1 无此 lint。
+- 修复后第二次推送（`93dbb9b`）远端 CI 全绿（含两个平台的全部测试矩阵与绑定构建）。教训：本机工具链落后于 CI 时，fmt/clippy 结论以远端为准。
+
+## 远端操作（均已执行）
+
+- 推送 main：`fc7c54c`（0.1.2 源码补齐）、`c2cf6d3`（入口修复）、`93dbb9b`（fmt/clippy 修复）；推送 `v0.1.2` tag。
+- GitHub Release `v0.1.2` 已创建：[releases/tag/v0.1.2](https://github.com/vibeinging/MemMe/releases/tag/v0.1.2)，注明 npm 0.1.2 溯源、PyPI/crates 现状与已知限制。
+- 仓库 About、Topics（`ai-memory` `long-term-memory` `ai-companion` `ai-pets` `local-first` `sqlite` `rust`，已移除 `duckdb`）、homepage 已更新。
+- GitHub Pages 以 workflow 模式启用；`pages.yml` 首次运行因 Pages 尚未启用而失败，重新运行后部署成功；官网返回 200，页面关键内容（包名、License、PetMemBench、无竞品对比）已逐项核对。
+- 远端 CI 在 `93dbb9b` 全绿。
+- `v0.1.2` tag 只触发了 npm 发布工作流（crates/PyPI 已改为手动）；npm 工作流对五个已在 registry 的 0.1.2 包走跳过守卫。
+
+## 遗留观察
+
+- 历史 dependabot 依赖升级 PR 的 CI 为红色（早于本次改动）。不影响 main 分支 CI，但会在 PR 列表形成负面观感，建议下一轮集中处理或关闭过期 PR。
+- 本机工具链（1.93.1）落后于 CI（1.98.0）：本机 fmt/clippy 通过不能替代远端结论，建议升级本机 stable 或以远端为准。
 
 ## 未完成 / 后续
 
