@@ -518,9 +518,7 @@ impl Storage {
             conditions.push(format!("(m.agent_id = ${param_idx} OR m.agent_id IS NULL)"));
             // Owner-global events (agent_id NULL) stay visible to agent-scoped
             // pet queries, matching durable-memory scoping above.
-            event_conditions.push(format!(
-                "(e.agent_id = ${param_idx} OR e.agent_id IS NULL)"
-            ));
+            event_conditions.push(format!("(e.agent_id = ${param_idx} OR e.agent_id IS NULL)"));
             dynamic_params.push(SqlParam::Text(aid.to_string()));
         }
 

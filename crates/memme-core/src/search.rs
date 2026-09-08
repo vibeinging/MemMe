@@ -39,7 +39,7 @@ pub(crate) fn distinctive_identifier_rank(
             (matches > 0).then(|| (matches, candidate.clone()))
         })
         .collect::<Vec<_>>();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    ranked.sort_by_key(|(matches, _)| std::cmp::Reverse(*matches));
     ranked.into_iter().map(|(_, candidate)| candidate).collect()
 }
 
